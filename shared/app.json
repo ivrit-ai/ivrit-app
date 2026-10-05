@@ -1,0 +1,12 @@
+{
+  "name": "ivrit.ai",
+  "packageId": "ai.ivrit.app",
+  "host": "app.ivrit.ai",
+  "startUrl": "/",
+  "trustedOrigins": ["https://app.ivrit.ai", "https://transcribe.ivrit.ai"],
+  "communicator": "https://communicator.ivrit.ai",
+  "transcribe": "https://transcribe.ivrit.ai",
+  "themeColor": "#F7F6F3",
+  "backgroundColor": "#F7F6F3",
+  "notificationChannel": { "id": "messages", "name": "Messages", "name_he": "הודעות" }
+}

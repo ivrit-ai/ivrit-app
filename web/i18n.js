@@ -1,0 +1,553 @@
+// Every string the UI shows, in both languages. Functions for anything with a
+// number or a name in it, so word order is the translation's business.
+const STRINGS = {
+  en: {
+    support: "Support",
+    landingKicker: "Hebrew speech, in writing",
+    landingTitle: "Your transcripts, the moment they're ready.",
+    landingLede:
+      "Eliezer's transcripts of your WhatsApp voice messages arrive here as notifications, and stay on your phone. Transcribing your own recordings is one tap away.",
+    pointDevice: "Kept on your device. The server forgets after three days.",
+    continueGoogle: "Continue with Google",
+    continueAnon: "Continue without an account",
+    anonCaveat: "Without an account, your inbox lives only on this device.",
+    iosHintTitle: "Install first, then sign in.",
+    iosHintBody:
+      "Tap Share → Add to Home Screen, open ivrit.ai from your Home Screen, and continue there. iOS only delivers notifications to the installed app.",
+    installTitle: "Install ivrit.ai",
+    installBody: "Opens like an app, and notifications keep arriving when the browser is closed.",
+    install: "Install",
+    installLater: "You can install later from the browser menu.",
+
+    tabInbox: "Inbox",
+    tabSources: "Sources",
+    tabSettings: "Settings",
+
+    search: "Search messages",
+    all: "All",
+    markAllRead: "Mark all read",
+    today: "Today",
+    yesterday: "Yesterday",
+    justNow: "just now",
+    minutesAgo: (n) => `${n} min ago`,
+    hoursAgo: (n) => `${n} h ago`,
+    showMore: "Show more",
+    showLess: "Show less",
+    copy: "Copy",
+    copied: "Copied.",
+    share: "Share",
+    delete: "Delete",
+    deleted: "Deleted from this device.",
+    undo: "Undo",
+    openLink: "Open link",
+    loadingFull: "Fetching the full text…",
+    emptyTitle: "Nothing here yet",
+    emptyBody: "Link Eliezer, and its transcripts will land here.",
+    emptyAction: "Link Eliezer",
+    noMatches: "No messages match.",
+
+    sourcesTitle: "Sources",
+    sourcesLede: "Services that can send to you. Linking one takes a short code and a single message.",
+    link: "Link",
+    linkAnother: "Link another",
+    linked: "Linked",
+    notLinked: "Not linked",
+    unlink: "Unlink",
+    unlinkConfirm: (name) => `Stop receiving messages from ${name} here?`,
+    unlinked: "Unlinked.",
+    lastMessage: (when) => `last message ${when}`,
+    noMessagesYet: "no messages yet",
+    noSources: "No sources are available yet.",
+
+    sheetTitle: (name) => `Link ${name}`,
+    stepNotify: "First, allow notifications on this device, so messages can reach you.",
+    enableHere: "Allow notifications",
+    stepSend: "Send this code to",
+    orSendText: "Or send this message yourself:",
+    waiting: "Waiting for your message",
+    expiresIn: (t) => `Code expires in ${t}`,
+    linkedAs: (label) => `Linked${label ? ` · ${label}` : ""}`,
+    linkedBody: "New messages will arrive here and on every device you've allowed.",
+    done: "Done",
+    codeExpired: "This code has expired.",
+    codeTriedExpired: "That code had already expired when it arrived.",
+    newCode: "Get a new code",
+    tooManyLinks: "You've reached the limit of linked sources.",
+
+    accountTitle: "Account",
+    signedInAs: (email) => `Signed in as ${email}`,
+    anonymousTitle: "No account",
+    anonymousBody:
+      "Your inbox and links live only on this device. Sign in with Google to keep them safe and to use them on more than one device — everything you have now comes along.",
+    upgrade: "Sign in with Google",
+    upgraded: "Your inbox is now tied to your Google account.",
+    signOut: "Sign out",
+    signOutConfirm: "Sign out? Messages already on this device will be removed from it.",
+    signOutAnonConfirm:
+      "Signing out of an account without Google deletes it for good, with every link. Continue?",
+    deleteAccount: "Delete account",
+    deleteConfirm:
+      "Delete your account, every link and every registered device? Messages on this device are removed too. This can't be undone.",
+    languageTitle: "Language",
+    notificationsTitle: "Notifications on this device",
+    permUnsupported: "This browser doesn't support push notifications.",
+    permDefault: "Not enabled on this device yet.",
+    permGranted: "Enabled on this device.",
+    permDenied: "Blocked. Browsers can't ask again — re-allow notifications in this site's settings.",
+    enable: "Enable",
+    sendTest: "Test notifications",
+    testLeave: "Now leave ivrit.ai: go to the home screen, or lock the phone. A test notification arrives in",
+    testWatch: "Watch the top of the screen.",
+    testCancel: "Cancel",
+    testAsk: "How did the test notification show up?",
+    testPopped: "It popped up on the screen",
+    testListOnly: "Only in the notification list",
+    testNothing: "Nothing arrived",
+    testAllGood: "All set: messages will pop up like this one.",
+    testAgain: "Test again",
+    popupHelpTitle: "Make notifications pop up",
+    popupHelpLead: "Your phone decides whether a notification pops up or waits in the list, per app. To make ivrit.ai's pop up:",
+    popupAndroid: () => [
+      "Pull down the notification list and long-press a ivrit.ai notification.",
+      "Tap the settings icon (⚙) or “Notification settings”.",
+      "Turn on “Pop on screen” (on some phones: “Show as pop-up”, or set the category to “Urgent”), and make sure sound is on.",
+      "If you can't find it: Settings → Apps → ivrit.ai (or Chrome, if ivrit.ai isn't installed) → Notifications.",
+    ],
+    popupIos: () => [
+      "Open the Settings app → Notifications → ivrit.ai.",
+      "Under Alerts, turn on Banners, and pick Temporary or Persistent.",
+      "Make sure a Focus mode or Do Not Disturb isn't on.",
+    ],
+    popupDesktop: () => [
+      "Open your computer's notification settings and allow your browser to show banners or alerts.",
+      "Make sure Do Not Disturb or Focus is off.",
+    ],
+    nothingHelpTitle: "The test didn't arrive",
+    nothingHelpLead: "Notifications are allowed here, so something on the device is holding them back:",
+    nothingAndroid: () => [
+      "Make sure Do Not Disturb is off.",
+      "Settings → Apps → ivrit.ai (or Chrome) → Battery → Unrestricted, so the phone doesn't delay its notifications.",
+      "Settings → Apps → ivrit.ai (or Chrome) → Notifications: make sure they're on.",
+      "Then test again.",
+    ],
+    nothingIos: () => [
+      "Open ivrit.ai from the Home Screen icon, not from Safari.",
+      "Settings → Notifications → ivrit.ai: make sure Allow Notifications is on.",
+      "Make sure a Focus mode or Do Not Disturb isn't on, then test again.",
+    ],
+    nothingDesktop: () => [
+      "Make sure Do Not Disturb or Focus is off.",
+      "Allow your browser in your computer's notification settings, then test again.",
+    ],
+    testSent: (n) => (n ? `Sent to ${n} device${n === 1 ? "" : "s"}.` : "No devices registered yet."),
+    registered: "This device is registered.",
+    devicesTitle: "Devices",
+    thisDevice: "this device",
+    added: (date) => `added ${date}`,
+    remove: "Remove",
+    noDevices: "No devices registered yet.",
+    storageTitle: "Stored on this device",
+    storageBody: (n) => `${n} message${n === 1 ? "" : "s"}. The server keeps three days; this device keeps everything until you delete it.`,
+    clearHistory: "Clear history on this device",
+    clearConfirm: "Remove every message from this device? This can't be undone.",
+    cleared: "History cleared.",
+    diagnostics: "Diagnostics",
+    installed: "Installed",
+    yes: "yes",
+    noTab: "no (browser tab)",
+    permission: "Permission",
+    serviceWorker: "Service worker",
+    pushService: "Push service",
+    notSubscribed: "not subscribed",
+
+    prepromptTitle: "Allow notifications?",
+    prepromptBody:
+      "Your browser will ask next. If you block it, this site can never ask again — you'd have to re-allow it in site settings.",
+    notNow: "Not now",
+    continue: "Continue",
+    cancel: "Cancel",
+
+
+    helpTitle_denied: "Notifications are blocked for this site",
+    helpTitle_hidden: "Your browser hid the request",
+    helpTitle_failed: "This browser couldn't turn on notifications",
+    helpTitle_unsupported: "This browser can't show notifications",
+    "helpTitle_ios-install": "Install ivrit.ai first",
+    helpLead: "Your messages still wait in the app; they just won't pop up. To fix it:",
+    helpChromium: (host) => [
+      "Click the icon at the left end of the address bar.",
+      "Open Site settings (or Permissions for this site).",
+      `Set Notifications to Allow for ${host}.`,
+      "Come back to this page.",
+    ],
+    helpFirefox: (host) => [
+      "Click the icon at the left end of the address bar.",
+      "Next to “Send notifications”, remove Blocked (the ✕).",
+      `Reload ${host} and allow when asked.`,
+    ],
+    helpSafari: (host) => [
+      "Open Safari → Settings → Websites → Notifications.",
+      `Find ${host} and choose Allow.`,
+    ],
+    helpAndroid: (host) => [
+      "Tap ⋮ → Settings → Site settings → Notifications.",
+      `Find ${host} and allow it.`,
+      "If ivrit.ai is installed: long-press its icon → App info → Notifications → On.",
+    ],
+    helpSamsung: (host) => [
+      "Tap ☰ → Settings → Sites and downloads → Notifications.",
+      `Allow ${host}.`,
+    ],
+    helpIos: () => [
+      "Open the Settings app → Notifications → ivrit.ai.",
+      "Turn on Allow Notifications.",
+    ],
+    "helpIos-install": () => [
+      "Tap Share → Add to Home Screen.",
+      "Open ivrit.ai from your Home Screen and sign in there.",
+      "iPhone and iPad only deliver notifications to the installed app.",
+    ],
+    helpBrave: () => [
+      "Open brave://settings/privacy in a new tab.",
+      "Turn on “Use Google services for push messaging”.",
+      "Restart Brave and come back.",
+    ],
+    helpHidden: () => [
+      "Look for a bell (or a crossed-out bell) at the edge of the address bar.",
+      "Click it and choose Allow.",
+    ],
+    helpFailed: () => [
+      "Open ivrit.ai in Chrome, Edge, Firefox or Safari instead.",
+      "If you are in a private window, use a regular one.",
+    ],
+    helpGeneric: () => [
+      "Open this site's settings in your browser (usually from the icon next to the address).",
+      "Allow notifications, then come back.",
+    ],
+    helpSystem: "Allowed, but nothing shows up? Check your device's own notification settings for your browser, and Do Not Disturb.",
+    helpRetry: "I've allowed them",
+    linkAnyway: "Link anyway",
+    stillBlocked: "Still blocked. Follow the steps above, then try again.",
+    bannerOff: "Notifications are off on this device.",
+    bannerAsk: "Get messages the moment they arrive.",
+    bannerFix: "Fix",
+    bannerTurnOn: "Turn on",
+    dismiss: "Dismiss",
+    offline: "Offline — showing what's on this device.",
+    error: (msg) => `Something went wrong: ${msg}`,
+    pointInbox: "Transcripts from Eliezer and other ivrit.ai services, as notifications.",
+    pointTranscribe: "Share a voice message or a recording into the app to transcribe it.",
+    tabTranscribe: "Transcribe",
+    transcribeTitle: "Transcribe",
+    transcribeLede: "Hebrew audio into text, with ivrit.ai's models.",
+    serviceTitle: "transcribe.ivrit.ai",
+    serviceBody: "Upload recordings or paste a YouTube link, and get a transcript you can edit and download. It has its own Google sign-in.",
+    serviceOpen: "Open transcribe.ivrit.ai",
+    shareTitle: "Share audio into the app",
+    shareBody: "With the app installed, share a voice message or a recording from WhatsApp or any other app, and pick ivrit.ai. It waits here until you send it to be transcribed.",
+    onDeviceTitle: "Coming: transcription on your phone",
+    onDeviceBody: "Short recordings will be transcribed on the phone itself, without uploading anything.",
+    sharedTitle: "Shared with the app",
+    sharedLede: "Send it to transcribe.ivrit.ai to transcribe it.",
+    sharedSend: "Transcribe",
+    sharedUnnamed: "Recording",
+    back: "Back",
+    privacy: "Privacy",
+  },
+
+  he: {
+    support: "תמיכה",
+    landingKicker: "עברית מדוברת, בכתב",
+    landingTitle: "התמלולים שלכם, ברגע שהם מוכנים.",
+    landingLede:
+      "התמלולים של אליעזר להודעות הקוליות שלכם בוואטסאפ מגיעים לכאן כהתראות ונשמרים בטלפון. ותמלול של הקלטות משלכם נמצא במרחק הקשה.",
+    pointDevice: "נשמר במכשיר שלכם. השרת שוכח אחרי שלושה ימים.",
+    continueGoogle: "המשך עם Google",
+    continueAnon: "המשך בלי חשבון",
+    anonCaveat: "בלי חשבון, התיבה שלכם קיימת רק במכשיר הזה.",
+    iosHintTitle: "קודם מתקינים, אחר כך נכנסים.",
+    iosHintBody:
+      "הקישו שיתוף ← הוספה למסך הבית, פתחו את ivrit.ai ממסך הבית והמשיכו משם. ב-iOS התראות מגיעות רק לאפליקציה המותקנת.",
+    installTitle: "התקנת ivrit.ai",
+    installBody: "נפתח כמו אפליקציה, וההתראות ממשיכות להגיע גם כשהדפדפן סגור.",
+    install: "התקנה",
+    installLater: "אפשר להתקין מאוחר יותר מתפריט הדפדפן.",
+
+    tabInbox: "הודעות",
+    tabSources: "מקורות",
+    tabSettings: "הגדרות",
+
+    search: "חיפוש בהודעות",
+    all: "הכול",
+    markAllRead: "סימון הכול כנקרא",
+    today: "היום",
+    yesterday: "אתמול",
+    justNow: "עכשיו",
+    minutesAgo: (n) => `לפני ${n} דק׳`,
+    hoursAgo: (n) => `לפני ${n} שע׳`,
+    showMore: "הצגת הכול",
+    showLess: "הצגת פחות",
+    copy: "העתקה",
+    copied: "הועתק.",
+    share: "שיתוף",
+    delete: "מחיקה",
+    deleted: "נמחק מהמכשיר הזה.",
+    undo: "ביטול",
+    openLink: "פתיחת הקישור",
+    loadingFull: "טוען את הטקסט המלא…",
+    emptyTitle: "עדיין אין כאן כלום",
+    emptyBody: "קשרו את אליעזר, והתמלולים שלו יגיעו לכאן.",
+    emptyAction: "קישור אליעזר",
+    noMatches: "אין הודעות תואמות.",
+
+    sourcesTitle: "מקורות",
+    sourcesLede: "שירותים שיכולים לשלוח אליכם. הקישור לוקח קוד קצר והודעה אחת.",
+    link: "קישור",
+    linkAnother: "קישור נוסף",
+    linked: "מקושר",
+    notLinked: "לא מקושר",
+    unlink: "ביטול קישור",
+    unlinkConfirm: (name) => `להפסיק לקבל כאן הודעות מ${name}?`,
+    unlinked: "הקישור בוטל.",
+    lastMessage: (when) => `הודעה אחרונה ${when}`,
+    noMessagesYet: "עדיין אין הודעות",
+    noSources: "עדיין אין מקורות זמינים.",
+
+    sheetTitle: (name) => `קישור ${name}`,
+    stepNotify: "קודם, אפשרו התראות במכשיר הזה כדי שההודעות יוכלו להגיע.",
+    enableHere: "אישור התראות",
+    stepSend: "שלחו את הקוד אל",
+    orSendText: "או שלחו בעצמכם את ההודעה:",
+    waiting: "ממתין להודעה שלכם",
+    expiresIn: (t) => `תוקף הקוד יפוג בעוד ${t}`,
+    linkedAs: (label) => `מקושר${label ? ` · ${label}` : ""}`,
+    linkedBody: "הודעות חדשות יגיעו לכאן ולכל מכשיר שאישרתם.",
+    done: "סיום",
+    codeExpired: "תוקף הקוד פג.",
+    codeTriedExpired: "הקוד הגיע אחרי שתוקפו כבר פג.",
+    newCode: "קוד חדש",
+    tooManyLinks: "הגעתם למספר המרבי של מקורות מקושרים.",
+
+    accountTitle: "חשבון",
+    signedInAs: (email) => `מחוברים בתור ${email}`,
+    anonymousTitle: "ללא חשבון",
+    anonymousBody:
+      "התיבה והקישורים שלכם קיימים רק במכשיר הזה. התחברו עם Google כדי לשמור עליהם ולהשתמש בהם ביותר ממכשיר אחד — כל מה שיש לכם עכשיו יעבור איתכם.",
+    upgrade: "התחברות עם Google",
+    upgraded: "התיבה שלכם מחוברת עכשיו לחשבון Google.",
+    signOut: "התנתקות",
+    signOutConfirm: "להתנתק? ההודעות שכבר במכשיר הזה יימחקו ממנו.",
+    signOutAnonConfirm: "התנתקות מחשבון בלי Google מוחקת אותו לצמיתות, עם כל הקישורים. להמשיך?",
+    deleteAccount: "מחיקת החשבון",
+    deleteConfirm: "למחוק את החשבון, את כל הקישורים ואת כל המכשירים הרשומים? גם ההודעות במכשיר הזה יימחקו. אי אפשר לבטל.",
+    languageTitle: "שפה",
+    notificationsTitle: "התראות במכשיר הזה",
+    permUnsupported: "הדפדפן הזה לא תומך בהתראות.",
+    permDefault: "עדיין לא הופעלו במכשיר הזה.",
+    permGranted: "מופעלות במכשיר הזה.",
+    permDenied: "חסומות. הדפדפן לא יכול לבקש שוב — אפשרו התראות בהגדרות האתר.",
+    enable: "הפעלה",
+    sendTest: "בדיקת התראות",
+    testLeave: "עכשיו צאו מ-ivrit.ai: עברו למסך הבית או נעלו את הטלפון. התראת בדיקה תגיע בעוד",
+    testWatch: "שימו לב לחלק העליון של המסך.",
+    testCancel: "ביטול",
+    testAsk: "איך הופיעה התראת הבדיקה?",
+    testPopped: "היא קפצה על המסך",
+    testListOnly: "רק ברשימת ההתראות",
+    testNothing: "לא הגיע כלום",
+    testAllGood: "הכול מוכן: הודעות יקפצו כמו ההודעה הזאת.",
+    testAgain: "בדיקה נוספת",
+    popupHelpTitle: "שההתראות יקפצו על המסך",
+    popupHelpLead: "הטלפון מחליט לכל אפליקציה אם התראה קופצת על המסך או מחכה ברשימה. כדי שההתראות של ivrit.ai יקפצו:",
+    popupAndroid: () => [
+      "משכו למטה את רשימת ההתראות ולחצו לחיצה ארוכה על התראה של ivrit.ai.",
+      "הקישו על סמל ההגדרות (⚙) או על „הגדרות התראות”.",
+      "הפעילו „הצגה על המסך” / „חלון קופץ” (בחלק מהטלפונים: קבעו את הקטגוריה ל„דחוף”), וודאו שהצליל מופעל.",
+      "אם לא מוצאים: הגדרות ← אפליקציות ← ivrit.ai (או Chrome, אם ivrit.ai לא מותקן) ← התראות.",
+    ],
+    popupIos: () => [
+      "פתחו את אפליקציית ההגדרות ← עדכונים ← ivrit.ai.",
+      "תחת „התראות”, הפעילו „באנרים” ובחרו „זמני” או „קבוע”.",
+      "ודאו שמצב ריכוז או „נא לא להפריע” כבוי.",
+    ],
+    popupDesktop: () => [
+      "בהגדרות ההתראות של המחשב, אפשרו לדפדפן להציג באנרים או התראות.",
+      "ודאו שמצב „נא לא להפריע” או ריכוז כבוי.",
+    ],
+    nothingHelpTitle: "התראת הבדיקה לא הגיעה",
+    nothingHelpLead: "ההתראות מאושרות כאן, אז משהו במכשיר מעכב אותן:",
+    nothingAndroid: () => [
+      "ודאו ש„נא לא להפריע” כבוי.",
+      "הגדרות ← אפליקציות ← ivrit.ai (או Chrome) ← סוללה ← „ללא הגבלה”, כדי שהטלפון לא יעכב את ההתראות.",
+      "הגדרות ← אפליקציות ← ivrit.ai (או Chrome) ← התראות: ודאו שהן מופעלות.",
+      "ואז בדקו שוב.",
+    ],
+    nothingIos: () => [
+      "פתחו את ivrit.ai מהסמל במסך הבית, לא מ-Safari.",
+      "הגדרות ← עדכונים ← ivrit.ai: ודאו ש„אפשר עדכונים” מופעל.",
+      "ודאו שמצב ריכוז או „נא לא להפריע” כבוי, ובדקו שוב.",
+    ],
+    nothingDesktop: () => [
+      "ודאו שמצב „נא לא להפריע” או ריכוז כבוי.",
+      "אפשרו לדפדפן להציג התראות בהגדרות המחשב, ובדקו שוב.",
+    ],
+    testSent: (n) => (n ? `נשלח ל-${n} מכשירים.` : "עדיין אין מכשירים רשומים."),
+    registered: "המכשיר הזה רשום.",
+    devicesTitle: "מכשירים",
+    thisDevice: "המכשיר הזה",
+    added: (date) => `נוסף ${date}`,
+    remove: "הסרה",
+    noDevices: "עדיין אין מכשירים רשומים.",
+    storageTitle: "שמור במכשיר הזה",
+    storageBody: (n) => `${n} הודעות. השרת שומר שלושה ימים; המכשיר הזה שומר הכול עד שתמחקו.`,
+    clearHistory: "מחיקת ההיסטוריה מהמכשיר",
+    clearConfirm: "למחוק את כל ההודעות מהמכשיר הזה? אי אפשר לבטל.",
+    cleared: "ההיסטוריה נמחקה.",
+    diagnostics: "אבחון",
+    installed: "מותקן",
+    yes: "כן",
+    noTab: "לא (לשונית דפדפן)",
+    permission: "הרשאה",
+    serviceWorker: "Service worker",
+    pushService: "שירות התראות",
+    notSubscribed: "לא רשום",
+
+    prepromptTitle: "לאפשר התראות?",
+    prepromptBody: "הדפדפן ישאל מיד. אם תחסמו, האתר לא יוכל לבקש שוב — תצטרכו לאפשר ידנית בהגדרות האתר.",
+    notNow: "לא עכשיו",
+    continue: "המשך",
+    cancel: "ביטול",
+
+
+    helpTitle_denied: "ההתראות חסומות לאתר הזה",
+    helpTitle_hidden: "הדפדפן הסתיר את הבקשה",
+    helpTitle_failed: "הדפדפן הזה לא הצליח להפעיל התראות",
+    helpTitle_unsupported: "הדפדפן הזה לא יכול להציג התראות",
+    "helpTitle_ios-install": "קודם מתקינים את ivrit.ai",
+    helpLead: "ההודעות עדיין מחכות באפליקציה, רק לא קופצות כהתראות. כדי לתקן:",
+    helpChromium: (host) => [
+      "לחצו על הסמל בקצה שורת הכתובת.",
+      "פתחו את הגדרות האתר (או ההרשאות לאתר הזה).",
+      `הגדירו את ההתראות ל„אישור” עבור ${host}.`,
+      "חזרו לעמוד הזה.",
+    ],
+    helpFirefox: (host) => [
+      "לחצו על הסמל בקצה שורת הכתובת.",
+      "ליד „שליחת התראות”, הסירו את החסימה (ה-✕).",
+      `טענו מחדש את ${host} ואשרו כשתתבקשו.`,
+    ],
+    helpSafari: (host) => [
+      "פתחו את Safari ← הגדרות ← אתרים ← עדכונים.",
+      `מצאו את ${host} ובחרו „אישור”.`,
+    ],
+    helpAndroid: (host) => [
+      "הקישו ⋮ ← הגדרות ← הגדרות אתר ← התראות.",
+      `מצאו את ${host} ואשרו.`,
+      "אם ivrit.ai מותקן: לחיצה ארוכה על הסמל שלו ← פרטי האפליקציה ← התראות ← הפעלה.",
+    ],
+    helpSamsung: (host) => [
+      "הקישו ☰ ← הגדרות ← אתרים והורדות ← התראות.",
+      `אשרו את ${host}.`,
+    ],
+    helpIos: () => [
+      "פתחו את אפליקציית ההגדרות ← עדכונים ← ivrit.ai.",
+      "הפעילו את „אפשר עדכונים”.",
+    ],
+    "helpIos-install": () => [
+      "הקישו שיתוף ← הוספה למסך הבית.",
+      "פתחו את ivrit.ai ממסך הבית והתחברו שם.",
+      "באייפון ובאייפד התראות מגיעות רק לאפליקציה המותקנת.",
+    ],
+    helpBrave: () => [
+      "פתחו לשונית חדשה עם brave://settings/privacy.",
+      "הפעילו את „Use Google services for push messaging”.",
+      "הפעילו מחדש את Brave וחזרו לכאן.",
+    ],
+    helpHidden: () => [
+      "חפשו סמל של פעמון (או פעמון עם קו) בקצה שורת הכתובת.",
+      "לחצו עליו ובחרו „אישור”.",
+    ],
+    helpFailed: () => [
+      "פתחו את ivrit.ai ב-Chrome, ‏Edge, ‏Firefox או Safari.",
+      "אם אתם בחלון פרטי, עברו לחלון רגיל.",
+    ],
+    helpGeneric: () => [
+      "פתחו את הגדרות האתר בדפדפן (בדרך כלל מהסמל שליד הכתובת).",
+      "אשרו התראות וחזרו לכאן.",
+    ],
+    helpSystem: "אישרתם ועדיין לא מופיע כלום? בדקו בהגדרות ההתראות של המכשיר שהדפדפן מורשה, ושמצב „נא לא להפריע” כבוי.",
+    helpRetry: "אישרתי",
+    linkAnyway: "לקשר בכל זאת",
+    stillBlocked: "עדיין חסום. בצעו את השלבים למעלה ונסו שוב.",
+    bannerOff: "ההתראות כבויות במכשיר הזה.",
+    bannerAsk: "קבלו הודעות ברגע שהן מגיעות.",
+    bannerFix: "תיקון",
+    bannerTurnOn: "הפעלה",
+    dismiss: "סגירה",
+    offline: "אין חיבור — מוצג מה שיש במכשיר.",
+    error: (msg) => `משהו השתבש: ${msg}`,
+    pointInbox: "תמלולים מאליעזר ומשירותים נוספים של ivrit.ai, כהתראות.",
+    pointTranscribe: "שתפו הודעה קולית או הקלטה לאפליקציה כדי לתמלל אותה.",
+    tabTranscribe: "תמלול",
+    transcribeTitle: "תמלול",
+    transcribeLede: "אודיו בעברית לטקסט, עם המודלים של ivrit.ai.",
+    serviceTitle: "transcribe.ivrit.ai",
+    serviceBody: "מעלים הקלטות או מדביקים קישור ליוטיוב, ומקבלים תמלול שאפשר לערוך ולהוריד. ההתחברות שם נפרדת, עם Google.",
+    serviceOpen: "פתיחת transcribe.ivrit.ai",
+    shareTitle: "שיתוף אודיו לאפליקציה",
+    shareBody: "כשהאפליקציה מותקנת, שתפו הודעה קולית או הקלטה מוואטסאפ או מכל אפליקציה אחרת ובחרו ב-ivrit.ai מרשימת השיתוף. היא תחכה כאן עד שתשלחו אותה לתמלול.",
+    onDeviceTitle: "בקרוב: תמלול בטלפון עצמו",
+    onDeviceBody: "הקלטות קצרות יתומללו בטלפון עצמו, בלי להעלות שום דבר.",
+    sharedTitle: "שותף לאפליקציה",
+    sharedLede: "שלחו ל-transcribe.ivrit.ai כדי לתמלל.",
+    sharedSend: "תמלול",
+    sharedUnnamed: "הקלטה",
+    back: "חזרה",
+    privacy: "פרטיות",
+  },
+};
+
+export const LOCALES = ["en", "he"];
+
+let current = "en";
+
+export function detectLocale(preferred) {
+  if (LOCALES.includes(preferred)) return preferred;
+  try {
+    const saved = localStorage.getItem("locale");
+    if (LOCALES.includes(saved)) return saved;
+  } catch {}
+  return (navigator.languages ?? [navigator.language]).some((l) => /^(he|iw)\b/i.test(l)) ? "he" : "en";
+}
+
+export function setLocale(locale) {
+  current = LOCALES.includes(locale) ? locale : "en";
+  try {
+    localStorage.setItem("locale", current);
+  } catch {}
+  document.documentElement.lang = current;
+  document.documentElement.dir = current === "he" ? "rtl" : "ltr";
+  for (const node of document.querySelectorAll("[data-i18n]")) {
+    node.textContent = t(node.dataset.i18n);
+  }
+  for (const node of document.querySelectorAll("[data-i18n-placeholder]")) {
+    node.placeholder = t(node.dataset.i18nPlaceholder);
+  }
+  for (const node of document.querySelectorAll("[data-i18n-label]")) {
+    node.setAttribute("aria-label", t(node.dataset.i18nLabel));
+  }
+}
+
+export function locale() {
+  return current;
+}
+
+export function t(key, ...args) {
+  const value = STRINGS[current][key] ?? STRINGS.en[key] ?? key;
+  return typeof value === "function" ? value(...args) : value;
+}
+
+// A source's own name and description, in the UI language when it has one.
+export function localized(source, field) {
+  return (current === "he" && source?.[`${field}_he`]) || source?.[field] || "";
+}

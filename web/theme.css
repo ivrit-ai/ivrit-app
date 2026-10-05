@@ -1,0 +1,82 @@
+/* ivrit.ai's look on top of the shared stylesheet: ink on white, like the
+   mark, with no colour of its own. styles.css stays a plain copy of
+   Communicator's, so the two can be compared and kept in step. */
+
+:root {
+  --paper: #f7f6f3;
+  --paper-2: #efede8;
+  --card: #ffffff;
+  --ink: #111110;
+  --ink-2: #3d3c39;
+  --muted: #74726c;
+  --line: #dcdad4;
+  --line-soft: #e9e7e2;
+  --accent: #111110;
+  --accent-hover: #2e2d2a;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(17, 17, 16, 0.07);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #111110;
+    --paper-2: #191917;
+    --card: #1d1d1b;
+    --ink: #f2f1ed;
+    --ink-2: #cfcdc7;
+    --muted: #94928b;
+    --line: #2f2e2b;
+    --line-soft: #262523;
+    --accent: #f2f1ed;
+    --accent-hover: #ffffff;
+    --accent-ink: #111110;
+    --accent-soft: rgba(242, 241, 237, 0.1);
+  }
+}
+
+/* The wordmark is a domain name: set it in the text face, not the serif. */
+.wordmark {
+  font: 600 20px/1 var(--font-text);
+  letter-spacing: -0.01em;
+}
+
+/* The landing art: the mark, and a transcript arriving under it. */
+.landing-art {
+  height: 340px;
+}
+
+.landing-mark {
+  position: absolute;
+  inset-inline-start: 50%;
+  translate: -50% 0;
+  top: 0;
+  width: 200px;
+  height: 200px;
+  border-radius: 44px;
+  box-shadow: var(--shadow);
+}
+
+[dir="rtl"] .landing-mark {
+  translate: 50% 0;
+}
+
+.landing-art .s1 {
+  top: 176px;
+}
+
+.quiet-panel {
+  background: transparent;
+  box-shadow: none;
+  border-style: dashed;
+}
+
+.footer-links {
+  margin: 40px 0 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+#transcribe-back {
+  margin-bottom: 12px;
+}
