@@ -8,6 +8,22 @@ const store = self.NotifierStore;
 // Its devices are registered as "app" so Communicator can tell them apart.
 const config = self.IVRIT_CONFIG;
 const communicator = createCommunicator({ base: config.communicator, client: "app", store });
+
+// The native shell (Capacitor) when this page runs inside the installed app,
+// null in a browser. Inside the app, notifications come through Firebase and
+// native code instead of web push, sign-in goes through the browser, and the
+// app knows its own notification settings.
+const capacitor = self.Capacitor;
+const shell = capacitor?.isNativePlatform?.()
+  ? {
+      ivrit: capacitor.registerPlugin("IvritNative"),
+      app: capacitor.registerPlugin("App"),
+      browser: capacitor.registerPlugin("Browser"),
+    }
+  : null;
+// Where Communicator sends the browser back to once signed in; the app's
+// manifest claims it.
+const HANDOFF_URL = "ai.ivrit.app://auth";
 const { api, post, patch, del } = communicator;
 const RECONCILE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -145,12 +161,49 @@ function whenever(iso) {
 
 // ---------------------------------------------------------------- push
 
-const registerThisDevice = () => communicator.registerDevice();
+// Where notifications come from: web push in a browser, Firebase in the app.
+// The rest of the page asks this, never the browser directly.
+let nativeStatus = null;
+const notify = shell
+  ? {
+      supported: () => nativeStatus?.available !== false,
+      permission: () => nativeStatus?.permission ?? "default",
+      // Only the app can see this: allowed, but its channel was turned down so
+      // messages wait silently in the list.
+      popupOff: () => nativeStatus?.permission === "granted" && nativeStatus.popup === false,
+      async refresh() {
+        nativeStatus = await shell.ivrit.notificationStatus().catch(() => ({ available: false }));
+      },
+      async request() {
+        nativeStatus = await shell.ivrit.requestPermission();
+        return nativeStatus.permission;
+      },
+      async register() {
+        const reg = await shell.ivrit.pushRegistration();
+        return communicator.registerNativeDevice({
+          transport: "fcm",
+          token: reg.token,
+          key: reg.key,
+          oldToken: reg.previousToken,
+          label: "ivrit.ai · Android",
+        });
+      },
+    }
+  : {
+      supported: pushSupported,
+      permission: () => (pushSupported() ? Notification.permission : "unsupported"),
+      popupOff: () => false,
+      async refresh() {},
+      request: () => Notification.requestPermission(),
+      register: () => communicator.registerDevice(),
+    };
+
+const registerThisDevice = () => notify.register();
 
 // The safety net that works everywhere: Chrome has never shipped
 // pushsubscriptionchange, so re-upserting on open keeps endpoints fresh.
 async function reconcile() {
-  if (!pushSupported() || Notification.permission !== "granted") return;
+  if (!notify.supported() || notify.permission() !== "granted") return;
   const last = Number(localStorage.getItem("reconciled_at") ?? 0);
   if (Date.now() - last < RECONCILE_INTERVAL_MS) return;
   try {
@@ -166,19 +219,20 @@ async function reconcile() {
 // this device is registered, "dismissed" when the user said not now, or the
 // trouble that stopped it (see notificationTrouble).
 async function enableNotifications() {
-  if (!pushSupported()) return troubleWithoutPush();
-  if (Notification.permission === "denied") return "denied";
-  if (Notification.permission !== "granted") {
+  if (!notify.supported()) return troubleWithoutPush();
+  if (notify.permission() === "denied") return "denied";
+  if (notify.permission() !== "granted") {
     const dialog = $("preprompt");
     dialog.showModal();
     await new Promise((resolve) => dialog.addEventListener("close", resolve, { once: true }));
     if (dialog.returnValue !== "yes") return "dismissed";
     // Safari ignores requestPermission outside a user gesture, and a denial is
     // permanent, so this only ever runs from a deliberate click.
-    const permission = await Notification.requestPermission();
+    const permission = await notify.request();
     // Still "default" means the browser answered for the user without asking:
-    // Chrome's quiet prompt, or a request dismissed too often before.
-    if (permission !== "granted") return permission === "denied" ? "denied" : "hidden";
+    // Chrome's quiet prompt, or a request dismissed too often before. In the
+    // app it means the user closed Android's dialog.
+    if (permission !== "granted") return permission === "denied" ? "denied" : shell ? "dismissed" : "hidden";
   }
   try {
     await registerThisDevice();
@@ -216,19 +270,22 @@ function platform() {
 }
 
 function troubleWithoutPush() {
+  if (shell) return "unsupported";
   return platform().os === "ios" && !installed() ? "ios-install" : "unsupported";
 }
 
 // Why notifications cannot reach this device, or null when nothing is known to
 // be wrong. "default" (never asked) is not trouble: it is a question to ask.
 function notificationTrouble() {
-  if (!pushSupported()) return troubleWithoutPush();
-  if (Notification.permission === "denied") return "denied";
-  if (Notification.permission === "granted" && state.pushFailed) return "failed";
+  if (!notify.supported()) return troubleWithoutPush();
+  if (notify.permission() === "denied") return "denied";
+  if (notify.permission() === "granted" && state.pushFailed) return "failed";
+  if (notify.popupOff()) return "nopopup";
   return null;
 }
 
 function helpSteps(trouble) {
+  if (shell) return t(trouble === "nopopup" ? "helpAppPopup" : trouble === "denied" ? "helpAppDenied" : "helpAppFailed");
   const { os, browser } = platform();
   const host = location.host;
   if (trouble === "ios-install") return t("helpIos-install");
@@ -246,22 +303,29 @@ function helpSteps(trouble) {
 // Steps for this browser and device, and what to do once they are done.
 function helpPanel(trouble, { retry, skip } = {}) {
   const actions = [];
-  if (retry && trouble !== "unsupported" && trouble !== "ios-install") {
+  // In the app, the right settings screen is one tap away.
+  if (shell && (trouble === "denied" || trouble === "nopopup")) {
+    actions.push(
+      el("button", { class: "btn primary", type: "button", text: t("openSettings"), onclick: () => shell.ivrit.openNotificationSettings() })
+    );
+  }
+  if (retry && trouble !== "unsupported" && trouble !== "ios-install" && trouble !== "nopopup") {
     actions.push(el("button", { class: "btn primary", type: "button", text: t("helpRetry"), onclick: retry }));
   }
   if (skip) actions.push(el("button", { class: "btn quiet", type: "button", text: t("linkAnyway"), onclick: skip }));
   return el("div", { class: "help" }, [
     el("h3", { text: t(`helpTitle_${trouble}`) }),
-    el("p", { class: "muted", text: t("helpLead") }),
+    el("p", { class: "muted", text: t(trouble === "nopopup" ? "helpLeadPopup" : "helpLead") }),
     el("ol", {}, helpSteps(trouble).map((step) => el("li", { text: step }))),
-    trouble === "denied" || trouble === "hidden" ? el("p", { class: "hint", text: t("helpSystem") }) : null,
+    !shell && (trouble === "denied" || trouble === "hidden") ? el("p", { class: "hint", text: t("helpSystem") }) : null,
     actions.length ? el("div", { class: "row" }, actions) : null,
   ]);
 }
 
 // "I've allowed them": look again, and carry on if they were.
 async function recheckNotifications() {
-  if (pushSupported() && Notification.permission === "default") return enableNotifications();
+  await notify.refresh();
+  if (notify.supported() && notify.permission() === "default") return enableNotifications();
   const trouble = notificationTrouble();
   if (trouble === "denied") {
     toast(t("stillBlocked"));
@@ -286,7 +350,7 @@ navigator.permissions
 function renderNotifyBanner() {
   const box = $("notify-banner");
   const trouble = notificationTrouble();
-  const ask = !trouble && pushSupported() && Notification.permission === "default";
+  const ask = !trouble && notify.supported() && notify.permission() === "default";
   let dismissed = 0;
   try {
     dismissed = Number(localStorage.getItem("notify_banner_dismissed") ?? 0);
@@ -297,7 +361,7 @@ function renderNotifyBanner() {
   }
   box.replaceChildren(
     icon("bell"),
-    el("span", { class: "grow", text: ask ? t("bannerAsk") : t("bannerOff") }),
+    el("span", { class: "grow", text: ask ? t("bannerAsk") : trouble === "nopopup" ? t("bannerNoPopup") : t("bannerOff") }),
     el("button", {
       class: "btn small primary",
       type: "button",
@@ -649,10 +713,10 @@ async function openLinkSheet(source) {
   dialog.showModal();
   const trouble = notificationTrouble();
   if (trouble) return renderHelpStep(source, trouble);
-  if (pushSupported() && Notification.permission === "default") return renderNotifyStep(source);
+  if (notify.supported() && notify.permission() === "default") return renderNotifyStep(source);
   // Allowed, but this device may never have subscribed (or lost it): make
   // sure before the user links, since a link with no device reaches no one.
-  if (pushSupported() && !localStorage.getItem("device_id")) {
+  if (notify.supported() && !localStorage.getItem("device_id")) {
     const result = await enableNotifications();
     if (result !== "granted") return renderHelpStep(source, result);
   }
@@ -813,7 +877,7 @@ function renderAccount() {
     box.replaceChildren(
       el("h3", { text: t("anonymousTitle") }),
       el("p", { class: "muted", text: t("anonymousBody") }),
-      el("a", { class: "btn primary", href: communicator.loginUrl(`${location.origin}/`) }, el("span", { text: t("upgrade") }))
+      signInLink(el("a", { class: "btn primary" }, el("span", { text: t("upgrade") })))
     );
     return;
   }
@@ -837,12 +901,13 @@ async function changeLocale(next) {
   setLocale(next);
   renderLocaleSwitches();
   await store.setMeta("locale", next).catch(() => {});
+  configureShell();
   if (state.me) patch("/api/me", { locale: next }).catch(() => {});
   rerender();
 }
 
 function renderPermission() {
-  const permission = pushSupported() ? Notification.permission : "unsupported";
+  const permission = notify.supported() ? notify.permission() : "unsupported";
   const trouble = notificationTrouble();
   const copy = { unsupported: "permUnsupported", default: "permDefault", granted: "permGranted", denied: "permDenied" };
   $("permission").textContent = t(copy[permission]);
@@ -902,6 +967,16 @@ async function renderStorage() {
 }
 
 async function renderDiagnostics() {
+  if (shell) {
+    await notify.refresh();
+    const rows = [
+      [t("permission"), notify.permission()],
+      [t("popupSetting"), nativeStatus?.popup ? t("yes") : t("no")],
+      [t("pushService"), notify.supported() ? "Firebase" : t("notSubscribed")],
+    ];
+    $("diagnostics").replaceChildren(...rows.flatMap(([term, value]) => [el("dt", { text: term }), el("dd", { text: value })]));
+    return;
+  }
   const rows = [
     [t("permission"), pushSupported() ? Notification.permission : "unsupported"],
     [t("installed"), installed() ? t("yes") : t("noTab")],
@@ -932,18 +1007,27 @@ async function forgetThisDevice() {
 // it directly.
 const SHARE_CACHE = "share-inbox";
 
+// In the app, Android hands the files to native code, which keeps them; they
+// go on through Android's share menu, since transcribe.ivrit.ai (with its own
+// Google sign-in) cannot run inside the app.
 async function sharedFiles() {
+  if (shell) {
+    const { files } = await shell.ivrit.sharedFiles();
+    return files.map((f) => ({ key: f.id, name: f.name || t("sharedUnnamed"), type: f.type, size: f.size }));
+  }
   const cache = await caches.open(SHARE_CACHE);
   const files = [];
   for (const request of await cache.keys()) {
     const res = await cache.match(request);
     const name = decodeURIComponent(res.headers.get("x-name") || "") || t("sharedUnnamed");
-    files.push({ key: request.url, name, type: res.headers.get("content-type") || "", blob: await res.blob() });
+    const blob = await res.blob();
+    files.push({ key: request.url, name, type: res.headers.get("content-type") || "", blob, size: blob.size });
   }
   return files;
 }
 
 async function discardShared(key) {
+  if (shell) return shell.ivrit.discardShared({ id: key });
   await (await caches.open(SHARE_CACHE)).delete(key);
 }
 
@@ -953,6 +1037,7 @@ function formatSize(bytes) {
 }
 
 async function sendToTranscribe(file) {
+  if (shell) return shell.ivrit.shareOn({ id: file.key, title: t("sharedChooser") });
   const input = el("input", { type: "file", name: "media" });
   const transfer = new DataTransfer();
   transfer.items.add(new File([file.blob], file.name, { type: file.type }));
@@ -972,7 +1057,7 @@ async function renderTranscribe() {
   if (!files.length) return box.replaceChildren();
   box.replaceChildren(
     el("h3", { text: t("sharedTitle") }),
-    el("p", { class: "muted", text: t("sharedLede") }),
+    el("p", { class: "muted", text: t(shell ? "sharedLedeApp" : "sharedLede") }),
     el(
       "div",
       { class: "list" },
@@ -980,7 +1065,7 @@ async function renderTranscribe() {
         el("div", { class: "list-row" }, [
           el("div", { class: "grow" }, [
             el("div", { dir: "auto", text: file.name }),
-            el("div", { class: "sub" }, [el("bdi", { dir: "ltr", text: formatSize(file.blob.size) })]),
+            el("div", { class: "sub" }, [el("bdi", { dir: "ltr", text: formatSize(file.size) })]),
           ]),
           el("button", { class: "btn primary small", type: "button", text: t("sharedSend"), onclick: () => sendToTranscribe(file) }),
           el("button", {
@@ -1092,6 +1177,7 @@ function askPopupResult() {
       return toast(t("testAllGood"));
     }
     if (kind === "list") {
+      if (shell) return showPopupTest(helpPanel("nopopup"));
       return showPopupTest(stepsPanel(t("popupHelpTitle"), t("popupHelpLead"), t(`popup${popupKind()}`), runPopupTest));
     }
     // Nothing at all: a block we can see explains it first; otherwise it is the device.
@@ -1196,6 +1282,27 @@ $("sheet").addEventListener("click", (event) => {
 
 addEventListener("scroll", () => document.querySelector(".bar").classList.toggle("scrolled", scrollY > 4), { passive: true });
 
+// In the app: a message arrived (natively, so only the server has it until
+// synced), a notification was tapped, files were shared in, or Firebase
+// replaced the device's token.
+if (shell) {
+  shell.ivrit.addListener("push", () => state.me && refreshInbox());
+  shell.ivrit.addListener("opened", ({ id }) => {
+    if (state.me && id) location.hash = `#m/${encodeURIComponent(id)}`;
+  });
+  shell.ivrit.addListener("shared", () => {
+    if (state.me) showView("transcribe");
+    else showSharedSignedOut();
+  });
+  shell.ivrit.addListener("pushToken", () => {
+    localStorage.removeItem("reconciled_at");
+    if (state.me) reconcile();
+  });
+  shell.app.addListener("appUrlOpen", ({ url }) => {
+    if (url?.startsWith(HANDOFF_URL)) finishNativeSignIn(url);
+  });
+}
+
 // A push that arrives while the app is open lands in the store via the
 // service worker; this only has to show it.
 navigator.serviceWorker?.addEventListener("message", (event) => {
@@ -1208,14 +1315,20 @@ navigator.serviceWorker?.addEventListener("message", (event) => {
 
 addEventListener("hashchange", openFromHash);
 
-document.addEventListener("visibilitychange", () => {
+document.addEventListener("visibilitychange", async () => {
   if (document.visibilityState !== "visible" || !state.me) return;
+  // Back from Android's settings, perhaps having changed exactly this.
+  if (shell) {
+    await notify.refresh();
+    renderNotifyBanner();
+    if (state.view === "settings") renderPermission();
+  }
   reconcile();
   refreshInbox();
 });
 
 function installed() {
-  return navigator.standalone || matchMedia("(display-mode: standalone)").matches;
+  return Boolean(shell) || navigator.standalone || matchMedia("(display-mode: standalone)").matches;
 }
 
 function showIosHint() {
@@ -1270,8 +1383,60 @@ $("transcribe-back").addEventListener("click", () => {
   $("landing").hidden = false;
 });
 
+// Google will not sign in inside the app's web view, so the app sends the user
+// to the browser, and Communicator hands back a one-time code (see
+// /auth/handoff there). The verifier never leaves this page; only its hash
+// goes with the sign-in.
+async function startNativeSignIn() {
+  const verifier = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+  const challenge = btoa(String.fromCharCode(...digest)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  sessionStorage.setItem("handoff_verifier", verifier);
+  await shell.browser.open({ url: communicator.handoffLoginUrl(HANDOFF_URL, challenge) });
+}
+
+async function finishNativeSignIn(url) {
+  shell.browser.close().catch(() => {});
+  const code = new URL(url).searchParams.get("code");
+  const verifier = sessionStorage.getItem("handoff_verifier");
+  sessionStorage.removeItem("handoff_verifier");
+  if (!code || !verifier) return toast(t("signInFailed"));
+  try {
+    const { upgraded } = await communicator.redeemHandoff(code, verifier);
+    location.replace(upgraded ? "/#upgraded" : "/");
+  } catch {
+    toast(t("signInFailed"));
+  }
+}
+
+function signInLink(node) {
+  if (!shell) {
+    node.href = communicator.loginUrl(`${location.origin}/`);
+    return node;
+  }
+  node.href = "#";
+  node.addEventListener("click", (event) => {
+    event.preventDefault();
+    startNativeSignIn().catch((err) => toast(t("error", err.message)));
+  });
+  return node;
+}
+
+// What a notification needs to show while the app is closed.
+function configureShell() {
+  shell?.ivrit
+    .configure({
+      locale: locale(),
+      communicator: config.communicator,
+      sources: state.catalog.sources.map(({ id, name, name_he }) => ({ id, name, name_he: name_he ?? null })),
+    })
+    .catch(() => {});
+}
+
 async function start() {
-  $("signin").href = communicator.loginUrl(`${location.origin}/`);
+  signInLink($("signin"));
+  await notify.refresh();
   setLocale(detectLocale());
   renderLocaleSwitches();
   showIosHint();
@@ -1315,10 +1480,14 @@ async function start() {
   }
   if (state.me.offline) return;
 
-  if (pushSupported()) navigator.serviceWorker.register("/sw.js").catch(() => {});
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   await refreshCatalog();
+  configureShell();
   await refreshInbox();
+  const opened = await shell?.ivrit.takeOpened().catch(() => null);
+  if (opened?.id) history.replaceState(null, "", `/#m/${encodeURIComponent(opened.id)}`);
   await openFromHash();
+  if (shell && (await shell.ivrit.sharedFiles().catch(() => ({ files: [] }))).files.length) showView("transcribe");
   if (location.hash === "#shared") {
     history.replaceState(null, "", location.pathname);
     showView("transcribe");

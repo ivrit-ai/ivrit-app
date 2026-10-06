@@ -2,16 +2,20 @@
 
 ivrit.ai's app: transcripts and other messages from ivrit.ai services as
 notifications, and Hebrew transcription. On the web at https://app.ivrit.ai;
-on Android as `ai.ivrit.app`, a Chrome shell around the same web app.
+on Android as `ai.ivrit.app`, a native shell (Capacitor) that loads the same
+web app, adding Firebase push, Android's notification settings and shares.
 
 - `web/` — the app itself: plain JS, no build step. Hebrew and English, light
   and dark.
-- `server.js` — serves `web/`, `/config.js` (where the services are),
-  `/privacy`, and `/.well-known/assetlinks.json` for Android.
+- `server.js` — serves `web/`, `/config.js` (where the services are) and
+  `/privacy`.
+- `shell/` — the native shells: `shell/android/` now, `shell/ios/` later. The
+  web app is loaded from app.ivrit.ai, so UI changes ship without a store
+  release; only native code needs one. Native code is in
+  `shell/android/app/src/main/java/ai/ivrit/app/`.
 - `shared/` — what the web app and the shells share: `app.json` (name,
-  package, origins) and `brand/` (the mark, traced; see its README).
-- `scripts/` — `sync-client.sh` and `build-icons.sh`.
-- `android/` — the Android shell (to come).
+  package, version, services) and `brand/` (the mark, traced; see its README).
+- `scripts/` — `sync-client.sh`, `build-icons.sh`, `build-android.sh`.
 
 ## Services
 
@@ -28,16 +32,48 @@ vendored in `web/client/`, pinned to a commit recorded in
 
     scripts/sync-client.sh ../notifier
 
-**transcribe.ivrit.ai** does transcription. The Transcribe tab links to it,
-and audio shared into the app is handed to its share target
-(`/share-target`, field `media`) by a form post.
+**transcribe.ivrit.ai** does transcription. The Transcribe tab links to it.
+Audio shared into the app waits in that tab: in a browser it is handed to
+transcribe.ivrit.ai's share target (`/share-target`, field `media`) by a form
+post; in the Android app, which cannot run transcribe.ivrit.ai inside it (its
+Google sign-in refuses web views), it goes on through Android's share menu.
+
+## Inside the app
+
+`web/app.js` checks for the shell (`window.Capacitor`) and then:
+
+- **Push** comes through Firebase, not web push. The native side
+  (`IvritNativePlugin`) hands the page a Firebase token and an AES-256 key it
+  generated; the page registers them with Communicator (`transport: "fcm"`).
+  Communicator seals each message with the key, so Firebase cannot read it,
+  and `PushService` opens, shows and acks it, with the app closed too.
+- **Notifications pop up**: the app's "Messages" channel is created at high
+  importance, and the app can see when the user turned it down, saying so and
+  opening that exact settings screen.
+- **Sign-in** opens the browser (Google refuses web views). Communicator
+  hands a one-time code back to `ai.ivrit.app://auth`, which the page
+  redeems with a verifier only it holds (`/auth/handoff`, PKCE-style).
+
+## Building Android
+
+    scripts/build-android.sh
+
+Produces `dist/ivrit-app-<version>-<n>.aab` (for Play) and `.apk` (to install
+directly), signed with the upload key. Needs, outside the repo:
+`~/keys/ivrit-app-upload.jks` with its password in
+`~/keys/ivrit-app-upload.password` (back both up: Play needs this key for
+every update), and Firebase's `~/keys/ivrit-app-google-services.json`.
+The toolchain (Node 22, JDK 21, Android SDK) is found under `~/.local/opt`;
+see `scripts/android-env.sh`.
 
 ## Running
 
     npm install
     COMMUNICATOR_URL=http://localhost:3000 PORT=8080 npm start
 
-Communicator must list the app's origin in `APP_ORIGINS`.
+Communicator must list the app's origin in `APP_ORIGINS`, and, for the
+Android app, `APP_HANDOFF_URLS=ai.ivrit.app://auth` and
+`FCM_SERVICE_ACCOUNT` (Firebase's service-account key).
 
 ## Deploying
 

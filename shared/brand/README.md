@@ -7,7 +7,7 @@ files place it for each use:
 - `icon.svg` — store and launcher icon, black on white, full bleed.
 - `maskable.svg` — the same with the letter inside the 66% safe zone, for
   web-app maskable icons.
-- `foreground.svg` — the letter alone at safe-zone size, for the Android
+- `foreground.svg` — the letter alone, inside the safe zone, for the Android
   adaptive icon's foreground layer (background: white).
 - `badge.svg` — white silhouette for the Android status bar.
 

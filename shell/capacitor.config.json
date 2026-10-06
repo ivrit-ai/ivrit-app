@@ -1,0 +1,12 @@
+{
+  "appId": "ai.ivrit.app",
+  "appName": "ivrit.ai",
+  "webDir": "www",
+  "server": {
+    "url": "https://app.ivrit.ai",
+    "errorPath": "index.html"
+  },
+  "android": {
+    "backgroundColor": "#F7F6F3"
+  }
+}

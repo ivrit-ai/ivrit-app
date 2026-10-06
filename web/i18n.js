@@ -253,6 +253,29 @@ const STRINGS = {
     sharedUnnamed: "Recording",
     back: "Back",
     privacy: "Privacy",
+    helpTitle_nopopup: "Messages won't pop up",
+    helpLeadPopup: "They arrive, but wait silently in the notification list. To have them pop up on screen:",
+    helpAppDenied: () => [
+      "Tap “Open settings” below.",
+      "Turn on notifications for ivrit.ai, and for its Messages category.",
+      "Come back to the app.",
+    ],
+    helpAppPopup: () => [
+      "Tap “Open settings” below: it opens the Messages category of ivrit.ai.",
+      "Turn on “Pop on screen” (on some phones: set it to “Alerting” or “Urgent”), and make sure sound is on.",
+      "Come back to the app.",
+    ],
+    helpAppFailed: () => [
+      "Check that the phone is online, then close and reopen the app.",
+      "If it keeps happening, write to support@ivrit.ai.",
+    ],
+    openSettings: "Open settings",
+    bannerNoPopup: "Messages arrive, but don't pop up on screen.",
+    popupSetting: "Pops up on screen",
+    no: "no",
+    signInFailed: "Signing in didn't complete. Try again.",
+    sharedChooser: "Send to transcribe",
+    sharedLedeApp: "To transcribe, send it on and pick transcribe.ivrit.ai (or Chrome) in the list that opens.",
   },
 
   he: {
@@ -504,6 +527,29 @@ const STRINGS = {
     sharedUnnamed: "הקלטה",
     back: "חזרה",
     privacy: "פרטיות",
+    helpTitle_nopopup: "ההודעות לא קופצות על המסך",
+    helpLeadPopup: "הן מגיעות, אבל מחכות בשקט ברשימת ההתראות. כדי שיקפצו על המסך:",
+    helpAppDenied: () => [
+      "הקישו על „פתיחת ההגדרות” למטה.",
+      "הפעילו התראות ל-ivrit.ai ולקטגוריה „הודעות” שלה.",
+      "חזרו לאפליקציה.",
+    ],
+    helpAppPopup: () => [
+      "הקישו על „פתיחת ההגדרות” למטה: ייפתחו ההגדרות של הקטגוריה „הודעות”.",
+      "הפעילו „הצגה על המסך” / „חלון קופץ” (בחלק מהטלפונים: בחרו „התראה” או „דחוף”), וודאו שהצליל מופעל.",
+      "חזרו לאפליקציה.",
+    ],
+    helpAppFailed: () => [
+      "ודאו שיש חיבור לאינטרנט, ואז סגרו ופתחו מחדש את האפליקציה.",
+      "אם זה חוזר, כתבו לנו: support@ivrit.ai.",
+    ],
+    openSettings: "פתיחת ההגדרות",
+    bannerNoPopup: "ההודעות מגיעות, אבל לא קופצות על המסך.",
+    popupSetting: "קופץ על המסך",
+    no: "לא",
+    signInFailed: "ההתחברות לא הושלמה. נסו שוב.",
+    sharedChooser: "שליחה לתמלול",
+    sharedLedeApp: "כדי לתמלל, שלחו הלאה ובחרו ב-transcribe.ivrit.ai (או ב-Chrome) ברשימה שתיפתח.",
   },
 };
 

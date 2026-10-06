@@ -1,12 +1,17 @@
 {
   "name": "ivrit.ai",
   "packageId": "ai.ivrit.app",
+  "version": "0.1.0",
   "host": "app.ivrit.ai",
   "startUrl": "/",
-  "trustedOrigins": ["https://app.ivrit.ai", "https://transcribe.ivrit.ai"],
   "communicator": "https://communicator.ivrit.ai",
   "transcribe": "https://transcribe.ivrit.ai",
+  "handoffUrl": "ai.ivrit.app://auth",
   "themeColor": "#F7F6F3",
   "backgroundColor": "#F7F6F3",
-  "notificationChannel": { "id": "messages", "name": "Messages", "name_he": "הודעות" }
+  "notificationChannel": {
+    "id": "messages",
+    "name": "Messages",
+    "name_he": "הודעות"
+  }
 }

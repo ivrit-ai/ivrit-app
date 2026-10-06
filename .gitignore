@@ -3,3 +3,6 @@ node_modules/
 *.keystore
 .env
 tmp-*
+dist/
+shell/node_modules/
+shell/android/app/google-services.json
