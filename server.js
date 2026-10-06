@@ -42,6 +42,8 @@ app.get("/.well-known/assetlinks.json", (req, res) => {
 });
 
 app.get("/privacy", (req, res) => res.sendFile(path.join(WEB_DIR, "privacy.html")));
+// Google Play's account deletion page: how to delete, with or without the app.
+app.get("/delete-account", (req, res) => res.sendFile(path.join(WEB_DIR, "delete-account.html")));
 
 // A share the service worker did not catch (it was not installed yet). The
 // file cannot be recovered; landing in the app beats a 404.
