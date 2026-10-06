@@ -9,7 +9,7 @@ const APP = JSON.parse(readFileSync(path.join(__dirname, "shared/app.json"), "ut
 // Generated with the Android signing keys; absent until the first build.
 const ASSET_LINKS = path.join(__dirname, "shared/assetlinks.json");
 
-const PORT = Number(process.env.XHOST_HTTP_PORT || process.env.PORT || 8080);
+const PORT = Number(process.env.XHOSTD_HTTP_PORT || process.env.XHOST_HTTP_PORT || process.env.PORT || 8080);
 
 // Where the app's services live. Overridable for a staging Communicator; the
 // defaults are the public addresses, which are not secrets.
