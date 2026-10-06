@@ -1,0 +1,78 @@
+// Google Play's publishing API, for scripts/publish-android.sh: signs in as
+// the play-publisher service account and uploads a bundle to a track.
+//
+//   node scripts/play.mjs status                  tracks and their releases
+//   node scripts/play.mjs upload <file.aab> [track] [notes]
+//
+// The key is ~/keys/ivrit-app-play-publisher.json, or PLAY_SERVICE_ACCOUNT.
+import { createSign } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+
+const PACKAGE = JSON.parse(readFileSync(new URL("../shared/app.json", import.meta.url))).packageId;
+const API = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${PACKAGE}`;
+const UPLOAD = `https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/${PACKAGE}`;
+const account = JSON.parse(readFileSync(process.env.PLAY_SERVICE_ACCOUNT || `${homedir()}/keys/ivrit-app-play-publisher.json`, "utf8"));
+
+async function accessToken() {
+  const now = Math.floor(Date.now() / 1000);
+  const part = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const unsigned = `${part({ alg: "RS256", typ: "JWT" })}.${part({
+    iss: account.client_email,
+    scope: "https://www.googleapis.com/auth/androidpublisher",
+    aud: account.token_uri,
+    iat: now,
+    exp: now + 3600,
+  })}`;
+  const assertion = `${unsigned}.${createSign("RSA-SHA256").update(unsigned).sign(account.private_key, "base64url")}`;
+  const res = await fetch(account.token_uri, {
+    method: "POST",
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion }),
+  });
+  if (!res.ok) throw new Error(`token: ${res.status} ${await res.text()}`);
+  return (await res.json()).access_token;
+}
+
+const token = await accessToken();
+async function call(method, url, { json, body, type } = {}) {
+  const headers = { authorization: `Bearer ${token}` };
+  if (json) headers["content-type"] = "application/json";
+  if (type) headers["content-type"] = type;
+  const res = await fetch(url, { method, headers, body: json ? JSON.stringify(json) : body });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${method} ${url.replace(/\?.*/, "")}: ${res.status} ${text.slice(0, 600)}`);
+  return text ? JSON.parse(text) : null;
+}
+
+// Every change goes through an "edit", committed at the end or not at all.
+const edit = await call("POST", `${API}/edits`, { json: {} });
+const [command, file, track = "internal", notes] = process.argv.slice(2);
+try {
+  if (command === "status") {
+    const { tracks } = await call("GET", `${API}/edits/${edit.id}/tracks`);
+    for (const t of tracks) console.log(t.track, JSON.stringify(t.releases?.map((r) => ({ status: r.status, versionCodes: r.versionCodes, name: r.name })) ?? []));
+  } else if (command === "upload") {
+    const bundle = await call("POST", `${UPLOAD}/edits/${edit.id}/bundles?uploadType=media`, {
+      body: readFileSync(file),
+      type: "application/octet-stream",
+    });
+    await call("PUT", `${API}/edits/${edit.id}/tracks/${track}`, {
+      json: {
+        track,
+        releases: [
+          {
+            versionCodes: [String(bundle.versionCode)],
+            status: "completed",
+            ...(notes ? { releaseNotes: [{ language: "he-IL", text: notes }, { language: "en-US", text: notes }] } : {}),
+          },
+        ],
+      },
+    });
+    await call("POST", `${API}/edits/${edit.id}:commit`);
+    console.log(`released versionCode ${bundle.versionCode} to ${track}`);
+  } else {
+    throw new Error("usage: play.mjs status | upload <file.aab> [track] [notes]");
+  }
+} finally {
+  if (command !== "upload") await call("DELETE", `${API}/edits/${edit.id}`).catch(() => {});
+}

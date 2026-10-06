@@ -66,6 +66,13 @@ every update), and Firebase's `~/keys/ivrit-app-google-services.json`.
 The toolchain (Node 22, JDK 21, Android SDK) is found under `~/.local/opt`;
 see `scripts/android-env.sh`.
 
+    scripts/publish-android.sh "release notes"
+
+Builds and releases to Google Play's internal testing track, through the
+publishing API as the `play-publisher` service account
+(`~/keys/ivrit-app-play-publisher.json`). `node scripts/play.mjs status`
+lists the tracks and their releases.
+
 ## Running
 
     npm install
