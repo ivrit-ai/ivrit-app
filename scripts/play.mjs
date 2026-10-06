@@ -2,6 +2,8 @@
 // the play-publisher service account and uploads a bundle to a track.
 //
 //   node scripts/play.mjs status                  tracks and their releases
+//   node scripts/play.mjs listing                 the store listing, per language
+//   node scripts/play.mjs icon <file.png>         sets the listing's icon
 //   node scripts/play.mjs upload <file.aab> [track] [notes]
 //
 // The key is ~/keys/ivrit-app-play-publisher.json, or PLAY_SERVICE_ACCOUNT.
@@ -51,6 +53,27 @@ try {
   if (command === "status") {
     const { tracks } = await call("GET", `${API}/edits/${edit.id}/tracks`);
     for (const t of tracks) console.log(t.track, JSON.stringify(t.releases?.map((r) => ({ status: r.status, versionCodes: r.versionCodes, name: r.name })) ?? []));
+  } else if (command === "listing") {
+    const details = await call("GET", `${API}/edits/${edit.id}/details`);
+    const { listings = [] } = await call("GET", `${API}/edits/${edit.id}/listings`);
+    console.log("default language:", details.defaultLanguage, "| contact:", details.contactEmail ?? "-");
+    for (const l of listings) {
+      const { images = [] } = await call("GET", `${API}/edits/${edit.id}/listings/${l.language}/icon`);
+      console.log(l.language, JSON.stringify({ title: l.title, short: l.shortDescription, icon: images.length }));
+    }
+  } else if (command === "icon") {
+    // The store listing's icon, in every language the listing has.
+    const { listings = [] } = await call("GET", `${API}/edits/${edit.id}/listings`);
+    if (!listings.length) throw new Error("no store listing yet");
+    for (const { language } of listings) {
+      await call("DELETE", `${API}/edits/${edit.id}/listings/${language}/icon`);
+      await call("POST", `${UPLOAD}/edits/${edit.id}/listings/${language}/icon?uploadType=media`, {
+        body: readFileSync(file),
+        type: "image/png",
+      });
+      console.log("icon set for", language);
+    }
+    await call("POST", `${API}/edits/${edit.id}:commit`);
   } else if (command === "upload") {
     const bundle = await call("POST", `${UPLOAD}/edits/${edit.id}/bundles?uploadType=media`, {
       body: readFileSync(file),
@@ -63,7 +86,7 @@ try {
           {
             versionCodes: [String(bundle.versionCode)],
             status: "completed",
-            ...(notes ? { releaseNotes: [{ language: "he-IL", text: notes }, { language: "en-US", text: notes }] } : {}),
+            ...(notes ? { releaseNotes: [{ language: (await call("GET", `${API}/edits/${edit.id}/details`)).defaultLanguage, text: notes }] } : {}),
           },
         ],
       },
@@ -71,8 +94,8 @@ try {
     await call("POST", `${API}/edits/${edit.id}:commit`);
     console.log(`released versionCode ${bundle.versionCode} to ${track}`);
   } else {
-    throw new Error("usage: play.mjs status | upload <file.aab> [track] [notes]");
+    throw new Error("usage: play.mjs status | listing | icon <file.png> | upload <file.aab> [track] [notes]");
   }
 } finally {
-  if (command !== "upload") await call("DELETE", `${API}/edits/${edit.id}`).catch(() => {});
+  if (command === "status" || command === "listing") await call("DELETE", `${API}/edits/${edit.id}`).catch(() => {});
 }
