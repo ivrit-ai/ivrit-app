@@ -4,6 +4,7 @@
 //   node scripts/play.mjs status                  tracks and their releases
 //   node scripts/play.mjs listing                 the store listing, per language
 //   node scripts/play.mjs icon <file.png>         sets the listing's icon
+//   node scripts/play.mjs graphics                feature graphic and screenshots from store/
 //   node scripts/play.mjs upload <file.aab> [track] [notes]
 //
 // The key is ~/keys/ivrit-app-play-publisher.json, or PLAY_SERVICE_ACCOUNT.
@@ -74,6 +75,21 @@ try {
       console.log("icon set for", language);
     }
     await call("POST", `${API}/edits/${edit.id}:commit`);
+  } else if (command === "graphics") {
+    // The listing's feature graphic and phone screenshots, from store/, in
+    // the listing's default language. Replaces whatever is there.
+    const { readdirSync } = await import("node:fs");
+    const store = new URL("../store/", import.meta.url).pathname;
+    const { defaultLanguage: lang } = await call("GET", `${API}/edits/${edit.id}/details`);
+    const put = async (type, filePath) =>
+      call("POST", `${UPLOAD}/edits/${edit.id}/listings/${lang}/${type}?uploadType=media`, { body: readFileSync(filePath), type: "image/png" });
+    await call("DELETE", `${API}/edits/${edit.id}/listings/${lang}/featureGraphic`);
+    await put("featureGraphic", `${store}feature-graphic.png`);
+    await call("DELETE", `${API}/edits/${edit.id}/listings/${lang}/phoneScreenshots`);
+    const shots = readdirSync(`${store}phone`).filter((f) => f.endsWith(".png")).sort();
+    for (const shot of shots) await put("phoneScreenshots", `${store}phone/${shot}`);
+    await call("POST", `${API}/edits/${edit.id}:commit`);
+    console.log(`${lang}: feature graphic and ${shots.length} phone screenshots`);
   } else if (command === "upload") {
     const bundle = await call("POST", `${UPLOAD}/edits/${edit.id}/bundles?uploadType=media`, {
       body: readFileSync(file),
@@ -94,7 +110,7 @@ try {
     await call("POST", `${API}/edits/${edit.id}:commit`);
     console.log(`released versionCode ${bundle.versionCode} to ${track}`);
   } else {
-    throw new Error("usage: play.mjs status | listing | icon <file.png> | upload <file.aab> [track] [notes]");
+    throw new Error("usage: play.mjs status | listing | icon <file.png> | graphics | upload <file.aab> [track] [notes]");
   }
 } finally {
   if (command === "status" || command === "listing") await call("DELETE", `${API}/edits/${edit.id}`).catch(() => {});

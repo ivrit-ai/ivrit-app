@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <!-- One Play screenshot, 1080×1920: a caption over the app in a phone.
+         compose.mjs fills it in from the query string. -->
+    <link rel="stylesheet" href="../web/fonts/fonts.css" />
+    <style>
+      :root {
+        --paper: #f7f6f3;
+        --ink: #111110;
+        --muted: #6f6d67;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; }
+      body {
+        background: radial-gradient(120% 70% at 50% 0%, #ffffff 0%, var(--paper) 55%, #ecebe6 100%);
+        font-family: "IBM Plex Sans Hebrew", system-ui, sans-serif;
+        color: var(--ink);
+        position: relative;
+      }
+      .caption { position: absolute; top: 112px; inset-inline: 80px; text-align: center; }
+      h1 { margin: 0; font: 700 76px/1.15 "Frank Ruhl Libre", serif; letter-spacing: -0.01em; text-wrap: balance; }
+      p { margin: 22px 0 0; font-size: 36px; line-height: 1.4; color: var(--muted); }
+      .phone {
+        position: absolute; top: 410px; left: 50%; translate: -50% 0;
+        width: 736px; height: 1436px; padding: 18px;
+        border-radius: 86px; background: #16161a;
+        box-shadow: 0 60px 120px -40px rgba(17, 17, 16, 0.45), inset 0 0 0 3px #2c2c31;
+      }
+      .screen { width: 700px; height: 1400px; border-radius: 70px; overflow: hidden; position: relative; background: #000; }
+      .screen > img { display: block; width: 700px; height: 1400px; }
+
+      /* The lock screen, for the notification shot: what Android shows,
+         with the app's real notification layout (see Notifications.java). */
+      .lock {
+        width: 100%; height: 100%; padding: 120px 34px 0; color: #fff;
+        background: linear-gradient(160deg, #2c3e50 0%, #3b5168 45%, #1f2b38 100%);
+      }
+      .clock { text-align: center; font: 300 150px/1 "IBM Plex Sans Hebrew", sans-serif; letter-spacing: -0.02em; direction: ltr; }
+      .date { text-align: center; font-size: 30px; opacity: 0.85; margin-top: 18px; }
+      .notes { margin-top: 90px; display: grid; gap: 14px; }
+      .note {
+        background: rgba(250, 250, 252, 0.96); color: #1b1b1f; border-radius: 34px; padding: 26px 28px 28px;
+        display: grid; grid-template-columns: 1fr 76px; gap: 0 20px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+      }
+      .note.dim { opacity: 0.9; }
+      .note-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; font-size: 22px; color: #55555c; margin-bottom: 10px; }
+      .note-head img { width: 30px; height: 30px; border-radius: 50%; background: #111; padding: 4px; }
+      .note-title { font-weight: 600; font-size: 28px; }
+      .note-body { font-size: 27px; line-height: 1.42; color: #303036; margin-top: 4px; }
+      .note-pic { width: 76px; height: 76px; border-radius: 50%; object-fit: cover; grid-row: 2 / span 2; grid-column: 2; }
+      .note-text { grid-row: 2; grid-column: 1; }
+    </style>
+  </head>
+  <body>
+    <div class="caption"><h1 id="title"></h1><p id="sub"></p></div>
+    <div class="phone"><div class="screen" id="screen"></div></div>
+    <script>
+      const q = new URLSearchParams(location.search);
+      document.getElementById("title").textContent = q.get("title");
+      document.getElementById("sub").textContent = q.get("sub");
+      const screen = document.getElementById("screen");
+      if (q.get("shot") === "notification") {
+        screen.innerHTML = `
+          <div class="lock">
+            <div class="clock">9:41</div>
+            <div class="date">יום שלישי, 7 באוקטובר</div>
+            <div class="notes">
+              <div class="note">
+                <div class="note-head"><img src="badge-white.png" alt="" /><span>ivrit.ai · 0:42 · עכשיו</span></div>
+                <div class="note-text">
+                  <div class="note-title">אליעזר</div>
+                  <div class="note-body">היי, רק רציתי לעדכן שהגעתי. הפגישה הייתה מצוינת, הם אהבו את ההצעה ורוצים להתקדם כבר בשבוע הבא.</div>
+                </div>
+                <img class="note-pic" src="eliezer.png" alt="" />
+              </div>
+              <div class="note dim">
+                <div class="note-head"><img src="badge-white.png" alt="" /><span>ivrit.ai · 0:16 · לפני 15 דק׳</span></div>
+                <div class="note-text">
+                  <div class="note-title">אליעזר</div>
+                  <div class="note-body">אני בדרך, אגיע בעוד עשר דקות בערך. תשמרו לי מקום ליד החלון.</div>
+                </div>
+                <img class="note-pic" src="eliezer.png" alt="" />
+              </div>
+            </div>
+          </div>`;
+      } else {
+        const img = new Image();
+        img.src = `raw/${q.get("shot")}.png`;
+        screen.append(img);
+      }
+    </script>
+  </body>
+</html>

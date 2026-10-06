@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Google Play's feature graphic, 1024×500. Play may crop the edges and
+         lay a play button over the middle, so nothing essential is near them. -->
+    <link rel="stylesheet" href="../web/fonts/fonts.css" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; width: 1024px; height: 500px; overflow: hidden; }
+      body {
+        position: relative;
+        background: radial-gradient(90% 120% at 85% 20%, #ffffff 0%, #f7f6f3 55%, #ebe9e3 100%);
+        font-family: "IBM Plex Sans Hebrew", system-ui, sans-serif;
+        color: #111110;
+      }
+      .copy { position: absolute; top: 78px; right: 72px; width: 470px; }
+      .brand { display: flex; align-items: center; gap: 18px; }
+      .brand img { width: 92px; height: 92px; border-radius: 22px; box-shadow: 0 10px 26px -10px rgba(17, 17, 16, 0.4); }
+      .brand span { font: 600 40px/1 "IBM Plex Sans Hebrew", sans-serif; direction: ltr; }
+      h1 { margin: 34px 0 0; font: 700 54px/1.12 "Frank Ruhl Libre", serif; letter-spacing: -0.01em; }
+      p { margin: 18px 0 0; font-size: 22px; line-height: 1.45; color: #5f5d57; }
+      .cards { position: absolute; left: 64px; top: 92px; width: 400px; }
+      .card {
+        position: absolute; inset-inline: 0; display: grid; grid-template-columns: 1fr 58px; gap: 0 14px;
+        background: #fff; border: 1px solid #e6e4de; border-radius: 22px; padding: 18px 20px 20px;
+        box-shadow: 0 22px 44px -22px rgba(17, 17, 16, 0.35); direction: rtl;
+      }
+      .card.back { top: 150px; rotate: 3deg; opacity: 0.92; }
+      .card.front { top: 0; rotate: -2.5deg; z-index: 1; }
+      .head { grid-column: 1 / -1; font-size: 14px; color: #6f6d67; margin-bottom: 6px; }
+      .title { font-weight: 600; font-size: 19px; }
+      .body { font-size: 17px; line-height: 1.45; color: #34332f; margin-top: 2px; }
+      .pic { grid-row: 2; grid-column: 2; width: 58px; height: 58px; border-radius: 50%; }
+    </style>
+  </head>
+  <body>
+    <div class="copy">
+      <div class="brand"><img src="../web/icons/icon-512.png" alt="" /><span>ivrit.ai</span></div>
+      <h1>התמלולים שלכם,<br />ברגע שהם מוכנים.</h1>
+      <p>ההודעות הקוליות שלכם מוואטסאפ, כטקסט, כהתראה בטלפון.</p>
+    </div>
+    <div class="cards">
+      <div class="card front">
+        <div class="head">ivrit.ai · 0:42 · עכשיו</div>
+        <div>
+          <div class="title">אליעזר</div>
+          <div class="body">היי, רק רציתי לעדכן שהגעתי. הפגישה הייתה מצוינת, הם אהבו את ההצעה ורוצים להתקדם.</div>
+        </div>
+        <img class="pic" src="eliezer.png" alt="" />
+      </div>
+      <div class="card back">
+        <div class="head">ivrit.ai · 1:08 · לפני שעה</div>
+        <div>
+          <div class="title">אליעזר</div>
+          <div class="body">תזכורת לעצמי: לקנות חלב, לחם ועגבניות, ולהתקשר לשרברב בקשר לברז.</div>
+        </div>
+        <img class="pic" src="eliezer.png" alt="" />
+      </div>
+    </div>
+  </body>
+</html>

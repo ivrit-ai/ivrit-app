@@ -1,0 +1,12 @@
+{
+  "name": "ivrit-app-store",
+  "private": true,
+  "description": "Google Play listing graphics: the app's screens, captioned, and the feature graphic.",
+  "type": "module",
+  "scripts": {
+    "build": "node capture.mjs && node compose.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.52.0"
+  }
+}
