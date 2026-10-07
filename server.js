@@ -49,7 +49,19 @@ app.get("/delete-account", (req, res) => res.sendFile(path.join(WEB_DIR, "delete
 // file cannot be recovered; landing in the app beats a 404.
 app.post("/share-target", (req, res) => res.redirect(303, "/"));
 
-app.use(express.static(WEB_DIR, { etag: true, index: ["index.html"], maxAge: "1h" }));
+// The Android app runs this site, so a fix must reach it on the next open:
+// code and pages are revalidated every time (cheap, by ETag); only fonts and
+// icons, which never change in place, are cached for a while.
+app.use(
+  express.static(WEB_DIR, {
+    etag: true,
+    index: ["index.html"],
+    setHeaders(res, file) {
+      const lasting = /\.(woff2|png|svg)$/.test(file);
+      res.setHeader("Cache-Control", lasting ? "public, max-age=86400" : "no-cache");
+    },
+  })
+);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(JSON.stringify({ msg: "listening", port: PORT, ...CONFIG }));
