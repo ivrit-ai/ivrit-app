@@ -13,14 +13,31 @@ const communicator = createCommunicator({ base: config.communicator, client: "ap
 // null in a browser. Inside the app, notifications come through Firebase and
 // native code instead of web push, sign-in goes through the browser, and the
 // app knows its own notification settings.
+//
+// The page is loaded from app.ivrit.ai, so it gets only the bridge Capacitor
+// injects (no @capacitor/core, and so no registerPlugin): plugin calls go
+// through its two primitives, nativePromise and addListener.
 const capacitor = self.Capacitor;
-const shell = capacitor?.isNativePlatform?.()
-  ? {
-      ivrit: capacitor.registerPlugin("IvritNative"),
-      app: capacitor.registerPlugin("App"),
-      browser: capacitor.registerPlugin("Browser"),
+
+function nativePlugin(name) {
+  return new Proxy(
+    {},
+    {
+      get: (_, method) =>
+        method === "addListener"
+          ? (event, callback) => Promise.resolve(capacitor.addListener(name, event, callback))
+          : (options = {}) => capacitor.nativePromise(name, method, options),
     }
+  );
+}
+
+const shell = capacitor?.isNativePlatform?.()
+  ? { ivrit: nativePlugin("IvritNative"), app: nativePlugin("App"), browser: nativePlugin("Browser") }
   : null;
+
+// A native call that never answers must not hold up the page.
+const withTimeout = (promise, ms, fallback) =>
+  Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(fallback), ms))]);
 // Where Communicator sends the browser back to once signed in; the app's
 // manifest claims it.
 const HANDOFF_URL = "ai.ivrit.app://auth";
@@ -172,7 +189,11 @@ const notify = shell
       // messages wait silently in the list.
       popupOff: () => nativeStatus?.permission === "granted" && nativeStatus.popup === false,
       async refresh() {
-        nativeStatus = await shell.ivrit.notificationStatus().catch(() => ({ available: false }));
+        nativeStatus = await withTimeout(
+          shell.ivrit.notificationStatus().catch(() => ({ available: false })),
+          3000,
+          { available: false }
+        );
       },
       async request() {
         nativeStatus = await shell.ivrit.requestPermission();
@@ -1371,6 +1392,7 @@ async function claimStore(sub) {
 }
 
 function showSharedSignedOut() {
+  document.body.dataset.started = "1";
   history.replaceState(null, "", location.pathname);
   $("view-transcribe").hidden = false;
   $("transcribe-back").hidden = false;
@@ -1446,12 +1468,14 @@ async function start() {
     if (err instanceof ApiError && err.status === 401) {
       if (location.hash === "#shared") return showSharedSignedOut();
       $("landing").hidden = false;
+      document.body.dataset.started = "1";
       return;
     }
     // Offline with a session we cannot check: show what is on the device.
     const owner = await store.getMeta("owner").catch(() => null);
     if (!owner) {
       $("landing").hidden = false;
+      document.body.dataset.started = "1";
       return;
     }
     state.me = { sub: owner, kind: "unknown", offline: true };
@@ -1466,6 +1490,7 @@ async function start() {
   navigator.storage?.persist?.().catch(() => {});
 
   document.body.classList.add("app");
+  document.body.dataset.started = "1";
   $("landing").hidden = true;
   $("tabs").hidden = false;
 

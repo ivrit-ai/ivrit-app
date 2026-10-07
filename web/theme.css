@@ -80,3 +80,17 @@
 #transcribe-back {
   margin-bottom: 12px;
 }
+
+/* Shown by index.html when the app failed to start. */
+.startup-failed {
+  margin: 24px 0;
+  text-align: center;
+}
+.startup-failed pre {
+  margin-top: 24px;
+  text-align: start;
+  direction: ltr;
+  white-space: pre-wrap;
+  font-size: 12px;
+  color: var(--muted);
+}

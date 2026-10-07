@@ -238,6 +238,31 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" hidden><span id="toast-text"></span><button id="toast-action" type="button" hidden></button></div>
+    <!-- If the app fails to start (a script error, a call that never returns),
+         say so and offer a retry, rather than leave an empty page. -->
+    <script>
+      (function () {
+        var errors = [];
+        addEventListener("error", function (e) { errors.push(e.message + (e.filename ? " @ " + e.filename + ":" + e.lineno : "")); });
+        addEventListener("unhandledrejection", function (e) { errors.push("rejected: " + (e.reason && e.reason.message || e.reason)); });
+        setTimeout(function () {
+          if (document.body.dataset.started) return;
+          var he = document.documentElement.lang === "he" || /^(he|iw)/i.test(navigator.language);
+          var box = document.createElement("div");
+          box.className = "startup-failed";
+          box.innerHTML = "<h2></h2><p></p><button class='btn primary' type='button'></button><pre></pre>";
+          box.querySelector("h2").textContent = he ? "האפליקציה לא נטענה" : "The app didn't load";
+          box.querySelector("p").textContent = he ? "בדקו את החיבור ונסו שוב. אם זה חוזר, שלחו לנו צילום מסך של המסך הזה: support@ivrit.ai" : "Check the connection and try again. If it keeps happening, send a screenshot of this screen to support@ivrit.ai";
+          box.querySelector("button").textContent = he ? "ניסיון נוסף" : "Try again";
+          box.querySelector("button").onclick = function () { location.reload(); };
+          box.querySelector("pre").textContent = [
+            "shell: " + (window.Capacitor ? "native" : "web"),
+            "ua: " + navigator.userAgent,
+          ].concat(errors).join("\n");
+          document.getElementById("main").prepend(box);
+        }, 10000);
+      })();
+    </script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

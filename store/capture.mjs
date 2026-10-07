@@ -114,7 +114,17 @@ function fakeShell({ popup, files, owner, messages }) {
     addListener: on("ivrit"),
   };
   const plugins = { IvritNative: ivrit, App: { addListener: on("app") }, Browser: { open: async () => {}, close: async () => {} } };
-  window.Capacitor = { isNativePlatform: () => true, registerPlugin: (name) => plugins[name] };
+  // The shape of the bridge Capacitor injects into a remote page: no
+  // registerPlugin, only these primitives.
+  window.Capacitor = {
+    isNativePlatform: () => true,
+    nativePromise: (plugin, method, options) =>
+      plugins[plugin]?.[method] ? Promise.resolve(plugins[plugin][method](options)) : Promise.reject(new Error(`${plugin}.${method} not implemented`)),
+    addListener: (plugin, event, callback) => {
+      plugins[plugin].addListener(event, callback);
+      return { remove() {} };
+    },
+  };
   // The device's own copy of earlier messages, as if they had arrived over days.
   if (messages) {
     addEventListener("DOMContentLoaded", async () => {
