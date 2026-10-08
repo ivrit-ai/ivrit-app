@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { createSessions } from "./session.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(__dirname, "web");
@@ -23,6 +24,14 @@ const CONFIG = {
 };
 const CONFIG_JS = `self.IVRIT_CONFIG = ${JSON.stringify(CONFIG)};\n`;
 
+// The app's sign-in sessions (see session.js). Their issuer is this site.
+const sessions = createSessions({
+  issuer: (process.env.APP_SESSION_ISSUER || `https://${APP.host}`).replace(/\/+$/, ""),
+  googleClientId: CONFIG.googleClientId,
+  privateKeyPem: process.env.APP_SESSION_KEY,
+  googleJwksUrl: process.env.GOOGLE_JWKS_URL,
+});
+
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -43,6 +52,33 @@ app.get("/config.js", (req, res) => {
 app.get("/.well-known/assetlinks.json", (req, res) => {
   if (!existsSync(ASSET_LINKS)) return res.status(404).json([]);
   res.type("application/json").sendFile(ASSET_LINKS);
+});
+
+// Signing in: a Google ID token in, a session out; and renewing a session.
+app.get("/.well-known/jwks.json", (req, res) => {
+  if (!sessions) return res.status(404).json({ keys: [] });
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.json(sessions.jwks);
+});
+
+app.post("/auth/google", express.json({ limit: "8kb" }), async (req, res) => {
+  if (!sessions) return res.status(503).json({ error: "sign_in_unavailable" });
+  try {
+    res.json(await sessions.fromGoogle(String(req.body?.idToken ?? "")));
+  } catch (err) {
+    console.warn(JSON.stringify({ msg: "google_sign_in_rejected", err: String(err.code ?? err.message) }));
+    res.status(401).json({ error: "invalid_token" });
+  }
+});
+
+app.post("/auth/renew", async (req, res) => {
+  if (!sessions) return res.status(503).json({ error: "sign_in_unavailable" });
+  const header = req.get("authorization") ?? "";
+  try {
+    res.json(await sessions.renew(header.startsWith("Bearer ") ? header.slice(7) : ""));
+  } catch {
+    res.status(401).json({ error: "invalid_session" });
+  }
 });
 
 app.get("/privacy", (req, res) => res.sendFile(path.join(WEB_DIR, "privacy.html")));

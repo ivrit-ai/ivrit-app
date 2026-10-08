@@ -111,3 +111,9 @@
   object-fit: contain;
   padding: 4px;
 }
+
+/* After the first draw, redrawn cards appear in place rather than sliding in
+   again (see renderInbox). */
+.feed.settled .msg {
+  animation: none;
+}

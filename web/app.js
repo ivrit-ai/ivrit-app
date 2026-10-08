@@ -7,15 +7,16 @@ const store = self.NotifierStore;
 // its clients, calling its API from this origin (see client/communicator.js).
 // Its devices are registered as "app" so Communicator can tell them apart.
 // Inside the installed app, the account is the Google account chosen on the
-// phone (see googleIdToken): every call carries Google's token, and no cookie
-// of Communicator's is used. In a browser, Communicator's own sign-in stands.
+// phone, held as the app's own session (see appToken): every call carries it,
+// and no cookie of Communicator's is used. In a browser, Communicator's own
+// sign-in stands.
 const config = self.IVRIT_CONFIG;
 const inShell = Boolean(self.Capacitor?.isNativePlatform?.());
 const communicator = createCommunicator({
   base: config.communicator,
   client: "app",
   store,
-  token: inShell ? () => googleIdToken(false).catch(() => null) : null,
+  token: inShell ? () => appToken() : null,
 });
 
 // The native shell (Capacitor) when this page runs inside the installed app,
@@ -558,11 +559,33 @@ function renderMessage(m, index) {
   return node;
 }
 
+// What the inbox last drew. Loading redraws it several times (the phone's copy,
+// then the sources, the server's messages, Eliezer's jobs); an unchanged inbox
+// is left alone, so it does not flicker, and cards slide in only the first time.
+let drawnInbox = null;
+
+function inboxSignature(list) {
+  return JSON.stringify([
+    locale(),
+    state.filter,
+    state.query,
+    [...state.expanded],
+    state.catalog.sources.map((s) => [s.id, s.icon, s.name, s.name_he]),
+    list.map((m) => [m.id, m.read, m.kind, m.title, m.subtitle, m.body, m.partial, m.source_id]),
+  ]);
+}
+
 function renderInbox() {
   renderChips();
   const feed = $("feed");
   const list = visibleMessages();
   $("mark-all").hidden = !state.messages.some((m) => !m.read);
+  const signature = inboxSignature(list);
+  // Relative times ("3 min ago") still move on, so a redraw is due at least
+  // once a minute even when nothing else changed.
+  if (signature === drawnInbox?.signature && Date.now() - drawnInbox.at < 60_000) return;
+  if (drawnInbox) feed.classList.add("settled");
+  drawnInbox = { signature, at: Date.now() };
 
   if (!state.messages.length) {
     feed.replaceChildren(
@@ -1114,21 +1137,67 @@ const eliezerReady = () => Boolean(shell && config.eliezer && config.googleClien
 const fitsEliezer = (file) =>
   eliezerReady() && file.durationMs > 0 && file.durationMs <= ELIEZER_MAX_SECONDS * 1000 && file.size <= ELIEZER_MAX_BYTES;
 
-let googleToken = null;
+// Signing in is Google's, once: the Google ID token from the phone's account
+// sheet is exchanged with this site's server for the app's own session (see
+// session.js there), which names the same Google account and lasts months.
+// It is renewed at most once a day while the app is used, so an active user
+// stays signed in, as in Gmail. Eliezer and Communicator accept it.
+const SESSION_KEY = "app_session";
 
-// A Google ID token lasts an hour; one is reused until a minute before that.
-async function googleIdToken(interactive) {
-  if (googleToken && googleToken.exp - 60_000 > Date.now()) return googleToken.idToken;
-  const { idToken } = await shell.ivrit.googleIdToken({ clientId: config.googleClientId, interactive });
-  const claims = JSON.parse(atob(idToken.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
-  googleToken = { idToken, exp: claims.exp * 1000 };
-  return idToken;
+function readSession() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_KEY));
+  } catch {
+    return null;
+  }
 }
 
-async function eliezer(path, { interactive = false } = {}) {
-  const token = await googleIdToken(interactive);
+function writeSession(session) {
+  try {
+    if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    else localStorage.removeItem(SESSION_KEY);
+  } catch {}
+}
+
+let renewing = null;
+
+async function appToken() {
+  const session = readSession();
+  if (!session?.token || session.expires_at < Date.now() + 60_000) return null;
+  if (Date.now() - (session.renewed_at ?? 0) > DAY_MS && !renewing) {
+    renewing = fetch("/auth/renew", { method: "POST", headers: { authorization: `Bearer ${session.token}` } })
+      .then(async (res) => {
+        if (res.ok) writeSession({ ...(await res.json()), renewed_at: Date.now() });
+        else if (res.status === 401) writeSession(null);
+      })
+      .catch(() => {})
+      .finally(() => (renewing = null));
+  }
+  return session.token;
+}
+
+async function signInWithGoogle() {
+  let idToken;
+  try {
+    ({ idToken } = await shell.ivrit.googleIdToken({ clientId: config.googleClientId, interactive: true }));
+  } catch (err) {
+    if (err?.code !== "cancelled") toast(t("googleFailed"));
+    return;
+  }
+  const res = await fetch("/auth/google", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ idToken }),
+  }).catch(() => null);
+  if (!res?.ok) return toast(t(res ? "googleFailed" : "offline"));
+  writeSession({ ...(await res.json()), renewed_at: Date.now() });
+  location.replace("/");
+}
+
+async function eliezer(path) {
+  const token = await appToken();
+  if (!token) throw new ApiError(401, { error: "signed_out" });
   const res = await fetch(`${config.eliezer}${path}`, { headers: { authorization: `Bearer ${token}` } });
-  if (res.status === 401) googleToken = null;
   if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => ({})));
   return res.json();
 }
@@ -1194,11 +1263,9 @@ async function failUpload(uploadId, error) {
 // transcript and notifies; the inbox shows it waiting meanwhile. A file handed
 // over before keeps its upload id, so sending it again is the same upload.
 async function send(file) {
-  let token;
-  try {
-    token = await googleIdToken(true);
-  } catch (err) {
-    if (err?.code !== "cancelled") toast(t("googleFailed"));
+  const token = await appToken();
+  if (!token) {
+    toast(t("googleFailed"));
     return false;
   }
   const uploadId = file.uploadId || crypto.randomUUID();
@@ -1647,18 +1714,6 @@ $("transcribe-back").addEventListener("click", () => {
   $("landing").hidden = false;
 });
 
-// In the app: Android's own "Sign in with Google" sheet. The token it yields is
-// the account, for Communicator and Eliezer alike.
-async function signInWithGoogle() {
-  try {
-    await googleIdToken(true);
-  } catch (err) {
-    if (err?.code !== "cancelled") toast(t("googleFailed"));
-    return;
-  }
-  location.replace("/");
-}
-
 function signInLink(node) {
   if (!shell) {
     node.href = communicator.loginUrl(`${location.origin}/`);
@@ -1675,8 +1730,8 @@ function signInLink(node) {
 // Signing out of the app forgets the Google account chosen on the phone; there
 // is no session of Communicator's to end.
 async function leaveApp() {
+  writeSession(null);
   await shell.ivrit.forgetGoogle().catch(() => {});
-  googleToken = null;
   location.replace("/");
 }
 
@@ -1701,8 +1756,8 @@ async function start() {
     // A Google account is the only way in: no account-less use in the app.
     $("anon").hidden = true;
     document.querySelector('[data-i18n="anonCaveat"]').hidden = true;
-    const signedIn = await googleIdToken(false).then(() => true, (err) => err?.code);
-    if (signedIn === "no_account" || (signedIn !== true && !(await store.getMeta("owner").catch(() => null)))) {
+    // Signed in is having a session: no call to Google, no account sheet.
+    if (!(await appToken())) {
       if (location.hash === "#shared") return showSharedSignedOut();
       $("landing").hidden = false;
       document.body.dataset.started = "1";
@@ -1713,6 +1768,8 @@ async function start() {
     state.me = await api("/api/me");
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
+      // A session no longer accepted (say, a new signing key): sign in again.
+      if (shell) writeSession(null);
       if (location.hash === "#shared") return showSharedSignedOut();
       $("landing").hidden = false;
       document.body.dataset.started = "1";

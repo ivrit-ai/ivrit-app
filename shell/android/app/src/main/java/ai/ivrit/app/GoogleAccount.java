@@ -46,12 +46,23 @@ final class GoogleAccount {
             .setAutoSelectEnabled(true)
             .build();
         request(activity, new GetCredentialRequest.Builder().addCredentialOption(silent).build(), result, error -> {
-            if (error instanceof NoCredentialException && interactive) {
+            if (!(error instanceof NoCredentialException) || !interactive) return false;
+            // The account sheet, for any Google account on the phone. Signing in
+            // here is what marks the account as this app's, so the silent request
+            // above finds it on the next start (the "Sign in with Google" button
+            // flow may not).
+            GetGoogleIdOption choose = new GetGoogleIdOption.Builder()
+                .setServerClientId(clientId)
+                .setFilterByAuthorizedAccounts(false)
+                .build();
+            request(activity, new GetCredentialRequest.Builder().addCredentialOption(choose).build(), result, again -> {
+                if (!(again instanceof NoCredentialException)) return false;
+                // No Google account on the phone yet: the button flow can add one.
                 GetSignInWithGoogleOption pick = new GetSignInWithGoogleOption.Builder(clientId).build();
                 request(activity, new GetCredentialRequest.Builder().addCredentialOption(pick).build(), result, null);
                 return true;
-            }
-            return false;
+            });
+            return true;
         });
     }
 
