@@ -149,7 +149,7 @@ function messageAvatar(message) {
   if (isAppMessage(message)) {
     // WhatsApp's official glyph, as issued: on its own, not in the avatar's box.
     return message.source_id === WHATSAPP_SOURCE
-      ? el("img", { class: "avatar glyph", src: "/icons/whatsapp.svg", alt: "WhatsApp", loading: "lazy" })
+      ? el("img", { class: "avatar glyph", src: "/icons/whatsapp-glyph-2026.svg", alt: "WhatsApp", loading: "lazy" })
       : avatar({ icon: "/icons/icon-192.png", name: "ivrit.ai" });
   }
   const source = sourceOf(message);

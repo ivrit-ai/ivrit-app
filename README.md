@@ -97,6 +97,7 @@ turbo model. It runs the whisper-gpu engine, built into `web/lab/whisper/` by
 `scripts/build-lab.sh`. Every result is posted to `/lab/report` and logged as
 a `lab_report` line.
 
-`web/icons/whatsapp.svg` is WhatsApp's official glyph (Digital_Glyph_Green_RGB_2026,
+`web/icons/whatsapp-glyph-2026.svg` is WhatsApp's official glyph (Digital_Glyph_Green_RGB_2026,
 from the logo pack at meta.com/brand/resources/whatsapp/whatsapp-brand), used
 unmodified, as their terms require, to mark recordings shared from WhatsApp.
+Images are cached as never changing: replace one under a new name.

@@ -1,6 +1,6 @@
 importScripts("/config.js", "/client/store.js", "/client/push.js");
 
-const SHELL = "shell-v1";
+const SHELL = "shell-v2";
 const SHELL_FILES = [
   "/",
   "/app.js",
@@ -93,19 +93,24 @@ self.addEventListener("fetch", (event) => {
   // Caching the worker itself is how a bad deploy becomes permanent.
   if (url.pathname === "/sw.js" || url.pathname.startsWith("/.well-known/") || url.pathname.startsWith("/lab")) return;
 
+  // Fonts and images never change in place (a new one gets a new name): from
+  // the cache when there. Everything else - the page, its code and styles - from
+  // the network whenever there is one, so a fix reaches the app on the next
+  // open, not the one after; the stored copy is only for when offline.
+  const lasting = /\.(woff2|png|svg)$/.test(url.pathname);
   event.respondWith(
     (async () => {
       const cache = await caches.open(SHELL);
       const cached = await cache.match(event.request, { ignoreSearch: true });
-      // Stale-while-revalidate: the shell paints instantly offline, and the
-      // next open has the new build.
-      const fresh = fetch(event.request)
-        .then((res) => {
-          if (res.ok) cache.put(event.request, res.clone());
-          return res;
-        })
-        .catch(() => cached);
-      return cached ?? fresh;
+      if (lasting && cached) return cached;
+      try {
+        const res = await fetch(event.request);
+        if (res.ok) cache.put(event.request, res.clone());
+        return res;
+      } catch (err) {
+        if (cached) return cached;
+        throw err;
+      }
     })()
   );
 });
