@@ -48,7 +48,9 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const names = await caches.keys();
-      await Promise.all(names.filter((n) => n !== SHELL && n !== SHARE_CACHE).map((n) => caches.delete(n)));
+      // The lab's model weights (whisper-gpu-weights) are 1.6 GB: never drop them here.
+      const keep = new Set([SHELL, SHARE_CACHE, "whisper-gpu-weights"]);
+      await Promise.all(names.filter((n) => !keep.has(n)).map((n) => caches.delete(n)));
       await self.clients.claim();
     })()
   );
@@ -89,7 +91,7 @@ self.addEventListener("fetch", (event) => {
   }
   if (event.request.method !== "GET") return;
   // Caching the worker itself is how a bad deploy becomes permanent.
-  if (url.pathname === "/sw.js" || url.pathname.startsWith("/.well-known/")) return;
+  if (url.pathname === "/sw.js" || url.pathname.startsWith("/.well-known/") || url.pathname.startsWith("/lab")) return;
 
   event.respondWith(
     (async () => {

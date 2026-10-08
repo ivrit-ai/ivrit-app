@@ -42,6 +42,17 @@ app.get("/.well-known/assetlinks.json", (req, res) => {
 });
 
 app.get("/privacy", (req, res) => res.sendFile(path.join(WEB_DIR, "privacy.html")));
+
+// The on-device transcription lab (web/lab/): its probe and benchmark pages
+// post their results here, and they land in the log, one JSON line each.
+app.post("/lab/report", express.text({ type: "*/*", limit: "2mb" }), (req, res) => {
+  let body = req.body;
+  try {
+    body = JSON.parse(req.body);
+  } catch {}
+  console.log(JSON.stringify({ msg: "lab_report", kind: String(req.query.kind ?? "").slice(0, 20), ua: req.get("user-agent"), body }));
+  res.status(204).end();
+});
 // Google Play's account deletion page: how to delete, with or without the app.
 app.get("/delete-account", (req, res) => res.sendFile(path.join(WEB_DIR, "delete-account.html")));
 

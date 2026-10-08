@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>מעבדה · ivrit.ai</title>
+    <link rel="stylesheet" href="/fonts/fonts.css" />
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/theme.css" />
+    <!-- On-device transcription test: is WebGPU here (in Chrome, and in the
+         app's WebView), and how fast does ivrit.ai's model run on it? Every
+         result is also sent to /lab/report, so it can be read from the
+         server's log without copying anything off the phone. -->
+    <style>
+      .lab { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+      .lab h1 { font: 700 30px/1.2 var(--font-display); margin: 0 0 4px; }
+      .lab h2 { font: 700 20px/1.3 var(--font-display); margin: 28px 0 8px; }
+      .lab p { color: var(--ink-2); }
+      .facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 12px 0; font-size: 15px; }
+      .facts dt { color: var(--muted); }
+      .facts dd { margin: 0; direction: ltr; text-align: left; overflow-wrap: anywhere; }
+      .verdict { padding: 14px 16px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); font-weight: 600; }
+      .verdict.ok { border-color: var(--ok); }
+      .verdict.no { border-color: var(--danger); }
+      .tests { display: grid; gap: 12px; margin-top: 8px; }
+      .tests .btn { justify-content: center; white-space: normal; text-align: center; min-width: 0; }
+      .note { font-size: 14px; color: var(--muted); }
+      pre { direction: ltr; text-align: left; white-space: pre-wrap; font-size: 12px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main class="lab">
+      <p><a href="/">→ חזרה לאפליקציה</a></p>
+      <h1>מעבדה: תמלול במכשיר</h1>
+      <p>בודק אם הטלפון יכול להריץ את מודל התמלול של ivrit.ai בעצמו, ובאיזו מהירות. התוצאות נשלחות אלינו אוטומטית.</p>
+
+      <h2>בדיקת WebGPU</h2>
+      <div id="verdict" class="verdict">בודק…</div>
+      <dl id="facts" class="facts"></dl>
+
+      <h2>בדיקות</h2>
+      <div class="tests">
+        <a id="bench" class="btn" href="#">1. מדידת מהירות (בלי הורדה, כמה דקות)</a>
+        <a id="run" class="btn" href="#">2. תמלול הקלטה לדוגמה (הורדה חד-פעמית של 1.6GB)</a>
+      </div>
+      <p class="note">בדיקה 2 מורידה את המודל המלא, עדיף ב-Wi-Fi. הוא נשמר במכשיר, כך שבפעם הבאה הבדיקה מתחילה מיד. השאירו את המסך דלוק עד שהבדיקה מסתיימת.</p>
+      <pre id="raw"></pre>
+    </main>
+    <script type="module">
+      // The engine and its weights: whisper-gpu, built into ./whisper/, with
+      // ivrit.ai's turbo model packed for it on Hugging Face.
+      const MODEL = "https://huggingface.co/benderrodriguez/whisper-large-v3-turbo-webgpu/resolve/main";
+      const report = (kind) => `${location.origin}/lab/report?kind=${kind}`;
+
+      const where = window.Capacitor ? "app" : / wv\)/.test(navigator.userAgent) ? "webview" : "browser";
+      const facts = { where, ua: navigator.userAgent, cores: navigator.hardwareConcurrency, memoryGB: navigator.deviceMemory ?? null };
+      const show = (pairs) => {
+        const dl = document.getElementById("facts");
+        for (const [k, v] of pairs) dl.append(Object.assign(document.createElement("dt"), { textContent: k }), Object.assign(document.createElement("dd"), { textContent: String(v) }));
+      };
+
+      async function probe() {
+        const out = { ...facts, webgpu: false };
+        try {
+          const estimate = await navigator.storage?.estimate?.();
+          if (estimate) out.storage = { quotaGB: +(estimate.quota / 2 ** 30).toFixed(1), usedMB: +(estimate.usage / 2 ** 20).toFixed(0) };
+          out.persisted = await navigator.storage?.persist?.().catch(() => null);
+        } catch {}
+        if (!navigator.gpu) return { ...out, reason: "no navigator.gpu" };
+        const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" }).catch((e) => (out.reason = String(e), null));
+        if (!adapter) return { ...out, reason: out.reason ?? "no adapter" };
+        const info = adapter.info ?? {};
+        out.adapter = { vendor: info.vendor, architecture: info.architecture, device: info.device, description: info.description, fallback: adapter.isFallbackAdapter ?? info.isFallbackAdapter ?? null };
+        out.features = [...adapter.features].sort();
+        const l = adapter.limits;
+        out.limits = {
+          maxBufferMiB: Math.round(l.maxBufferSize / 2 ** 20),
+          maxStorageBindingMiB: Math.round(l.maxStorageBufferBindingSize / 2 ** 20),
+          maxWorkgroupStorageKiB: l.maxComputeWorkgroupStorageSize / 1024,
+          maxInvocations: l.maxComputeInvocationsPerWorkgroup,
+        };
+        try {
+          const device = await adapter.requestDevice();
+          out.webgpu = true;
+          // A rough bandwidth figure: a streaming add over 64 MiB, repeated.
+          const n = 16 * 1024 * 1024;
+          const make = () => device.createBuffer({ size: n * 4, usage: GPUBufferUsage.STORAGE });
+          const [a, b, c] = [make(), make(), make()];
+          const module = device.createShaderModule({ code: `
+            @group(0) @binding(0) var<storage, read> a: array<f32>;
+            @group(0) @binding(1) var<storage, read> b: array<f32>;
+            @group(0) @binding(2) var<storage, read_write> c: array<f32>;
+            @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) id: vec3u) {
+              let i = id.x + id.y * 65535u * 256u;
+              if (i < arrayLength(&c)) { c[i] = a[i] + b[i]; }
+            }` });
+          const pipeline = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
+          const group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [a, b, c].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+          const groups = n / 256;
+          const pass = (reps) => {
+            const enc = device.createCommandEncoder();
+            const p = enc.beginComputePass();
+            p.setPipeline(pipeline);
+            p.setBindGroup(0, group);
+            for (let r = 0; r < reps; r++) p.dispatchWorkgroups(Math.min(groups, 65535), Math.ceil(groups / 65535));
+            p.end();
+            device.queue.submit([enc.finish()]);
+            return device.queue.onSubmittedWorkDone();
+          };
+          await pass(2);
+          const t0 = performance.now();
+          await pass(20);
+          const ms = performance.now() - t0;
+          out.bandwidthGBs = +((20 * 3 * n * 4) / (ms / 1000) / 1e9).toFixed(1);
+          device.destroy();
+        } catch (e) {
+          out.reason = `device: ${e}`;
+        }
+        return out;
+      }
+
+      const result = await probe();
+      const verdict = document.getElementById("verdict");
+      // A fallback adapter is WebGPU emulated on the CPU: present, but useless here.
+      const software = result.adapter?.fallback === true;
+      verdict.textContent = !result.webgpu
+        ? `WebGPU לא זמין כאן: ${result.reason}`
+        : software
+          ? "WebGPU זמין, אבל רק בתוכנה (בלי המעבד הגרפי), כך שהוא איטי מדי לתמלול."
+          : `WebGPU זמין (${where === "app" ? "באפליקציה" : where === "webview" ? "ב-WebView" : "בדפדפן"}).`;
+      verdict.classList.add(result.webgpu && !software ? "ok" : "no");
+      show([
+        ["סביבה", where],
+        ["מעבד גרפי", result.adapter ? [result.adapter.vendor, result.adapter.architecture, result.adapter.description].filter(Boolean).join(" ") || "?" : "—"],
+        ["רוחב פס", result.bandwidthGBs ? `${result.bandwidthGBs} GB/s` : "—"],
+        ["shader-f16", result.features?.includes("shader-f16") ? "yes" : "no"],
+        ["אחסון", result.storage ? `${result.storage.quotaGB} GB` : "?"],
+        ["ליבות / זיכרון", `${facts.cores} / ${facts.memoryGB ?? "?"} GB`],
+      ]);
+      document.getElementById("raw").textContent = JSON.stringify(result, null, 1);
+      fetch(report("probe"), { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify(result) }).catch(() => {});
+
+      document.getElementById("bench").href = `./whisper/bench.html?auto&post=${encodeURIComponent(report("bench"))}`;
+      document.getElementById("run").href =
+        `./whisper/run.html?model=${encodeURIComponent(MODEL)}&audio=${encodeURIComponent(`${MODEL}/sample_he_30s.wav`)}&beams=1&post=${encodeURIComponent(report("run"))}`;
+      for (const id of ["bench", "run"]) {
+        const a = document.getElementById(id);
+        if (!result.webgpu) a.setAttribute("aria-disabled", "true"), a.classList.add("quiet");
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>whisper-gpu</title>
+    <link rel="icon" href="data:," />
+    <script type="module" crossorigin src="./assets/main-ca3JRNou.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/tensor-CNhgAob0.js">
+    <link rel="modulepreload" crossorigin href="./assets/whisper-CyiP3rfG.js">
+    <link rel="stylesheet" crossorigin href="./assets/style-CVqFdTFz.css">
+  </head>
+  <body>
+    <header>
+      <h1>whisper-gpu</h1>
+      <p id="caps">checking WebGPU…</p>
+    </header>
+
+    <section id="setup">
+      <label for="modelUrl">Model base URL</label>
+      <input id="modelUrl" type="url" spellcheck="false" placeholder="https://…/ivrit-turbo-f16" />
+      <button id="load" type="button">Load model</button>
+      <progress id="loadBar" max="1" value="0" hidden></progress>
+      <p id="loadNote"></p>
+    </section>
+
+    <section id="run" hidden>
+      <div class="row">
+        <input id="file" type="file" accept="audio/*,video/*" />
+        <button id="sample" type="button">Sample clip</button>
+        <select id="lang">
+          <option value="he">Hebrew</option>
+          <option value="en">English</option>
+          <option value="">auto (model default)</option>
+        </select>
+        <select id="beams">
+          <option value="1">greedy</option>
+          <option value="5">beam 5</option>
+        </select>
+        <button id="go" type="button" disabled>Transcribe</button>
+      </div>
+      <p id="status"></p>
+      <ol id="segments"></ol>
+    </section>
+
+  </body>
+</html>

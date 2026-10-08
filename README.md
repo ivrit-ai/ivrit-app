@@ -87,3 +87,12 @@ Android app, `APP_HANDOFF_URLS=ai.ivrit.app://auth` and
 xhost app `ivritai/ivrit-app` (template "app"), deployed from this repo on
 GitHub. `COMMUNICATOR_URL` and `TRANSCRIBE_URL` default to the public
 addresses.
+
+## Lab
+
+`app.ivrit.ai/lab/` (linked from Settings → Diagnostics) tests transcription on
+the device itself: whether WebGPU is there (in Chrome, and in the app's
+WebView), a kernel benchmark, and a 30-second Hebrew sample through ivrit.ai's
+turbo model. It runs the whisper-gpu engine, built into `web/lab/whisper/` by
+`scripts/build-lab.sh`. Every result is posted to `/lab/report` and logged as
+a `lab_report` line.

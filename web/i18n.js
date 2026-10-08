@@ -276,6 +276,7 @@ const STRINGS = {
     signInFailed: "Signing in didn't complete. Try again.",
     sharedChooser: "Send to transcribe",
     sharedLedeApp: "To transcribe, send it on and pick transcribe.ivrit.ai (or Chrome) in the list that opens.",
+    labLink: "Lab: transcription on this device",
   },
 
   he: {
@@ -550,6 +551,7 @@ const STRINGS = {
     signInFailed: "ההתחברות לא הושלמה. נסו שוב.",
     sharedChooser: "שליחה לתמלול",
     sharedLedeApp: "כדי לתמלל, שלחו הלאה ובחרו ב-transcribe.ivrit.ai (או ב-Chrome) ברשימה שתיפתח.",
+    labLink: "מעבדה: תמלול במכשיר",
   },
 };
 

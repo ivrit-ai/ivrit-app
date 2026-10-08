@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>whisper-gpu kernel sweep</title>
+    <link rel="icon" href="data:," />
+    <script type="module" crossorigin src="./assets/bench-BT96aUyx.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/tensor-CNhgAob0.js">
+    <link rel="stylesheet" crossorigin href="./assets/style-CVqFdTFz.css">
+  </head>
+  <body>
+    <header>
+      <h1>kernel sweep</h1>
+      <p>
+        Times every matmul shape the model runs against each tile and lane
+        configuration. No weights are downloaded.
+      </p>
+    </header>
+
+    <section id="sweep">
+      <div class="row">
+        <button id="run" type="button">Run sweep</button>
+        <button id="copy" type="button">Copy results</button>
+      </div>
+      <p id="status"></p>
+      <pre id="log"></pre>
+    </section>
+
+  </body>
+</html>
