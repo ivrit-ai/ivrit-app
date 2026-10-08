@@ -52,6 +52,7 @@
         <div class="seg" id="lang-switch" role="group" aria-label="Language">
           <button type="button" data-locale="en">EN</button>
           <button type="button" data-locale="he">עב</button>
+          <button type="button" data-locale="yi" lang="yi">ייִ</button>
         </div>
         <nav id="tabs" class="tabs" hidden>
           <button type="button" data-view="inbox"><svg class="i"><use href="#i-inbox" /></svg><span data-i18n="tabInbox">Inbox</span><b id="unread-badge" class="count" hidden></b></button>
@@ -167,6 +168,7 @@
           <div class="seg wide" id="lang-setting" role="group">
             <button type="button" data-locale="en">English</button>
             <button type="button" data-locale="he">עברית</button>
+            <button type="button" data-locale="yi" lang="yi">ייִדיש</button>
           </div>
         </div>
 
@@ -187,6 +189,14 @@
         </div>
 
         <div class="panel">
+          <h3 data-i18n="transcribeSettingsTitle"></h3>
+          <p class="muted" data-i18n="transcribeSettingsBody"></p>
+          <div class="row">
+            <button id="transcribe-settings" class="btn" type="button" data-i18n="transcribeSettingsOpen"></button>
+            <button id="transcribe-stats" class="btn quiet" type="button">Stats for Nerds</button>
+          </div>
+        </div>
+        <div class="panel">
           <h3 data-i18n="clipsTitle"></h3>
           <p class="muted" data-i18n="clipsBody"></p>
           <label class="row"><input id="clips-drive" type="checkbox" /> <span data-i18n="clipsToggle"></span></label>
@@ -195,6 +205,15 @@
           <h3 data-i18n="storageTitle"></h3>
           <p id="storage" class="muted"></p>
           <div class="row"><button id="clear-history" class="btn" type="button" data-i18n="clearHistory"></button></div>
+        </div>
+
+        <div class="panel">
+          <h3 data-i18n="aboutTitle"></h3>
+          <p class="muted" data-i18n="aboutBody"></p>
+          <div class="row">
+            <a class="btn" href="https://www.patreon.com/ivrit_ai/membership" target="_blank" rel="noopener" data-i18n="supportUs"></a>
+            <a class="btn quiet" href="https://www.ivrit.ai/en/privacy/" target="_blank" rel="noopener" data-i18n="terms"></a>
+          </div>
         </div>
 
         <details class="panel diag">

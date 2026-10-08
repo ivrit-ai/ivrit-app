@@ -124,7 +124,7 @@ try {
   await page.screenshot({ path: path.join(OUT, "bt-5-phone.png"), fullPage: false });
   const boxes = await page.evaluate(() => {
     const box = (sel) => { const r = document.querySelector(sel)?.getBoundingClientRect(); return r && { y: Math.round(r.y), h: Math.round(r.height), w: Math.round(r.width) }; };
-    return { appTabs: box("#tabs"), viewTabs: box("#transcribe-app .tabs"), quota: box("#main-balance-container"), gear: box("#settings-btn") };
+    return { appTabs: box("#tabs"), viewTabs: box("#transcribe-app .ts-sections"), quota: box("#main-balance-container"), gear: box("#settings-btn") };
   });
   const quotaText = await page.locator("#transcribe-app #main-balance-label").textContent();
   check("the quota follows the language too", !/[א-ת]/.test(quotaText ?? ""), quotaText);

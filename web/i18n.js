@@ -249,6 +249,13 @@ const STRINGS = {
     sentToFiles: "Longer than a voice message: it is being transcribed into My files.",
     clipsAsk: "Keep the short recordings you transcribe (voice messages, shared clips) in your Google Drive too? They go in a folder of their own. You can change this in Settings.",
     clipsYes: "Keep them",
+    transcribeSettingsTitle: "Transcribing",
+    transcribeSettingsBody: "Use your own RunPod account for transcribing, with no weekly limit and in more languages.",
+    transcribeSettingsOpen: "Transcription settings",
+    aboutTitle: "ivrit.ai",
+    aboutBody: "ivrit.ai is a non-profit project making Hebrew speech technology open to everyone.",
+    supportUs: "Support us",
+    terms: "Privacy and terms",
     transcribeSoonTitle: "Transcribing here is coming soon",
     transcribeSoonBody: "Until then, transcribe.ivrit.ai does it, with the same Google account and the same files in your Drive.",
     clipsTitle: "Short recordings in Google Drive",
@@ -547,6 +554,13 @@ const STRINGS = {
     sentToFiles: "ארוך מהודעה קולית: הוא מתומלל אל הקבצים שלי.",
     clipsAsk: "לשמור את ההקלטות הקצרות שאתם מתמללים (הודעות קוליות, קטעים ששיתפתם) גם ב-Google Drive שלכם? הן יישמרו בתיקייה משלהן. אפשר לשנות את זה בהגדרות.",
     clipsYes: "לשמור",
+    transcribeSettingsTitle: "תמלול",
+    transcribeSettingsBody: "אפשר לתמלל עם חשבון RunPod משלכם, בלי מגבלה שבועית ובשפות נוספות.",
+    transcribeSettingsOpen: "הגדרות תמלול",
+    aboutTitle: "ivrit.ai",
+    aboutBody: "ivrit.ai הוא מיזם ללא מטרות רווח שפותח את טכנולוגיית הדיבור בעברית לכולם.",
+    supportUs: "תמכו בנו",
+    terms: "פרטיות ותנאי שימוש",
     transcribeSoonTitle: "תמלול כאן יגיע בקרוב",
     transcribeSoonBody: "עד אז אפשר לתמלל ב-transcribe.ivrit.ai, עם אותו חשבון Google ואותם קבצים ב-Drive שלכם.",
     clipsTitle: "הקלטות קצרות ב-Google Drive",
@@ -601,7 +615,14 @@ const STRINGS = {
   },
 };
 
-export const LOCALES = ["en", "he"];
+// Yiddish: the Transcribe view speaks it (web/transcribe/i18n.js); elsewhere the
+// app's words are its Hebrew ones, in the same script.
+STRINGS.yi = STRINGS.he;
+
+export const LOCALES = ["en", "he", "yi"];
+
+// Hebrew and Yiddish read right to left, and share the app's Hebrew where it has no Yiddish.
+export const hebrewScript = (locale) => locale === "he" || locale === "yi";
 
 let current = "en";
 
@@ -622,7 +643,7 @@ export function setLocale(locale) {
     localStorage.setItem("locale", current);
   } catch {}
   document.documentElement.lang = current;
-  document.documentElement.dir = current === "he" ? "rtl" : "ltr";
+  document.documentElement.dir = hebrewScript(current) ? "rtl" : "ltr";
   for (const node of document.querySelectorAll("[data-i18n]")) {
     if (node.closest("#transcribe-app")) continue;
     node.textContent = t(node.dataset.i18n);
@@ -648,5 +669,5 @@ export function t(key, ...args) {
 
 // A source's own name and description, in the UI language when it has one.
 export function localized(source, field) {
-  return (current === "he" && source?.[`${field}_he`]) || source?.[field] || "";
+  return (hebrewScript(current) && source?.[`${field}_he`]) || source?.[field] || "";
 }

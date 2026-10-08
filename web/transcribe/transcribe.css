@@ -1,24 +1,10 @@
-/* transcribe.ivrit.ai's page styles, scoped to #transcribe-app (generated once from
-   server/templates/index.html; edit here from now on). */
-/* transcribe.ivrit.ai's colour tokens, under the names its code reads, with the app's values. */
-#transcribe-app {
-  --bg-color: #f7f6f3;
-  --container-bg: #ffffff;
-  --text-color: #111110;
-  --border-color: #dcdad4;
-  --primary-color: #4caf50;
-  --secondary-color: #efede8;
-  --input-bg: #ffffff;
-}
-[data-theme="dark"] #transcribe-app {
-  --bg-color: #111110;
-  --container-bg: #1d1d1b;
-  --text-color: #f2f1ed;
-  --border-color: #2f2e2b;
-  --primary-color: #66bb6a;
-  --secondary-color: #191917;
-  --input-bg: #191917;
-}
+/* transcribe.ivrit.ai's page styles, moved here with its page and scoped to
+   #transcribe-app. They sit in a lower cascade layer, so the app's own styles win
+   wherever both apply: the view is drawn with the app's type, colours, buttons,
+   panels and dialogs (the rules after the layer), and these only fill in what is
+   particular to transcribing (the editor, the player, the file list). */
+
+@layer transcribe {
 /* Colour tokens come from static/theme.css; these are layout-only. */
 #transcribe-app {
         --shell-max: 1100px;
@@ -2005,36 +1991,244 @@
           padding: 1rem;
         }
 }
+}
 
-/* Inside the app's Transcribe view. */
-#transcribe-app { display: block; min-height: 0; background: transparent; }
-#transcribe-app .app-header { position: static; background: transparent; border-bottom: 0; }
-/* The app has its own title, install and theme; the language menu stays, for Yiddish. */
-#transcribe-app .app-bar h1, #transcribe-app #install-btn, #transcribe-app #theme-toggle { display: none !important; }
-#transcribe-app .app-bar { justify-content: flex-end; }
+/* ---------- the view in the app's own look (outside the layer: these win) ---------- */
 
-/* Its sections (new, my files, viewer) are a row of tabs under the app's own bar,
-   on phones too, where the app's tab bar already holds the bottom of the screen;
-   and the app's own .tabs styles stay out. */
-#transcribe-app .tabs {
-  position: static;
-  inset: auto;
-  height: auto;
-  z-index: auto;
-  justify-content: flex-start;
+/* The names its code reads, with the app's colours (they follow light and dark). */
+#transcribe-app {
+  --bg-color: var(--paper);
+  --container-bg: var(--card);
+  --text-color: var(--ink);
+  --border-color: var(--line);
+  --primary-color: var(--accent);
+  --secondary-color: var(--paper-2);
+  --input-bg: var(--card);
+  display: block;
+  min-height: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--ink);
   background: none;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  border-top: 0;
+}
+
+/* Its head: the app's title, a quiet line for the quota, the app's segmented control. */
+#transcribe-app .ts-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#transcribe-app .ts-quota {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 1.55em;
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+#transcribe-app .ts-quota .balance-amount {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+#transcribe-app .ts-quota a {
+  color: var(--muted);
+}
+
+#transcribe-app .ts-sections .tab-button {
+  border: 0;
+  background: none;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  flex: 1;
+}
+
+#transcribe-app .ts-sections .tab-button.active {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Each section is one of the app's cards. */
+#transcribe-app .app-main {
+  max-width: none;
+  margin: 0;
   padding: 0;
-  overflow-x: auto;
 }
-#transcribe-app .tabs button {
-  flex: none;
-  flex-direction: row;
-  gap: 0;
-  border-radius: 0;
+
+#transcribe-app .tab-content.panel {
+  margin-top: 14px;
+  padding: 18px;
+  border-radius: var(--radius);
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-sm);
 }
-#transcribe-app .app-footer {
-  padding-bottom: 1rem;
+
+/* The app's buttons. */
+#transcribe-app .btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+#transcribe-app .btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+#transcribe-app .icon-btn {
+  color: var(--muted);
+}
+
+#transcribe-app button i[data-lucide],
+#transcribe-app button svg.lucide {
+  width: 18px;
+  height: 18px;
+}
+
+/* Upload or record: the app's segmented control. */
+#transcribe-app .input-method-bar {
+  display: flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 999px;
+  background: var(--paper-2);
+  border: 1px solid var(--line-soft);
+  margin-bottom: 14px;
+}
+
+#transcribe-app .input-method-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  background: none;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+#transcribe-app .input-method-btn.active {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+#transcribe-app #drop-area {
+  border: 1.5px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--muted);
+}
+
+#transcribe-app #drop-area:hover,
+#transcribe-app #drop-area.highlight,
+#transcribe-app #drop-area.dragover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+#transcribe-app input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+#transcribe-app .info-link-btn {
+  color: var(--muted);
+}
+
+#transcribe-app .transcribe-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+#transcribe-app select {
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+}
+
+#transcribe-app #progress-bar {
+  background: var(--accent);
+}
+
+/* Lists, links and text in the app's colours. */
+#transcribe-app a {
+  color: inherit;
+}
+
+#transcribe-app h2,
+#transcribe-app h3 {
+  font-family: var(--font-display);
+}
+
+/* Its dialogs, as the app's. */
+#transcribe-app .modal-content {
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+#transcribe-app .modal-header h2 {
+  font: 700 21px/1.3 var(--font-display);
+}
+
+#transcribe-app .modal input[type="text"],
+#transcribe-app .modal input[type="password"],
+#transcribe-app .modal textarea {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/* Messages are the app's (TranscribeHost.toast). */
+#transcribe-app .toast-container {
+  display: none;
+}
+
+/* One width for the whole view: its head, its sections and their cards. */
+#transcribe-app #tab-transcribe {
+  max-width: none;
+}
+
+/* The chosen file, and its remove button: the app's quiet surfaces. */
+#transcribe-app .file-preview {
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+
+#transcribe-app .remove-file-btn {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  background: none;
+  color: var(--danger);
+  font-size: 14px;
+  font-weight: 500;
 }

@@ -13,70 +13,32 @@
       </div>
     </div>
 
-    <header class="app-header">
-      <div class="app-bar">
-        <h1 data-i18n="title">תמלול בעזרת ivrit.ai</h1>
-
-        <!-- Balance/Quota Display (Compact) -->
-        
-        <div
-          class="balance-container compact-balance"
-          id="main-balance-container"
-          aria-live="polite"
-        >
-          <div class="balance-icon" aria-hidden="true">
-            <i data-lucide="credit-card"></i>
-          </div>
-          <div class="balance-text">
-            <span class="balance-label" id="main-balance-label">—</span>
-            <span class="balance-amount" id="main-balance-amount">—</span>
-          </div>
-          <a href="https://youtu.be/xr8RQRFERLs?si=ibHcP6m0wdUh-gHU" target="_blank" rel="noopener" id="quota-info-link" style="display: none;" data-i18n="howToGetMoreQuota">הגדלת מכסה</a>
-        </div>
-        
-
-        <button type="button" class="install-btn" id="install-btn">
-          <i data-lucide="download"></i>
-          <span data-i18n="installApp">התקנה</span>
-        </button>
-
-        <div class="lang-menu" id="lang-menu">
-          <div class="dropdown">
-            <button class="icon-btn" id="lang-btn" title="שפה" aria-label="שפה">
-              <i data-lucide="globe"></i>
-            </button>
-            <div class="dropdown-content">
-              <button type="button" data-lang="he">עברית</button>
-              <button type="button" data-lang="yi">ייִדיש</button>
-              <button type="button" data-lang="en">English</button>
-            </div>
-          </div>
-        </div>
-        <button
-          class="icon-btn"
-          id="settings-btn"
-          data-i18n-title="settings"
-        >
+    <!-- The view's head, in the app's own terms: its title, the user's quota, the
+         settings for transcribing, and its two sections. -->
+    <header class="ts-head">
+      <div class="ts-title">
+        <h2 class="title" data-i18n="viewTitle">תמלול</h2>
+        <button type="button" class="icon-btn" id="settings-btn" data-i18n-title="settings">
           <i data-lucide="settings"></i>
         </button>
-        <button
-          class="icon-btn"
-          id="theme-toggle"
-          onclick="toggleTheme()"
-          data-i18n-title="themeToggle"
-        >
-          <i data-lucide="sun" id="sun-icon"></i>
-          <i data-lucide="moon" id="moon-icon" style="display: none"></i>
-        </button>
       </div>
-
-      <!-- Tab Navigation -->
-      <nav class="tabs">
-        <button class="tab-button active" data-tab="transcribe" data-i18n="tabTranscribe">תמלול חדש</button>
-        <button class="tab-button" data-tab="files" data-i18n="tabMyFiles">הקבצים שלי</button>
-        <button class="tab-button" data-tab="viewer" id="viewer-tab-btn" style="display: none;" data-i18n="tabViewer">צפייה</button>
-        <button class="tab-button" data-tab="stats" id="stats-tab-btn" style="display: none;">Stats for Nerds</button>
+      <p class="ts-quota" id="main-balance-container" aria-live="polite">
+        <span class="balance-label" id="main-balance-label"></span>
+        <span class="balance-amount" id="main-balance-amount"></span>
+        <a href="https://youtu.be/xr8RQRFERLs?si=ibHcP6m0wdUh-gHU" target="_blank" rel="noopener" id="quota-info-link" style="display: none;" data-i18n="howToGetMoreQuota">הגדלת מכסה</a>
+      </p>
+      <nav class="seg wide ts-sections">
+        <button type="button" class="tab-button active" data-tab="transcribe" data-i18n="tabTranscribe">תמלול חדש</button>
+        <button type="button" class="tab-button" data-tab="files" data-i18n="tabMyFiles">הקבצים שלי</button>
+        <button type="button" class="tab-button" data-tab="viewer" id="viewer-tab-btn" hidden data-i18n="tabViewer">צפייה</button>
+        <button type="button" class="tab-button" data-tab="stats" id="stats-tab-btn" hidden>Stats for Nerds</button>
       </nav>
+      <!-- Read by its code, not shown: the app installs itself, and sets the theme
+           and the language. -->
+      <div hidden>
+        <button type="button" id="install-btn"></button>
+        <button type="button" id="theme-toggle"><i id="sun-icon"></i><i id="moon-icon"></i></button>
+      </div>
     </header>
 
     <main class="app-main">
@@ -211,7 +173,7 @@
         </div>
       </div>
       <div class="transcribe-controls">
-        <button id="transcribe-btn" disabled data-i18n="transcribe">תמלל</button>
+        <button id="transcribe-btn" class="btn btn-primary" disabled data-i18n="transcribe">תמלל</button>
         <select id="language-select" title="שפת תמלול" aria-label="שפת תמלול"></select>
       </div>
       <div id="progress-container">
@@ -482,36 +444,7 @@
       <!-- End Statistics Tab -->
     </main>
 
-    <footer class="app-footer">
-      <div class="links-container">
-        <a href="mailto:info@ivrit.ai" class="contact-link">
-          <i data-lucide="mail"></i>
-          <span data-i18n="contactUs">רוצים ליצור קשר? אנחנו כאן</span>
-        </a>
-        <a
-          href="https://www.patreon.com/ivrit_ai/membership"
-          target="_blank"
-          class="support-link"
-        >
-          <img
-            src="/transcribe/patreon.png"
-            alt="Patreon"
-          />
-          <span data-i18n="donateAsk">רוצים לתרום לנו?</span>
-        </a>
-      </div>
-      <div class="site-footer">
-        <button type="button" class="stats-footer-link" id="stats-link-btn" onclick="openStatsTab()">
-          Stats for Nerds
-        </button>
-        <a
-          href="https://www.ivrit.ai/en/privacy/"
-          target="_blank"
-          rel="noopener"
-          ><span data-i18n="privacyTos">מדיניות פרטיות ותנאי שימוש</span></a
-        >
-      </div>
-    </footer>
+    <!-- Contact, donating, Stats for Nerds and the terms are in the app's Settings. -->
 
     <div id="settings-modal" class="modal">
       <div class="modal-content">

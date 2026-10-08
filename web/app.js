@@ -1,4 +1,4 @@
-import { detectLocale, localized, locale, setLocale, t } from "./i18n.js";
+import { detectLocale, hebrewScript, localized, locale, setLocale, t } from "./i18n.js";
 import { ApiError, createCommunicator, pushSupported } from "./client/communicator.js";
 import * as transcribeView from "./transcribe/mount.js";
 
@@ -160,7 +160,7 @@ function messageAvatar(message) {
 const DAY_MS = 86_400_000;
 
 function formatters() {
-  const tag = locale() === "he" ? "he-IL" : undefined;
+  const tag = hebrewScript(locale()) ? "he-IL" : undefined;
   return {
     day: new Intl.DateTimeFormat(tag, { weekday: "long", day: "numeric", month: "long" }),
     dayYear: new Intl.DateTimeFormat(tag, { day: "numeric", month: "long", year: "numeric" }),
@@ -833,7 +833,7 @@ async function mintCode(source) {
     return;
   }
   const name = localized(source, "name");
-  const methodLabel = (m) => (locale() === "he" && m.label_he) || m.label;
+  const methodLabel = (m) => (hebrewScript(locale()) && m.label_he) || m.label;
   const primaryText = link.methods.find((m) => m.text)?.text;
   const countdown = el("small");
   const status = el("div", { class: "status" }, [el("span", { class: "pulse" }), el("div", {}, [el("span", { text: t("waiting") }), countdown])]);
@@ -963,7 +963,7 @@ async function changeLocale(next) {
   renderLocaleSwitches();
   await store.setMeta("locale", next).catch(() => {});
   configureShell();
-  if (state.me) patch("/api/me", { locale: next }).catch(() => {});
+  if (state.me) patch("/api/me", { locale: hebrewScript(next) ? "he" : next }).catch(() => {});
   rerender();
 }
 
@@ -1483,6 +1483,8 @@ async function showTranscribeApp() {
     $("transcribe-soon").hidden = bootData.allowed !== false;
     if (!bootData.signedIn || bootData.allowed === false) return false;
     await transcribeView.mount($("transcribe-mount"), {
+      // Its messages are the app's.
+      toast: (message) => toast(message),
       // The server no longer knows this browser (signed out elsewhere, or a long
       // absence): connect again, and come back here.
       signedOut() {
@@ -1495,6 +1497,17 @@ async function showTranscribeApp() {
   transcribeReady.then((ok) => !ok && (transcribeReady = null), () => (transcribeReady = null));
   return transcribeReady;
 }
+
+// From Settings: transcribing's own settings (the user's RunPod key), and its stats.
+async function openInTranscribe(action) {
+  showView("transcribe");
+  if (!(await showTranscribeApp())) return;
+  if (action === "settings") $("settings-btn")?.click();
+  if (action === "stats") window.openStatsTab?.();
+}
+
+$("transcribe-settings").addEventListener("click", () => openInTranscribe("settings"));
+$("transcribe-stats").addEventListener("click", () => openInTranscribe("stats"));
 
 $("connect-drive").addEventListener("click", async () => {
   if (!(await connectDrive())) return;
@@ -1976,7 +1989,8 @@ async function leaveApp() {
 function configureShell() {
   shell?.ivrit
     .configure({
-      locale: locale(),
+      // Native notifications know Hebrew and English.
+      locale: hebrewScript(locale()) ? "he" : locale(),
       communicator: config.communicator,
       sources: state.catalog.sources.map(({ id, name, name_he }) => ({ id, name, name_he: name_he ?? null })),
     })

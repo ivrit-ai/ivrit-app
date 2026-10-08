@@ -322,6 +322,11 @@ function whenReady(fn) { __whenReady.push(fn) }
       }
 
       function showToast(message, type = "success") {
+        // The app's own messages, one place for all of them.
+        if (window.TranscribeHost && window.TranscribeHost.toast) {
+          window.TranscribeHost.toast((message || "").toString().replace(/\n/g, " "), type)
+          return
+        }
         const toastContainer = document.getElementById("toast-container")
         const toast = document.createElement("div")
         toast.className = `toast ${type}`
@@ -434,19 +439,15 @@ function whenReady(fn) { __whenReady.push(fn) }
         const isDark = theme === "dark"
         sunIcon.style.display = isDark ? "none" : "inline-block"
         moonIcon.style.display = isDark ? "inline-block" : "none"
-        // Match the OS/browser chrome to the app bar, including when installed as a PWA.
-        document.querySelector('meta[name="theme-color"]').content = getComputedStyle(
-          document.documentElement
-        ).getPropertyValue("--container-bg").trim()
+        // The browser's colours are the app's to set.
       }
 
       // data-theme was already applied by the head script; the icons and the
       // theme-color meta need the DOM, so they're synced here.
       updateThemeChrome(document.documentElement.getAttribute("data-theme"))
 
-      // The header grows and shrinks (quota pill wraps, tab strip moves to the
-      // bottom on phones); the viewer's sticky bar offsets by whatever it is.
-      const appHeaderEl = document.querySelector(".app-header")
+      // The viewer's sticky bar parks under the app's own bar, whatever its height.
+      const appHeaderEl = document.querySelector("header.bar")
       new ResizeObserver(() => {
         document.documentElement.style.setProperty(
           "--app-header-h",
