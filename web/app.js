@@ -147,8 +147,9 @@ function messageAvatar(message) {
   // The app's own transcriptions: WhatsApp's mark for a recording shared from
   // WhatsApp, the app's for any other.
   if (isAppMessage(message)) {
+    // WhatsApp's official glyph, as issued: on its own, not in the avatar's box.
     return message.source_id === WHATSAPP_SOURCE
-      ? avatar({ icon: "/icons/whatsapp.svg", name: "WhatsApp" })
+      ? el("img", { class: "avatar glyph", src: "/icons/whatsapp.svg", alt: "WhatsApp", loading: "lazy" })
       : avatar({ icon: "/icons/icon-192.png", name: "ivrit.ai" });
   }
   const source = sourceOf(message);

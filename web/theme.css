@@ -101,3 +101,13 @@
   font-style: italic;
 }
 
+
+/* A brand glyph shown as an avatar (WhatsApp's): no box, frame or tint behind
+   it, and a little clear space inside the avatar's square. */
+.avatar.glyph {
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+  object-fit: contain;
+  padding: 4px;
+}
