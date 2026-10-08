@@ -1,0 +1,450 @@
+/* Transcribing, in the app's own parts (styles.css): only what is particular to it -
+   the list's progress, the transcript's speakers and sentences, editing in place,
+   statistics and charts. */
+
+/* ---------- the list ---------- */
+
+.tr-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.tr-head .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.tr-head .icon-btn {
+  margin-top: 24px;
+}
+
+.tr-quota a {
+  color: inherit;
+}
+
+.tr-actions {
+  margin: 4px 0 18px;
+}
+
+.tr-list {
+  position: relative;
+  border-radius: var(--radius);
+}
+
+.tr-list.dropping::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  pointer-events: none;
+}
+
+.tr-glyph {
+  display: grid;
+  place-items: center;
+  background: var(--paper-2);
+  color: var(--ink-2);
+}
+
+.tr-glyph .i {
+  width: 20px;
+  height: 20px;
+}
+
+.tr-file.openable {
+  cursor: pointer;
+}
+
+.tr-file.openable:hover {
+  border-color: var(--line);
+}
+
+.tag.danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.tr-progress {
+  height: 4px;
+  margin: 8px 0 2px;
+  border-radius: 999px;
+  background: var(--paper-2);
+  overflow: hidden;
+}
+
+.tr-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.tr-note {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.tr-recovered {
+  margin-bottom: 14px;
+}
+
+/* ---------- sheets ---------- */
+
+.tr-field {
+  display: grid;
+  gap: 6px;
+}
+
+.tr-select,
+.tr-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.row .tr-input {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.tr-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.tr-check input {
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.tr-check .sub {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+button.list-row.tr-choice {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+  background: none;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+  padding: 12px 4px;
+}
+
+button.list-row.tr-choice:first-child {
+  border-top: 0;
+}
+
+button.list-row.tr-choice:hover {
+  background: var(--paper-2);
+}
+
+.tr-new .list:empty {
+  display: none;
+}
+
+/* ---------- a transcript ---------- */
+
+.tr-back {
+  margin-top: 16px;
+  margin-inline-start: -10px;
+}
+
+/* The arrow points back: left in English, right in Hebrew. */
+[dir="ltr"] .tr-back .i {
+  transform: scaleX(-1);
+}
+
+.tr-reader .title {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.tr-edited {
+  margin-inline-start: 8px;
+  vertical-align: 2px;
+}
+
+.tr-player {
+  position: sticky;
+  top: calc(var(--bar-h) + 6px);
+  z-index: 5;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+
+.tr-player audio {
+  display: block;
+  width: 100%;
+  height: 40px;
+}
+
+.tr-toolbar {
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+}
+
+.tr-modes {
+  margin-bottom: 12px;
+}
+
+.tr-text {
+  font-size: 18px;
+  line-height: 1.85;
+  padding: 22px;
+}
+
+.tr-text:lang(he),
+.tr-text:lang(yi) {
+  font-size: 19px;
+}
+
+.tr-turn {
+  margin: 0 0 16px;
+}
+
+.tr-range {
+  margin: 18px 0 6px;
+  font: 500 13px/1.2 var(--font-mono);
+  color: var(--muted);
+}
+
+.tr-range:first-child {
+  margin-top: 0;
+}
+
+.tr-who {
+  font-weight: 700;
+  margin-inline-end: 6px;
+}
+
+.tr-who::after {
+  content: ":";
+}
+
+button.tr-who {
+  border: 0;
+  background: var(--paper-2);
+  border-radius: 999px;
+  padding: 0 10px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.tr-who::after,
+.btn.tr-who::after {
+  content: "";
+}
+
+.tr-seg {
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.tr-text:not(.editing) .tr-seg {
+  cursor: pointer;
+}
+
+.tr-text:not(.editing) .tr-seg:hover {
+  background: var(--paper-2);
+}
+
+.tr-seg.playing {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.tr-text.editing .tr-seg {
+  outline: none;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+
+.tr-text.editing .tr-seg:focus {
+  background: var(--accent-soft);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.tr-seg ins {
+  text-decoration: none;
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.tr-seg del {
+  color: var(--muted);
+}
+
+.tr-footer {
+  margin: 22px 0 0;
+  font-size: 13px;
+}
+
+.tr-editbar {
+  position: sticky;
+  top: calc(var(--bar-h) + 6px);
+  z-index: 6;
+  margin: 4px 0 12px;
+  flex-wrap: wrap;
+}
+
+/* Speakers' colours: transcribe.ivrit.ai's palette. */
+.speaker-1 { color: #1e6fd0; }
+.speaker-2 { color: #2e7d32; }
+.speaker-3 { color: #c56a00; }
+.speaker-4 { color: #c2185b; }
+.speaker-5 { color: #7b1fa2; }
+.speaker-6 { color: #d32f2f; }
+.speaker-7 { color: #00838f; }
+.speaker-8 { color: #558b2f; }
+.speaker-9 { color: #a07800; }
+.speaker-10 { color: #546e7a; }
+
+@media (prefers-color-scheme: dark) {
+  .speaker-1 { color: #64b5f6; }
+  .speaker-2 { color: #81c784; }
+  .speaker-3 { color: #ffb74d; }
+  .speaker-4 { color: #f06292; }
+  .speaker-5 { color: #ba68c8; }
+  .speaker-6 { color: #ef5350; }
+  .speaker-7 { color: #4dd0e1; }
+  .speaker-8 { color: #aed581; }
+  .speaker-9 { color: #ffd54f; }
+  .speaker-10 { color: #90a4ae; }
+}
+
+.tr-progress span[class*="speaker-"] {
+  background: currentColor;
+}
+
+/* ---------- statistics ---------- */
+
+.tr-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.tr-figure {
+  display: grid;
+  gap: 2px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+}
+
+.tr-figure b {
+  font: 700 20px/1.2 var(--font-display);
+}
+
+.tr-figure span {
+  font-size: 13px;
+}
+
+.tr-share {
+  display: grid;
+  gap: 2px;
+}
+
+.tr-share .tr-who::after {
+  content: "";
+}
+
+/* ---------- recording ---------- */
+
+.tr-recording {
+  text-align: center;
+  justify-items: center;
+}
+
+.tr-timer {
+  font: 600 40px/1 var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.tr-wave {
+  width: 100%;
+  height: 90px;
+}
+
+/* ---------- Stats for Nerds ---------- */
+
+.tr-nerds .card {
+  margin-top: 12px;
+}
+
+.tr-nerds h3 {
+  margin: 0 0 8px;
+  font: 700 17px/1.3 var(--font-display);
+}
+
+.tr-chart {
+  display: block;
+  width: 100%;
+  height: 160px;
+}
+
+.tr-chart .axis {
+  stroke: var(--line);
+}
+
+.tr-chart .axis-label {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.tr-chart .area {
+  fill: var(--accent-soft);
+}
+
+.tr-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tr-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-inline-end: 5px;
+  border-radius: 2px;
+}
+
+.tr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.tr-table td,
+.tr-table th {
+  padding: 6px 4px;
+  border-top: 1px solid var(--line-soft);
+  text-align: start;
+}
+
+.tr-table .num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}

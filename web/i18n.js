@@ -250,8 +250,6 @@ const STRINGS = {
     clipsAsk: "Keep the short recordings you transcribe (voice messages, shared clips) in your Google Drive too? They go in a folder of their own. You can change this in Settings.",
     clipsYes: "Keep them",
     transcribeSettingsTitle: "Transcribing",
-    transcribeSettingsBody: "Use your own RunPod account for transcribing, with no weekly limit and in more languages.",
-    transcribeSettingsOpen: "Transcription settings",
     aboutTitle: "ivrit.ai",
     aboutBody: "ivrit.ai is a non-profit project making Hebrew speech technology open to everyone.",
     supportUs: "Support us",
@@ -555,8 +553,6 @@ const STRINGS = {
     clipsAsk: "לשמור את ההקלטות הקצרות שאתם מתמללים (הודעות קוליות, קטעים ששיתפתם) גם ב-Google Drive שלכם? הן יישמרו בתיקייה משלהן. אפשר לשנות את זה בהגדרות.",
     clipsYes: "לשמור",
     transcribeSettingsTitle: "תמלול",
-    transcribeSettingsBody: "אפשר לתמלל עם חשבון RunPod משלכם, בלי מגבלה שבועית ובשפות נוספות.",
-    transcribeSettingsOpen: "הגדרות תמלול",
     aboutTitle: "ivrit.ai",
     aboutBody: "ivrit.ai הוא מיזם ללא מטרות רווח שפותח את טכנולוגיית הדיבור בעברית לכולם.",
     supportUs: "תמכו בנו",
@@ -615,7 +611,7 @@ const STRINGS = {
   },
 };
 
-// Yiddish: the Transcribe view speaks it (web/transcribe/i18n.js); elsewhere the
+// Yiddish: transcribing speaks it (web/transcription/strings.js); elsewhere the
 // app's words are its Hebrew ones, in the same script.
 STRINGS.yi = STRINGS.he;
 
@@ -635,8 +631,6 @@ export function detectLocale(preferred) {
   return (navigator.languages ?? [navigator.language]).some((l) => /^(he|iw)\b/i.test(l)) ? "he" : "en";
 }
 
-// The Transcribe view (#transcribe-app) carries transcribe.ivrit.ai's own strings,
-// under the same attribute; they are its business (web/transcribe/i18n.js).
 export function setLocale(locale) {
   current = LOCALES.includes(locale) ? locale : "en";
   try {
@@ -645,15 +639,12 @@ export function setLocale(locale) {
   document.documentElement.lang = current;
   document.documentElement.dir = hebrewScript(current) ? "rtl" : "ltr";
   for (const node of document.querySelectorAll("[data-i18n]")) {
-    if (node.closest("#transcribe-app")) continue;
     node.textContent = t(node.dataset.i18n);
   }
   for (const node of document.querySelectorAll("[data-i18n-placeholder]")) {
-    if (node.closest("#transcribe-app")) continue;
     node.placeholder = t(node.dataset.i18nPlaceholder);
   }
   for (const node of document.querySelectorAll("[data-i18n-label]")) {
-    if (node.closest("#transcribe-app")) continue;
     node.setAttribute("aria-label", t(node.dataset.i18nLabel));
   }
 }

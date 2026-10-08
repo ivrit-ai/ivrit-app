@@ -308,9 +308,9 @@ def main():
         check("/config.js names the app's client", status == 200 and b'"googleClientId": "test-client"' in body, body)
         status, _, body = get("/sw.js")
         check("/sw.js is the app's worker", status == 200 and body == open(os.path.join(SERVER, "..", "web", "sw.js"), "rb").read())
-        status, headers, _ = get("/transcribe")
-        check("transcribe.ivrit.ai's page moved to /transcribe, behind sign-in",
-              status in (200, 303) and (status == 200 or "/login" in headers.get("location", "")), (status, headers))
+        status, headers, body = get("/transcribe")
+        check("/transcribe leads to the app's Transcribe tab (its page, followed)",
+              status == 200 and b"app.js" in body, status)
         status, _, body = get("/.well-known/jwks.json")
         check("the session keys are published", status == 200 and json.loads(body)["keys"][0]["kid"], body[:100])
         status, _, body = get("/auth/google", data=b'{"idToken": "a.b.c"}', method="POST",

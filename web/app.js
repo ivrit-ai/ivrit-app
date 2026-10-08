@@ -1,6 +1,8 @@
 import { detectLocale, hebrewScript, localized, locale, setLocale, t } from "./i18n.js";
 import { ApiError, createCommunicator, pushSupported } from "./client/communicator.js";
-import * as transcribeView from "./transcribe/mount.js";
+import * as transcribeApi from "./transcription/api.js";
+import * as transcription from "./transcription/view.js";
+import * as transcriptionSettings from "./transcription/settings.js";
 
 const $ = (id) => document.getElementById(id);
 const store = self.NotifierStore;
@@ -957,7 +959,7 @@ function renderLocaleSwitches() {
 }
 
 async function changeLocale(next) {
-  transcribeView.setLocale(next);
+  transcription.relocalize(next);
   if (next === locale()) return;
   setLocale(next);
   renderLocaleSwitches();
@@ -1108,7 +1110,7 @@ function formatSize(bytes) {
 async function sendToTranscribe(file) {
   if (shell) return shell.ivrit.shareOn({ id: file.key, title: t("sharedChooser") });
   if (!(await showTranscribeApp())) return toast(t("connectDriveFirst"));
-  transcribeView.addFiles([new File([file.blob], file.name, { type: file.type })]);
+  transcription.chooseFiles([new File([file.blob], file.name, { type: file.type })]);
   await discardShared(file.key);
   renderTranscribe();
 }
@@ -1415,7 +1417,7 @@ async function sendToFiles(files) {
     for (const file of files) await refuseShared(file);
     return false;
   }
-  const bootData = await transcribeView.boot().catch(() => null);
+  const bootData = await transcribeApi.boot().catch(() => null);
   if (!bootData?.signedIn) {
     // Drive first; once connected, the files go on (connect-drive calls takeShared).
     showView("transcribe");
@@ -1435,11 +1437,11 @@ async function sendToFiles(files) {
   toast(t("sentToFiles"));
   showView("transcribe");
   await showTranscribeApp();
-  document.querySelector('#transcribe-app .tab-button[data-tab="files"]')?.click();
+  transcription.refresh();
   return true;
 }
 
-// Transcribing files here, as transcribe.ivrit.ai does (web/transcribe/): it needs
+// Transcribing files here, as transcribe.ivrit.ai does (web/transcription/): it needs
 // this browser signed in at the server with Google and Drive. In a browser that is
 // Google's sign-in on this site; in the app, Drive is authorized on the phone and
 // the server is handed the code.
@@ -1469,12 +1471,49 @@ async function connectDrive() {
   return googlePopup();
 }
 
+// What transcribing needs from the app: its parts (elements, icons, messages,
+// questions, the bottom sheet), the language, and the way back to Drive's sign-in.
+const transcriptionHost = {
+  el,
+  icon,
+  toast: (message) => toast(message),
+  ask,
+  locale: () => locale(),
+  sheet: {
+    open(title, body, onClose) {
+      const dialog = $("sheet");
+      clearSheetTimers();
+      $("sheet-title").textContent = title;
+      $("sheet-avatar").replaceChildren();
+      $("sheet-body").replaceChildren(body);
+      if (onClose) dialog.addEventListener("close", onClose, { once: true });
+      if (!dialog.open) dialog.showModal();
+    },
+    close() {
+      if ($("sheet").open) $("sheet").close();
+    },
+  },
+  // The server no longer knows this browser (signed out elsewhere, or a long
+  // absence): connect again, and come back here.
+  signedOut() {
+    $("transcribe-connect").hidden = false;
+    $("transcribe-mount").hidden = true;
+  },
+  openSettings() {
+    showView("settings");
+    $("transcribe-settings-box")?.scrollIntoView({ block: "center", behavior: "smooth" });
+  },
+  showTranscribe() {
+    if (state.view !== "transcribe") showView("transcribe");
+  },
+};
+
 async function showTranscribeApp() {
   if (transcribeReady) return transcribeReady;
   transcribeReady = (async () => {
     let bootData;
     try {
-      bootData = await transcribeView.boot();
+      bootData = await transcribeApi.boot();
     } catch {
       toast(t("offline"));
       return false;
@@ -1482,32 +1521,19 @@ async function showTranscribeApp() {
     $("transcribe-connect").hidden = bootData.signedIn;
     $("transcribe-soon").hidden = bootData.allowed !== false;
     if (!bootData.signedIn || bootData.allowed === false) return false;
-    await transcribeView.mount($("transcribe-mount"), {
-      // Its messages are the app's.
-      toast: (message) => toast(message),
-      // The server no longer knows this browser (signed out elsewhere, or a long
-      // absence): connect again, and come back here.
-      signedOut() {
-        $("transcribe-connect").hidden = false;
-        $("transcribe-mount").hidden = true;
-      },
-    }, { bootData, locale: locale() });
+    $("transcribe-mount").hidden = false;
+    await transcription.mount($("transcribe-mount"), transcriptionHost, bootData);
+    // A transcript's link (a notification, or one from transcribe.ivrit.ai).
+    const results = new URLSearchParams(location.search).get("results");
+    if (results) {
+      history.replaceState(null, "", location.pathname);
+      transcription.openResults(results);
+    }
     return true;
   })();
   transcribeReady.then((ok) => !ok && (transcribeReady = null), () => (transcribeReady = null));
   return transcribeReady;
 }
-
-// From Settings: transcribing's own settings (the user's RunPod key), and its stats.
-async function openInTranscribe(action) {
-  showView("transcribe");
-  if (!(await showTranscribeApp())) return;
-  if (action === "settings") $("settings-btn")?.click();
-  if (action === "stats") window.openStatsTab?.();
-}
-
-$("transcribe-settings").addEventListener("click", () => openInTranscribe("settings"));
-$("transcribe-stats").addEventListener("click", () => openInTranscribe("stats"));
 
 $("connect-drive").addEventListener("click", async () => {
   if (!(await connectDrive())) return;
@@ -1684,6 +1710,7 @@ function rerender() {
     renderStorage();
     renderDiagnostics();
     loadSettings().then(renderClipsSetting);
+    transcriptionSettings.render($("transcribe-settings-box"), transcriptionHost, (bootData) => transcription.setBoot(bootData)).catch(() => {});
   }
 }
 
@@ -1876,7 +1903,7 @@ if (shell) {
     } else if (progress === "failed") {
       toast(t("fileUploadFailed"));
     }
-    if (state.view === "transcribe") document.querySelector('#transcribe-app .tab-button[data-tab="files"]')?.click();
+    if (state.view === "transcribe") transcription.refresh();
   });
   shell.ivrit.addListener("pushToken", () => {
     localStorage.removeItem("reconciled_at");
@@ -2068,8 +2095,8 @@ async function start() {
   await openFromHash();
   if (shell) await takeShared();
   watchJobs();
-  if (location.hash === "#shared" || location.hash === "#transcribe") {
-    history.replaceState(null, "", location.pathname + location.search);
+  if (location.hash === "#shared" || location.hash === "#transcribe" || location.hash.startsWith("#t/")) {
+    if (!location.hash.startsWith("#t/")) history.replaceState(null, "", location.pathname + location.search);
     showView("transcribe");
   }
   // A transcript's link (a notification, or a link from transcribe.ivrit.ai).

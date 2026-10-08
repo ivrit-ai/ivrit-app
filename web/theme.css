@@ -118,7 +118,7 @@
   animation: none;
 }
 
-/* The Transcribe view (web/transcribe/) is a working surface: as wide as its own
+/* The Transcribe tab (web/transcription/) is a working surface: as wide as its own
    layout allows. */
 main.wide {
   max-width: 960px;

@@ -1289,6 +1289,9 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
 
 @app.get("/transcribe" if APP_SITE else "/", name="index")
 async def index(request: Request):
+    # On the app's site, transcribing is the app's own Transcribe tab.
+    if APP_SITE:
+        return RedirectResponse(url="/#transcribe", status_code=status.HTTP_303_SEE_OTHER)
     if in_dev or in_local_mode:
         response = templates.TemplateResponse("index.html", {
             "request": request,

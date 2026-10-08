@@ -12,8 +12,12 @@ web app, adding Firebase push, Android's notification settings and shares.
   Drive, quota, users' own RunPod keys) scheduled through Eliezer's hub
   (`server/hub.py`), and the app's own site (`server/app_site.py`): `web/`,
   `/config.js`, sign-in sessions (`server/app_sessions.py`), `/privacy`.
-  transcribe.ivrit.ai's page is at `/transcribe` until `web/` does everything
-  it does. Tests: `server/tests/test_hub_mode.py` (end to end, with the hub).
+  Tests: `server/tests/test_hub_mode.py` (end to end, with the hub).
+- `web/transcription/` — the Transcribe tab: everything transcribe.ivrit.ai does
+  (files, recording, transcripts with speakers, editing in its format, exports,
+  own RunPod keys, Stats for Nerds), in the app's own parts. Its words in
+  Hebrew, Yiddish and English are in `strings.js`. Test in a browser:
+  `store/test-transcribe.mjs`.
 - `shell/` — the native shells: `shell/android/` now, `shell/ios/` later. The
   web app is loaded from app.ivrit.ai, so UI changes ship without a store
   release; only native code needs one. Native code is in
@@ -37,11 +41,13 @@ vendored in `web/client/`, pinned to a commit recorded in
 
     scripts/sync-client.sh ../notifier
 
-**transcribe.ivrit.ai** does transcription. The Transcribe tab links to it.
-Audio shared into the app waits in that tab: in a browser it is handed to
-transcribe.ivrit.ai's share target (`/share-target`, field `media`) by a form
-post; in the Android app, which cannot run transcribe.ivrit.ai inside it (its
-Google sign-in refuses web views), it goes on through Android's share menu.
+**Transcribing** is the app's own (the Transcribe tab, served by `server/`),
+with the files in each user's Google Drive, the same folder transcribe.ivrit.ai
+uses, so both see the same files while transcribe.ivrit.ai still runs. Jobs are
+scheduled by Eliezer's hub (credits), which also runs Eliezer's voice messages.
+Audio shared into the app: a short clip goes to Eliezer (its inbox message), a
+longer recording is transcribed into My files (in the Android app, uploaded in
+the background).
 
 ## Inside the app
 

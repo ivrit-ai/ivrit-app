@@ -1,4 +1,4 @@
-// The app in a browser, signed in, transcribing a file in its Transcribe view:
+// The app in a browser, signed in, transcribing in its Transcribe tab (web/transcription/):
 // Communicator (its test harness, COMMUNICATOR_DIR or ../notifier), the hub, a fake
 // RunPod and the app's Python server (server/tests/stack.py). Screens go to OUT.
 //
@@ -33,7 +33,7 @@ const check = (name, ok, detail = "") => {
 
 const browser = await chromium.launch({ executablePath: CHROME });
 try {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "he-IL" });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "he-IL", acceptDownloads: true });
   await context.addInitScript((session) => {
     if (!localStorage.getItem("app_session")) localStorage.setItem("app_session", JSON.stringify({ ...session, renewed_at: Date.now() }));
   }, info.session);
@@ -41,60 +41,120 @@ try {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  const shot = (name) => page.screenshot({ path: path.join(OUT, `bt-${name}.png`) });
+  const server = (url, init) => page.evaluate(async ([url, init]) => {
+    const res = await fetch(url, { credentials: "same-origin", ...init });
+    return { status: res.status, body: await res.json().catch(() => null) };
+  }, [url, init ?? {}]);
 
   await page.goto(`${origin}/__test/login?email=dana@example.com&sub=dana-sub&to=/%23transcribe`);
   // First run: keep short recordings in Drive? Yes.
   const asked = await page.waitForSelector("dialog[open]", { timeout: 20000 }).catch(() => null);
   check("the first run asks whether to keep short recordings in Drive", Boolean(asked) && (await asked.textContent()).includes("Drive"));
   if (asked) await page.click("#confirm-ok");
-  const mounted = await page.waitForSelector("#transcribe-app #file-input", { state: "attached", timeout: 40000 }).catch(() => null);
-  check("the Transcribe view loads transcribe's page inside the app", Boolean(mounted), errors.join(" | "));
-  await page.waitForTimeout(1500);
-  await page.screenshot({ path: path.join(OUT, "bt-1-transcribe.png") });
-  const headerKept = await page.locator("header.bar .brand").isVisible();
-  check("the app's own bar stays", headerKept);
-  const strings = await page.locator("#transcribe-app [data-i18n='tabMyFiles']").textContent();
-  check("its strings are in the app's language", strings?.includes("הקבצים"), strings);
-  const appTabs = await page.locator("#tabs button[data-view='transcribe'] span").textContent();
-  check("...and the app's own strings are untouched by its translations", appTabs === "תמלול", appTabs);
 
-  await page.setInputFiles("#file-input", SAMPLE);
-  await page.waitForSelector("#transcribe-btn:not([disabled])", { timeout: 15000 });
-  await page.click("#transcribe-btn");
+  // --- the list
+  const listed = await page.waitForSelector("#tr-feed", { timeout: 30000 }).catch(() => null);
+  check("the Transcribe tab shows the user's transcripts", Boolean(listed), errors.join(" | "));
+  await page.waitForTimeout(1200);
+  check("with nothing yet, it says so", (await page.locator("#tr-feed .empty").count()) === 1);
+  check("its title and quota are the app's", (await page.locator("#tr-list .title").textContent()) === "תמלול"
+    && /השבוע/.test(await page.locator("#tr-quota").textContent()), await page.locator("#tr-quota").textContent());
+  await shot("1-list-empty");
+
+  // --- a new transcription, through the sheet
+  await page.setInputFiles("#tr-input", SAMPLE);
+  const sheet = await page.waitForSelector("#sheet[open] .tr-new", { timeout: 5000 }).catch(() => null);
+  check("choosing a file opens the app's sheet, with the language and keeping the audio", Boolean(sheet)
+    && (await page.locator("#sheet .tr-select").inputValue()) === "he");
+  await shot("2-sheet");
+  await page.click("#sheet .tr-new button[type=submit]");
+  const onItsWay = await page.waitForSelector("#tr-feed .tr-file .tag.accent, #tr-feed .tr-file .tag", { timeout: 10000 }).catch(() => null);
+  check("the file shows in the list on its way", Boolean(onItsWay));
   let ready = null;
-  let lastToc = null;
   for (let i = 0; i < 60 && !ready; i++) {
     await page.waitForTimeout(1500);
-    lastToc = await page.evaluate(async () => {
-      const res = await fetch("/appdata/toc", { credentials: "same-origin" });
-      return { status: res.status, body: await res.json() };
-    }).catch((e) => ({ error: String(e) }));
-    ready = lastToc.body?.entries?.find((e) => e.status === "Ready") ?? null;
+    const toc = await server("/appdata/toc");
+    ready = toc.body?.entries?.find((e) => e.status === "Ready") ?? null;
   }
-  if (!ready) console.log("last toc:", JSON.stringify(lastToc).slice(0, 500));
-  check("a file uploaded in the view is transcribed and listed Ready", Boolean(ready), JSON.stringify(ready));
+  check("it is transcribed and ready", Boolean(ready));
+  await page.waitForSelector("#tr-feed .tr-file.openable", { timeout: 15000 }).catch(() => null);
+  check("the list shows it ready, by name", (await page.locator("#tr-feed .tr-file.openable .msg-title").first().textContent()) === "sample.ogg");
+  await shot("3-list");
 
-  await page.click("#transcribe-app .tab-button[data-tab='files']");
-  await page.waitForTimeout(2500);
-  await page.screenshot({ path: path.join(OUT, "bt-2-files.png") });
-  const listed = await page.locator("#transcribe-app #files-list").textContent();
-  check("My files shows it", listed?.includes("sample"), listed?.slice(0, 200));
+  // --- the transcript
+  await page.click("#tr-feed .tr-file.openable");
+  const reader = await page.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 20000 }).catch(() => null);
+  check("it opens as a screen of its own, with the text by speaker", Boolean(reader)
+    && (await page.locator("#tr-text").textContent()).includes("תמלול") && (await page.locator("#tr-text .tr-who").count()) > 0);
+  check("...its link is its own (#t/<id>)", page.url().includes(`#t/${ready?.results_id}`), page.url());
+  check("...with its audio", (await page.locator("#tr-audio").count()) === 1);
+  await shot("4-transcript");
 
-  await page.locator("#transcribe-app #files-list").getByText("sample").first().click();
-  const viewer = await page.waitForSelector("#transcribe-app #tab-viewer.active, #transcribe-app #tab-viewer:not([hidden])", { timeout: 20000 }).catch(() => null);
-  await page.waitForTimeout(2500);
-  await page.screenshot({ path: path.join(OUT, "bt-3-viewer.png") });
-  const text = await page.locator("#transcribe-app #tab-viewer").textContent().catch(() => "");
-  check("the viewer opens it, with the transcript", Boolean(viewer) && text.includes("תמלול"), text.slice(0, 200));
+  // display: timestamps on
+  await page.click(".tr-toolbar button:has(use[href='#i-display'])");
+  await page.click("#sheet .seg button:has-text('כולל קודי זמן')");
+  check("display options apply at once (timestamps)", (await page.locator("#tr-text .tr-range").count()) > 0);
+  await page.click("#sheet-close");
+  await page.click(".tr-toolbar button:has(use[href='#i-display'])");
+  await page.click("#sheet .seg button:has-text('ללא קודי זמן')");
+  await page.click("#sheet-close");
 
-  // English: both the app and the view follow.
+  // statistics
+  await page.click(".tr-toolbar button:has(use[href='#i-chart'])");
+  check("statistics, in a sheet", (await page.locator("#sheet .tr-figure").count()) >= 5);
+  await page.click("#sheet-close");
+
+  // export
+  await page.click(".tr-toolbar button:has(use[href='#i-download'])");
+  const [download] = await Promise.all([page.waitForEvent("download", { timeout: 10000 }).catch(() => null), page.click("#sheet .tr-choice:has-text('SRT')")]);
+  check("export: SRT", download?.suggestedFilename() === "sample.srt", download?.suggestedFilename());
+
+  // --- editing: a sentence and a speaker's name, saved as transcribe.ivrit.ai saves them
+  await page.click(".tr-toolbar button:has(use[href='#i-edit'])");
+  await page.waitForSelector("#tr-text.editing .tr-seg[contenteditable]");
+  const seg = page.locator("#tr-text .tr-seg").first();
+  await seg.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" ותוקן");
+  await page.click("#tr-text .tr-who");
+  await page.fill("#sheet .tr-input", "דנה");
+  await page.click("#sheet form button[type=submit]");
+  await shot("5-editing");
+  await page.click(".tr-editbar .btn.primary");
+  await page.waitForTimeout(1000);
+  const saved = await server(`/appdata/edits/${ready?.results_id}`);
+  check("edits are saved in transcribe.ivrit.ai's format", saved.body?.edits?.["0"]?.endsWith("ותוקן")
+    && saved.body?.speakerNames?.SPEAKER_00 === "דנה" && JSON.stringify(saved.body?.speakerSwaps) === "{}", JSON.stringify(saved.body));
+  check("...and show: the new name, marked edited", (await page.locator("#tr-text .tr-who").first().textContent()) === "דנה"
+    && (await page.locator(".tr-edited").count()) === 1);
+  await page.click(".tr-modes button:nth-child(3)");
+  await page.waitForTimeout(800);
+  check("comparing shows what changed", (await page.locator("#tr-text ins").count()) > 0);
+  await shot("6-compare");
+  await page.click(".tr-modes button:nth-child(1)");
+
+  // --- back to the list, and the language
+  await page.click(".tr-back");
+  await page.waitForSelector("#tr-list:not([hidden])");
+  check("back returns to the list", !page.url().includes("#t/"));
   await page.click("#lang-switch button[data-locale='en']");
   await page.waitForTimeout(800);
-  const en = await page.locator("#transcribe-app [data-i18n='tabMyFiles']").textContent();
-  check("switching the app to English switches the view too", en === "My Files", en);
-  const back = await page.locator("#transcribe-app [data-i18n='backToFiles']").first().textContent();
-  check("...every string of it (none left as a key)", back && back !== "backToFiles", back);
-  await page.screenshot({ path: path.join(OUT, "bt-4-english.png") });
+  check("in English, the tab is too", (await page.locator("#tr-list .title").textContent()) === "Transcribe"
+    && (await page.locator("#tr-list .btn.primary span").textContent()) === "Upload a file");
+  await page.click("#lang-switch button[data-locale='yi']");
+  await page.waitForTimeout(500);
+  check("...and in Yiddish", (await page.locator("#tr-list .title").textContent()) === "טראַנסקריבירן");
+  await page.click("#lang-switch button[data-locale='he']");
+
+  // --- Settings: transcribing's own, natively
+  await page.click("#tabs button[data-view='settings']");
+  await page.waitForSelector("#transcribe-settings-box form", { timeout: 10000 }).catch(() => null);
+  check("Settings holds transcribing's settings (the user's own RunPod key)", (await page.locator("#transcribe-settings-box input[type=password]").count()) === 1);
+  await page.click("#transcribe-settings-box a[href='#t/stats']");
+  const nerds = await page.waitForSelector(".tr-nerds .tr-figure", { timeout: 15000 }).catch(() => null);
+  check("Stats for Nerds", Boolean(nerds) && (await page.locator(".tr-nerds .tr-chart").count()) >= 5);
+  await shot("7-nerds");
 
   // A short transcript the app has, kept in the clips folder (once).
   const clip = await page.evaluate(async () => {
@@ -110,29 +170,26 @@ try {
   check("the answer is kept", clip.settings.clipsToDrive === true && clip.settings.driveConnected === true, JSON.stringify(clip.settings));
   check("a short transcript is saved to the clips folder, once", clip.first.saved === true && clip.second.already === true, JSON.stringify(clip));
   const { readdirSync } = await import("node:fs");
-  const clipsDir = path.join(info.work, "drive", "clips", "rt-dana");
-  const files = (() => { try { return readdirSync(clipsDir); } catch { return []; } })();
+  const files = (() => { try { return readdirSync(path.join(info.work, "drive", "clips", "rt-dana")); } catch { return []; } })();
   check("...in a folder apart from the transcriptions", files.includes("toc.json.gz") && files.length === 2, files.join(","));
+
+  // --- a phone
+  await page.setViewportSize({ width: 412, height: 860 });
+  await page.goto(`${origin}/#t/${encodeURIComponent(ready?.results_id ?? "")}`);
+  await page.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 20000 }).catch(() => null);
+  await page.waitForTimeout(800);
+  await shot("8-phone-transcript");
+  const tabs = await page.evaluate(() => {
+    const r = document.getElementById("tabs").getBoundingClientRect();
+    return { y: r.y, h: r.height };
+  });
+  check("on a phone, a transcript opens from its link, under the app's tab bar", tabs.h > 0 && tabs.y > 700, JSON.stringify(tabs));
+  await page.click(".tr-back");
+  await page.waitForTimeout(800);
+  await shot("9-phone-list");
 
   const realErrors = errors.filter((e) => !/favicon|ERR_|Failed to load resource/.test(e));
   check("no script errors", realErrors.length === 0, realErrors.join(" | ").slice(0, 600));
-
-  // A phone-sized screen.
-  await page.setViewportSize({ width: 412, height: 860 });
-  await page.click("#transcribe-app .tab-button[data-tab='transcribe']");
-  await page.waitForTimeout(800);
-  await page.screenshot({ path: path.join(OUT, "bt-5-phone.png"), fullPage: false });
-  const boxes = await page.evaluate(() => {
-    const box = (sel) => { const r = document.querySelector(sel)?.getBoundingClientRect(); return r && { y: Math.round(r.y), h: Math.round(r.height), w: Math.round(r.width) }; };
-    return { appTabs: box("#tabs"), viewTabs: box("#transcribe-app .ts-sections"), quota: box("#main-balance-container"), gear: box("#settings-btn") };
-  });
-  const quotaText = await page.locator("#transcribe-app #main-balance-label").textContent();
-  check("the quota follows the language too", !/[א-ת]/.test(quotaText ?? ""), quotaText);
-  await page.click("#tabs button[data-view='inbox']");
-  await page.waitForTimeout(800);
-  await page.screenshot({ path: path.join(OUT, "bt-6-phone-inbox.png") });
-  check("on a phone, the app's tab bar is still there", boxes.appTabs && boxes.appTabs.h > 0 && boxes.appTabs.y > 700, JSON.stringify(boxes.appTabs));
-  check("...and the view's own sections and settings are reachable", boxes.viewTabs?.h > 0 && boxes.gear?.h > 0 && boxes.viewTabs.y < 700, JSON.stringify(boxes));
 } finally {
   await browser.close();
   stack.kill();
