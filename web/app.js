@@ -6,12 +6,21 @@ const store = self.NotifierStore;
 // Notifications, accounts and sources are Communicator's: this app is one of
 // its clients, calling its API from this origin (see client/communicator.js).
 // Its devices are registered as "app" so Communicator can tell them apart.
+// Inside the installed app, the account is the Google account chosen on the
+// phone (see googleIdToken): every call carries Google's token, and no cookie
+// of Communicator's is used. In a browser, Communicator's own sign-in stands.
 const config = self.IVRIT_CONFIG;
-const communicator = createCommunicator({ base: config.communicator, client: "app", store });
+const inShell = Boolean(self.Capacitor?.isNativePlatform?.());
+const communicator = createCommunicator({
+  base: config.communicator,
+  client: "app",
+  store,
+  token: inShell ? () => googleIdToken(false).catch(() => null) : null,
+});
 
 // The native shell (Capacitor) when this page runs inside the installed app,
 // null in a browser. Inside the app, notifications come through Firebase and
-// native code instead of web push, sign-in goes through the browser, and the
+// native code instead of web push, sign-in is Google's on the phone, and the
 // app knows its own notification settings.
 //
 // The page is loaded from app.ivrit.ai, so it gets only the bridge Capacitor
@@ -31,16 +40,13 @@ function nativePlugin(name) {
   );
 }
 
-const shell = capacitor?.isNativePlatform?.()
+const shell = inShell
   ? { ivrit: nativePlugin("IvritNative"), app: nativePlugin("App"), browser: nativePlugin("Browser") }
   : null;
 
 // A native call that never answers must not hold up the page.
 const withTimeout = (promise, ms, fallback) =>
   Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(fallback), ms))]);
-// Where Communicator sends the browser back to once signed in; the app's
-// manifest claims it.
-const HANDOFF_URL = "ai.ivrit.app://auth";
 const { api, post, patch, del } = communicator;
 const RECONCILE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -1406,7 +1412,7 @@ $("signout").addEventListener("click", async () => {
   const anonymous = state.me.kind === "anonymous";
   if (!(await ask(anonymous ? t("signOutAnonConfirm") : t("signOutConfirm"), { ok: t("signOut"), danger: anonymous }))) return;
   await forgetThisDevice();
-  shell?.ivrit.forgetGoogle().catch(() => {});
+  if (shell) return leaveApp();
   // An anonymous account is unreachable once signed out, so it is deleted
   // rather than left behind.
   if (anonymous) await del("/api/me").catch(() => {});
@@ -1418,6 +1424,7 @@ $("delete-account").addEventListener("click", async () => {
   if (!(await ask(t("deleteConfirm"), { ok: t("deleteAccount"), danger: true }))) return;
   await forgetThisDevice();
   await del("/api/me").catch(() => {});
+  if (shell) return leaveApp();
   location.replace("/");
 });
 
@@ -1456,9 +1463,6 @@ if (shell) {
   shell.ivrit.addListener("pushToken", () => {
     localStorage.removeItem("reconciled_at");
     if (state.me) reconcile();
-  });
-  shell.app.addListener("appUrlOpen", ({ url }) => {
-    if (url?.startsWith(HANDOFF_URL)) finishNativeSignIn(url);
   });
 }
 
@@ -1544,31 +1548,16 @@ $("transcribe-back").addEventListener("click", () => {
   $("landing").hidden = false;
 });
 
-// Google will not sign in inside the app's web view, so the app sends the user
-// to the browser, and Communicator hands back a one-time code (see
-// /auth/handoff there). The verifier never leaves this page; only its hash
-// goes with the sign-in.
-async function startNativeSignIn() {
-  const verifier = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
-  const challenge = btoa(String.fromCharCode(...digest)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  sessionStorage.setItem("handoff_verifier", verifier);
-  await shell.browser.open({ url: communicator.handoffLoginUrl(HANDOFF_URL, challenge) });
-}
-
-async function finishNativeSignIn(url) {
-  shell.browser.close().catch(() => {});
-  const code = new URL(url).searchParams.get("code");
-  const verifier = sessionStorage.getItem("handoff_verifier");
-  sessionStorage.removeItem("handoff_verifier");
-  if (!code || !verifier) return toast(t("signInFailed"));
+// In the app: Android's own "Sign in with Google" sheet. The token it yields is
+// the account, for Communicator and Eliezer alike.
+async function signInWithGoogle() {
   try {
-    const { upgraded } = await communicator.redeemHandoff(code, verifier);
-    location.replace(upgraded ? "/#upgraded" : "/");
-  } catch {
-    toast(t("signInFailed"));
+    await googleIdToken(true);
+  } catch (err) {
+    if (err?.code !== "cancelled") toast(t("googleFailed"));
+    return;
   }
+  location.replace("/");
 }
 
 function signInLink(node) {
@@ -1579,9 +1568,17 @@ function signInLink(node) {
   node.href = "#";
   node.addEventListener("click", (event) => {
     event.preventDefault();
-    startNativeSignIn().catch((err) => toast(t("error", err.message)));
+    signInWithGoogle();
   });
   return node;
+}
+
+// Signing out of the app forgets the Google account chosen on the phone; there
+// is no session of Communicator's to end.
+async function leaveApp() {
+  await shell.ivrit.forgetGoogle().catch(() => {});
+  googleToken = null;
+  location.replace("/");
 }
 
 // What a notification needs to show while the app is closed.
@@ -1601,6 +1598,18 @@ async function start() {
   setLocale(detectLocale());
   renderLocaleSwitches();
   showIosHint();
+  if (shell) {
+    // A Google account is the only way in: no account-less use in the app.
+    $("anon").hidden = true;
+    document.querySelector('[data-i18n="anonCaveat"]').hidden = true;
+    const signedIn = await googleIdToken(false).then(() => true, (err) => err?.code);
+    if (signedIn === "no_account" || (signedIn !== true && !(await store.getMeta("owner").catch(() => null)))) {
+      if (location.hash === "#shared") return showSharedSignedOut();
+      $("landing").hidden = false;
+      document.body.dataset.started = "1";
+      return;
+    }
+  }
   try {
     state.me = await api("/api/me");
   } catch (err) {
