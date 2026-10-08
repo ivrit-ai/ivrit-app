@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login Result</title>
+    <!-- ?v= — see ARCHITECTURE.md, Static Asset Versioning -->
+    <script src="/static/i18n.js?v={{ backend_version }}"></script>
+    <script>
+    window.onload = function() {
+        if ({{ success|tojson }}) {
+            window.opener.postMessage({type: 'login_success'}, '*');
+        } else {
+            const message = {{ message|default('Login failed')|tojson }};
+            const isI18nKey = {{ i18n_key|default(false)|tojson }};
+            const translatedMessage = isI18nKey && window.I18N ? window.I18N.t(message) : message;
+            window.opener.postMessage({type: 'login_failure', message: translatedMessage}, '*');
+        }
+        window.close();
+    }
+    </script>
+</head>
+<body>
+    <p>{{ 'Login successful' if success else 'Login failed' }}</p>
+    <p>This window will close automatically.</p>
+</body>
+</html>

@@ -1,0 +1,15 @@
+uploads
+.env
+.env.*
+*_key.txt
+*.key
+*.pem
+*.log
+*.log.*
+secrets/
+.venv/
+venv/
+**/__pycache__/
+certs/
+build/
+dist/
