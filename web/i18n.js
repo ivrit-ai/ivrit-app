@@ -280,7 +280,7 @@ const STRINGS = {
     ],
     helpAppFailed: () => [
       "Check that the phone is online, then close and reopen the app.",
-      "If it keeps happening, write to support@ivrit.ai.",
+      "If it keeps happening, write to info@ivrit.ai.",
     ],
     openSettings: "Open settings",
     bannerNoPopup: "Messages arrive, but don't pop up on screen.",
@@ -583,7 +583,7 @@ const STRINGS = {
     ],
     helpAppFailed: () => [
       "ודאו שיש חיבור לאינטרנט, ואז סגרו ופתחו מחדש את האפליקציה.",
-      "אם זה חוזר, כתבו לנו: support@ivrit.ai.",
+      "אם זה חוזר, כתבו לנו: info@ivrit.ai.",
     ],
     openSettings: "פתיחת ההגדרות",
     bannerNoPopup: "ההודעות מגיעות, אבל לא קופצות על המסך.",
