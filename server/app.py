@@ -673,6 +673,12 @@ HUB_MODE = hub.ENABLED and not in_local_mode
 # page moves to /transcribe until the app's own pages do everything it does.
 APP_SITE = app_site.available() and not in_local_mode
 HUB_MAX_RUNNING = int(os.environ.get("HUB_MAX_RUNNING", "50"))
+# Rolling out: who may transcribe here (comma-separated emails); unset, everyone.
+TRANSCRIBE_USERS = {e.strip().lower() for e in os.environ.get("APP_TRANSCRIBE_USERS", "").split(",") if e.strip()}
+
+
+def may_transcribe(user_email: Optional[str]) -> bool:
+    return not TRANSCRIBE_USERS or bool(user_email and user_email.lower() in TRANSCRIBE_USERS)
 HUB_HEARTBEAT_SECONDS = 30
 hub_jobs = {}
 hub_running = {}
@@ -3779,6 +3785,9 @@ async def validate_upload_request_metadata(
     if not user_email:
         return None, JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
 
+    if not may_transcribe(user_email):
+        return None, JSONResponse({"error": "errorServiceUnavailable", "i18n_key": "errorServiceUnavailable"}, status_code=403)
+
     normalized_runpod_token = get_session_runpod_token(request)
     has_private_credentials = bool(normalized_runpod_token)
 
@@ -4832,6 +4841,7 @@ if APP_SITE:
         current = renewed or session
         response = JSONResponse({
             "signedIn": True,
+            "allowed": may_transcribe(current["user_email"]),
             "email": current["user_email"],
             "runpodKeyStatus": runpod_key_status(current),
             "quotaIncreaseUrl": QUOTA_INCREASE_URL,

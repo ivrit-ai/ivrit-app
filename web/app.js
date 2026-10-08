@@ -1480,7 +1480,8 @@ async function showTranscribeApp() {
       return false;
     }
     $("transcribe-connect").hidden = bootData.signedIn;
-    if (!bootData.signedIn) return false;
+    $("transcribe-soon").hidden = bootData.allowed !== false;
+    if (!bootData.signedIn || bootData.allowed === false) return false;
     await transcribeView.mount($("transcribe-mount"), {
       // The server no longer knows this browser (signed out elsewhere, or a long
       // absence): connect again, and come back here.
