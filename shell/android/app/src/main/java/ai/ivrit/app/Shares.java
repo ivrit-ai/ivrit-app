@@ -41,13 +41,15 @@ final class Shares {
         final String name;
         final String type;
         final long durationMs;
+        final String origin;
 
-        Entry(String id, File file, String name, String type, long durationMs) {
+        Entry(String id, File file, String name, String type, long durationMs, String origin) {
             this.id = id;
             this.file = file;
             this.name = name;
             this.type = type;
             this.durationMs = durationMs;
+            this.origin = origin;
         }
     }
 
@@ -71,16 +73,38 @@ final class Shares {
         }
         if (uris.isEmpty()) return false;
         String fallbackType = intent.getType();
+        String sender = senderOf(intent);
         Context app = context.getApplicationContext();
         COPIER.execute(() -> {
             long stamp = System.currentTimeMillis();
-            for (int i = 0; i < uris.size(); i++) copy(app, uris.get(i), stamp + "-" + i, fallbackType);
+            for (int i = 0; i < uris.size(); i++) copy(app, uris.get(i), stamp + "-" + i, fallbackType, sender);
             done.run();
         });
         return true;
     }
 
-    private static void copy(Context context, Uri uri, String id, String fallbackType) {
+    /** The app a share came from, when Android says (not every sender is named). */
+    private static String senderOf(Intent intent) {
+        Uri referrer = intent.getParcelableExtra(Intent.EXTRA_REFERRER);
+        if (referrer != null && referrer.getHost() != null) return referrer.getHost();
+        String name = intent.getStringExtra(Intent.EXTRA_REFERRER_NAME);
+        return name != null ? Uri.parse(name).getHost() : null;
+    }
+
+    /**
+     * Where a shared recording came from, for the app to show: "whatsapp", or ""
+     * when unknown. WhatsApp hands its files over through its own provider
+     * (content://com.whatsapp.provider.media/..., and com.whatsapp.w4b for
+     * WhatsApp Business), which identifies it even when Android names no sender.
+     */
+    private static String originOf(Uri uri, String sender) {
+        String authority = uri.getAuthority() != null ? uri.getAuthority() : "";
+        String from = sender != null ? sender : "";
+        if (authority.startsWith("com.whatsapp") || from.startsWith("com.whatsapp")) return "whatsapp";
+        return "";
+    }
+
+    private static void copy(Context context, Uri uri, String id, String fallbackType, String sender) {
         String type = context.getContentResolver().getType(uri);
         if (type == null) type = fallbackType != null ? fallbackType : "application/octet-stream";
         String name = displayName(context, uri);
@@ -89,7 +113,11 @@ final class Shares {
             if (in == null) return;
             byte[] buffer = new byte[64 * 1024];
             for (int n; (n = in.read(buffer)) > 0; ) out.write(buffer, 0, n);
-            JSONObject meta = new JSONObject().put("name", name).put("type", type).put("durationMs", durationOf(file));
+            JSONObject meta = new JSONObject()
+                .put("name", name)
+                .put("type", type)
+                .put("durationMs", durationOf(file))
+                .put("origin", originOf(uri, sender));
             try (OutputStream m = new FileOutputStream(new File(dir(context), id + ".json"))) {
                 m.write(meta.toString().getBytes(StandardCharsets.UTF_8));
             }
@@ -135,7 +163,9 @@ final class Shares {
         if (!file.isFile() || !meta.isFile()) return null;
         try {
             JSONObject m = new JSONObject(read(meta));
-            return new Entry(id, file, m.optString("name"), m.optString("type", "application/octet-stream"), m.optLong("durationMs", -1));
+            return new Entry(
+                id, file, m.optString("name"), m.optString("type", "application/octet-stream"), m.optLong("durationMs", -1), m.optString("origin", "")
+            );
         } catch (Exception e) {
             return null;
         }
@@ -165,6 +195,7 @@ final class Shares {
                     .put("type", entry.type)
                     .put("size", entry.file.length())
                     .put("durationMs", entry.durationMs)
+                    .put("origin", entry.origin)
             );
         }
         return out;

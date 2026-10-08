@@ -144,8 +144,13 @@ function avatar({ icon: src, name }, big = false) {
 }
 
 function messageAvatar(message) {
-  // The app's own transcriptions carry the app's mark.
-  if (message.source_id === APP_SOURCE) return avatar({ icon: "/icons/icon-192.png", name: "ivrit.ai" });
+  // The app's own transcriptions: WhatsApp's mark for a recording shared from
+  // WhatsApp, the app's for any other.
+  if (isAppMessage(message)) {
+    return message.source_id === WHATSAPP_SOURCE
+      ? avatar({ icon: "/icons/whatsapp.svg", name: "WhatsApp" })
+      : avatar({ icon: "/icons/icon-192.png", name: "ivrit.ai" });
+  }
   const source = sourceOf(message);
   return avatar({ icon: source?.icon, name: sourceName(message) });
 }
@@ -455,6 +460,7 @@ async function refreshInbox({ fromServer = true } = {}) {
 // ---------------------------------------------------------------- inbox
 
 function filterKey(m) {
+  if (isAppMessage(m)) return `s:${APP_SOURCE}`;
   return m.source_id ? `s:${m.source_id}` : `p:${m.source}`;
 }
 
@@ -1042,7 +1048,14 @@ const SHARE_CACHE = "share-inbox";
 async function sharedFiles() {
   if (shell) {
     const { files } = await shell.ivrit.sharedFiles();
-    return files.map((f) => ({ key: f.id, name: f.name || t("sharedUnnamed"), type: f.type, size: f.size, durationMs: f.durationMs }));
+    return files.map((f) => ({
+      key: f.id,
+      name: f.name || t("sharedUnnamed"),
+      type: f.type,
+      size: f.size,
+      durationMs: f.durationMs,
+      origin: f.origin || "",
+    }));
   }
   const cache = await caches.open(SHARE_CACHE);
   const files = [];
@@ -1086,6 +1099,11 @@ async function sendToTranscribe(file) {
 // is involved. The result is fetched back and kept here as a message from the
 // app itself (APP_SOURCE), with the app's mark.
 const APP_SOURCE = "ivrit-app";
+// The same, for a recording shared from WhatsApp (shown with WhatsApp's mark instead).
+const WHATSAPP_SOURCE = "ivrit-app:whatsapp";
+function isAppMessage(m) {
+  return m.source_id === APP_SOURCE || m.source_id === WHATSAPP_SOURCE;
+}
 const ELIEZER_MAX_SECONDS = 600;
 const ELIEZER_MAX_BYTES = 20 * 1024 * 1024;
 const POLL_MS = 3000;
@@ -1119,13 +1137,13 @@ function clock(seconds) {
 }
 
 // A job, as a message in the inbox: waiting, its transcript, or why there is none.
-function jobMessage(job) {
+function jobMessage(job, origin) {
   const failed = job.status === "failed";
   return {
     id: `app-${job.job_id}`,
     created_at: Math.round(job.created_at * 1000),
     source: "ivrit.ai",
-    source_id: APP_SOURCE,
+    source_id: origin === "whatsapp" ? WHATSAPP_SOURCE : APP_SOURCE,
     // Without its extension: "הודעה.ogg" would read backwards in a Hebrew line.
     title: job.filename?.replace(/\.[a-z0-9]{1,5}$/i, "") || null,
     subtitle: job.duration ? clock(job.duration) : null,
@@ -1155,7 +1173,9 @@ async function pollJobs() {
   for (const id of ids) {
     try {
       const job = await eliezer(`/app/v1/jobs/${encodeURIComponent(id)}`);
-      await store.put([jobMessage(job)]);
+      // Where the recording came from is known only here, from when it was shared.
+      const existing = await store.get(`app-${id}`).catch(() => null);
+      await store.put([jobMessage(job, existing?.source_id === WHATSAPP_SOURCE ? "whatsapp" : "")]);
       if (job.status === "queued") left.push(id);
     } catch (err) {
       // Gone (older than three days, or another account): stop asking.
@@ -1202,7 +1222,9 @@ async function transcribeHere(file) {
       return false;
     }
     const { job_id } = JSON.parse(res.body);
-    await store.put([jobMessage({ job_id, status: "queued", filename: file.name, created_at: Date.now() / 1000, duration: file.durationMs / 1000 })]);
+    await store.put([
+      jobMessage({ job_id, status: "queued", filename: file.name, created_at: Date.now() / 1000, duration: file.durationMs / 1000 }, file.origin),
+    ]);
     await setPendingJobs([...(await pendingJobs()), job_id]);
     await discardShared(file.key);
     return true;
@@ -1211,28 +1233,51 @@ async function transcribeHere(file) {
   }
 }
 
+// A recording Eliezer does not take (over 10 minutes or 20 MB, or no readable
+// length) is not supported in the app for now: it is answered at once, in the
+// inbox, and let go.
+async function refuseShared(file) {
+  const reason = file.durationMs > ELIEZER_MAX_SECONDS * 1000 ? "appError_too_long" : file.size > ELIEZER_MAX_BYTES ? "appError_too_large" : "appError_unsupported";
+  await store.put([
+    {
+      id: `app-local-${file.key}`,
+      created_at: Date.now(),
+      source: "ivrit.ai",
+      source_id: file.origin === "whatsapp" ? WHATSAPP_SOURCE : APP_SOURCE,
+      title: file.name.replace(/\.[a-z0-9]{1,5}$/i, ""),
+      subtitle: file.durationMs > 0 ? clock(file.durationMs / 1000) : null,
+      body: t(reason),
+      kind: "notice",
+    },
+  ]);
+  await discardShared(file.key);
+}
+
 // What was just shared into the app: whatever Eliezer takes is sent at once,
-// without asking, and appears in the inbox as it is transcribed. Anything else
-// waits in the Transcribe tab.
+// without asking, and appears in the inbox as it is transcribed; anything else
+// is answered there as not supported. Only a send that failed waits in the
+// Transcribe tab, to be tried again.
 async function takeShared() {
   if (!state.me || state.me.offline) return;
   const files = await sharedFiles().catch(() => []);
   if (!files.length) return;
-  let sent = 0;
-  for (const file of files.filter(fitsEliezer)) if (await transcribeHere(file)) sent++;
-  const left = files.length - sent;
-  if (sent) {
-    await loadMessages();
+  let failed = 0;
+  for (const file of files) {
+    if (!fitsEliezer(file)) await refuseShared(file);
+    else if (!(await transcribeHere(file))) failed++;
+  }
+  await loadMessages();
+  if (files.length > failed) {
     toast(t("transcribing"));
     watchJobs();
   }
-  showView(left ? "transcribe" : "inbox");
+  showView(failed ? "transcribe" : "inbox");
 }
 
 async function renderTranscribe() {
   $("transcribe-open").href = `${config.transcribe}/`;
   const box = $("shared");
-  const files = await sharedFiles().catch(() => []);
+  const files = (await sharedFiles().catch(() => [])).filter((file) => !shell || fitsEliezer(file));
   box.hidden = !files.length;
   if (!files.length) return box.replaceChildren();
   box.replaceChildren(
@@ -1248,7 +1293,6 @@ async function renderTranscribe() {
             el("div", { class: "sub" }, [
               el("bdi", { dir: "ltr", text: [file.durationMs > 0 ? clock(file.durationMs / 1000) : null, formatSize(file.size)].filter(Boolean).join(" · ") }),
             ]),
-            eliezerReady() && !fitsEliezer(file) ? el("div", { class: "sub", text: t("tooBigHere") }) : null,
           ]),
           // Normally sent on arrival (takeShared); here only if that failed.
           fitsEliezer(file)
