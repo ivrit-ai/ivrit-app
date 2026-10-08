@@ -4996,20 +4996,27 @@ if APP_SITE:
             granted = set(tokens.get("scope", "").split())
             if "https://www.googleapis.com/auth/drive.file" not in granted or not tokens.get("refresh_token"):
                 return JSONResponse({"error": "errorDrivePermissionsRequired"}, status_code=403)
-            async with http.get("https://www.googleapis.com/oauth2/v2/userinfo",
+            # Whose Drive: the phone asks for Drive access alone, which Drive itself
+            # answers for (its "about"), where Google's userinfo would not.
+            async with http.get("https://www.googleapis.com/drive/v3/about", params={"fields": "user"},
                                 headers={"Authorization": f"Bearer {tokens['access_token']}"}) as r:
-                info = await r.json()
-        email, sub = info.get("email"), str(info.get("id") or "")
+                about = await r.json() if r.status == 200 else {}
+        email = (about.get("user") or {}).get("emailAddress")
         if not email:
+            logger.warning("Drive code exchange: no account in Drive's answer (%s)", list(about))
             return JSONResponse({"error": "exchange_failed"}, status_code=401)
+        sub = ""
         header = request.headers.get("authorization", "")
         if sessions and header.startswith("Bearer "):
             try:
                 claims = sessions.verify(header[7:])
-            except Exception:
+            except Exception as exc:
+                logger.warning("Drive code exchange: app session rejected: %r", exc)
                 return JSONResponse({"error": "invalid_session"}, status_code=401)
-            if claims["sub"] != sub:
+            if claims["email"].lower() != email.lower():
+                logger.warning("Drive code exchange: Drive account differs from the app's")
                 return JSONResponse({"error": "different_account"}, status_code=409)
+            sub = claims["sub"]
         refresh_token = tokens["refresh_token"]
         try:
             runpod_token, load_failed = await runpod_key_store.load(refresh_token), False
