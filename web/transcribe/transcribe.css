@@ -1,0 +1,2040 @@
+/* transcribe.ivrit.ai's page styles, scoped to #transcribe-app (generated once from
+   server/templates/index.html; edit here from now on). */
+/* transcribe.ivrit.ai's colour tokens, under the names its code reads, with the app's values. */
+#transcribe-app {
+  --bg-color: #f7f6f3;
+  --container-bg: #ffffff;
+  --text-color: #111110;
+  --border-color: #dcdad4;
+  --primary-color: #4caf50;
+  --secondary-color: #efede8;
+  --input-bg: #ffffff;
+}
+[data-theme="dark"] #transcribe-app {
+  --bg-color: #111110;
+  --container-bg: #1d1d1b;
+  --text-color: #f2f1ed;
+  --border-color: #2f2e2b;
+  --primary-color: #66bb6a;
+  --secondary-color: #191917;
+  --input-bg: #191917;
+}
+/* Colour tokens come from static/theme.css; these are layout-only. */
+#transcribe-app {
+        --shell-max: 1100px;
+        /* Kept in sync with the real header height by JS; the viewer's own
+           sticky bar parks underneath it. */
+        --app-header-h: 96px;
+      }
+#transcribe-app {
+        font-family: Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        min-height: 100dvh;
+        margin: 0;
+        background-color: var(--bg-color);
+        color: var(--text-color);
+      }
+/* App shell. Never give these elements transform/filter/backdrop-filter/
+         contain: any of them would make the shell a containing block for the
+         position:fixed modals, toasts and overlays nested inside it. */
+#transcribe-app .app-header {
+        position: sticky;
+        top: 0;
+        z-index: 120;
+        background-color: var(--container-bg);
+        border-bottom: 1px solid var(--border-color);
+      }
+#transcribe-app .app-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        max-width: var(--shell-max);
+        margin-inline: auto;
+        padding: 0.6rem 1rem;
+      }
+#transcribe-app .app-bar h1 {
+        flex: 1;
+        min-width: 0;
+        font-size: 1.15rem;
+        margin: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+#transcribe-app .app-main {
+        flex: 1;
+        width: 100%;
+        max-width: var(--shell-max);
+        margin-inline: auto;
+        padding: 1.5rem 1rem 2rem;
+        box-sizing: border-box;
+      }
+#transcribe-app .app-footer {
+        width: 100%;
+        max-width: var(--shell-max);
+        margin-inline: auto;
+        padding: 0 1rem 2rem;
+        box-sizing: border-box;
+      }
+/* The upload form reads better narrow; the file table, the transcript and
+         the stats dashboard need the full shell width. */
+#transcribe-app #tab-transcribe {
+        max-width: 640px;
+        margin-inline: auto;
+        text-align: center;
+      }
+#transcribe-app .panel {
+        background-color: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 16px;
+        padding: 1.5rem;
+      }
+/* Only revealed when the browser can actually install the app, so it has to
+         read as an offer rather than as one more header icon. */
+#transcribe-app .install-btn {
+        display: none;
+        flex: none;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.3rem 0.7rem;
+        font-family: inherit;
+        font-size: 0.85rem;
+        color: var(--primary-color);
+        background: none;
+        border: 1px solid var(--primary-color);
+        border-radius: 999px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+#transcribe-app .install-btn:hover {
+        background-color: var(--secondary-color);
+      }
+#transcribe-app .install-btn svg, #transcribe-app .install-btn i[data-lucide] {
+        width: 16px;
+        height: 16px;
+      }
+#transcribe-app .icon-btn {
+        flex: none;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        border-radius: 50%;
+        cursor: pointer;
+        color: var(--text-color);
+        opacity: 0.7;
+        transition: background-color 0.2s, opacity 0.2s;
+      }
+#transcribe-app .icon-btn:hover {
+        background-color: var(--secondary-color);
+        opacity: 1;
+      }
+#transcribe-app .icon-btn svg, #transcribe-app .icon-btn i[data-lucide] {
+        width: 22px;
+        height: 22px;
+      }
+#transcribe-app .lang-menu .dropdown {
+        position: relative;
+        display: inline-block;
+      }
+#transcribe-app .lang-menu .dropdown-content {
+        display: none;
+        position: absolute;
+        top: 100%;
+        inset-inline-start: 0;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        padding: 0.25rem 0;
+        min-width: 120px;
+        z-index: 200;
+      }
+#transcribe-app .lang-menu .dropdown:hover .dropdown-content {
+        display: block;
+      }
+#transcribe-app .lang-menu .dropdown-content button {
+        display: block;
+        width: 100%;
+        background: none;
+        border: none;
+        text-align: start;
+        padding: 0.4rem 0.75rem;
+        cursor: pointer;
+        color: var(--text-color);
+      }
+#transcribe-app .lang-menu .dropdown-content button:hover {
+        background: var(--secondary-color);
+        color: var(--primary-color);
+      }
+#transcribe-app .balance-container {
+        display: none;
+      }
+#transcribe-app .balance-container.visible {
+        display: flex;
+      }
+#transcribe-app .balance-container.compact-balance {
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 999px;
+        padding: 0.3rem 0.7rem;
+        font-size: 0.85rem;
+        align-items: center;
+        gap: 0.4rem;
+        white-space: nowrap;
+      }
+#transcribe-app .balance-container.compact-balance .balance-icon {
+        display: none;
+      }
+#transcribe-app .balance-container.compact-balance a {
+        font-size: 0.8rem;
+        text-decoration: underline;
+      }
+#transcribe-app .balance-icon svg {
+        width: 18px;
+        height: 18px;
+        color: var(--primary-color);
+        flex-shrink: 0;
+      }
+#transcribe-app .balance-text {
+        display: flex;
+        align-items: baseline;
+        gap: 0.4rem;
+        white-space: nowrap;
+      }
+#transcribe-app .balance-label {
+        font-weight: 600;
+        color: var(--text-color);
+        font-size: 0.8rem;
+      }
+#transcribe-app .balance-amount {
+        color: var(--primary-color);
+        font-weight: 700;
+        font-size: 0.95rem;
+      }
+/* After .balance-amount: JS appends this class to it while the figure loads. */
+#transcribe-app .balance-loading {
+        color: #6c757d;
+        font-style: italic;
+      }
+#transcribe-app .modal {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+      }
+#transcribe-app .modal.show {
+        display: block;
+      }
+#transcribe-app .modal-content {
+        background-color: var(--container-bg);
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        box-sizing: border-box;
+        width: 90%;
+        max-width: 480px;
+        max-height: 90vh;
+        overflow-y: auto;
+        text-align: right;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+      }
+#transcribe-app .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.25rem;
+        padding-bottom: 0.75rem;
+      }
+#transcribe-app .modal-header h2 {
+        margin: 0;
+        font-size: 1.4rem;
+        color: var(--text-color);
+      }
+#transcribe-app .close {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        padding: 0;
+        color: var(--text-color);
+      }
+#transcribe-app .close:hover {
+        color: var(--primary-color);
+      }
+#transcribe-app .form-group {
+        margin-bottom: 1rem;
+        text-align: left;
+      }
+#transcribe-app .form-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: bold;
+        color: var(--text-color);
+      }
+#transcribe-app .form-group input {
+        width: 100%;
+        padding: 0.5rem;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        font-size: 1rem;
+        box-sizing: border-box;
+        text-align: left;
+        direction: ltr;
+        background-color: var(--input-bg);
+        color: var(--text-color);
+      }
+#transcribe-app .form-group input:focus {
+        outline: none;
+        border-color: var(--primary-color);
+      }
+#transcribe-app .form-help a {
+        color: var(--primary-color);
+        text-decoration: none;
+        font-weight: 600;
+      }
+#transcribe-app .form-help a:hover {
+        text-decoration: underline;
+      }
+#transcribe-app .modal-buttons {
+        display: flex;
+        justify-content: flex-start;
+        gap: 0.75rem;
+        margin-top: 1.5rem;
+        padding-top: 1rem;
+      }
+#transcribe-app .btn {
+        padding: 0.6rem 1.2rem;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 500;
+        transition: all 0.2s ease;
+        min-height: 40px;
+      }
+#transcribe-app .btn-primary {
+        background-color: var(--primary-color);
+        color: white;
+      }
+#transcribe-app .btn-secondary {
+        background-color: var(--secondary-color);
+        color: var(--text-color);
+        border: 1px solid var(--border-color);
+      }
+#transcribe-app .btn-secondary:hover {
+        background-color: var(--container-bg);
+        border-color: var(--primary-color);
+        opacity: 1;
+      }
+#transcribe-app .btn:hover {
+        opacity: 0.85;
+      }
+#transcribe-app .btn-primary:hover {
+        opacity: 0.9;
+      }
+#transcribe-app .settings-section {
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border-color);
+      }
+#transcribe-app .settings-section:last-of-type {
+        border-bottom: none;
+        margin-bottom: 0.5rem;
+      }
+#transcribe-app .settings-section h3 {
+        font-size: 1.1rem;
+        color: var(--text-color);
+        margin: 0 0 0.75rem 0;
+        font-weight: 600;
+        text-align: right;
+      }
+#transcribe-app .form-label {
+        display: block;
+        font-weight: 500;
+        color: var(--text-color);
+        margin-bottom: 0.5rem;
+        text-align: right;
+        font-size: 0.95rem;
+      }
+#transcribe-app .form-help {
+        display: block;
+        font-size: 0.8rem;
+        color: var(--text-color);
+        opacity: 0.65;
+        margin-top: 0.25rem;
+        text-align: right;
+        line-height: 1.3;
+      }
+#transcribe-app .radio-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+#transcribe-app .radio-option {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.6rem 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        background-color: var(--secondary-color);
+        direction: rtl;
+        min-height: 44px;
+        position: relative;
+      }
+#transcribe-app .radio-option:hover {
+        border-color: var(--primary-color);
+        background-color: var(--container-bg);
+      }
+#transcribe-app .radio-option input[type="radio"] {
+        margin: 0;
+        width: 16px;
+        height: 16px;
+        accent-color: var(--primary-color);
+        flex-shrink: 0;
+        position: absolute;
+        left: 0.75rem;
+      }
+#transcribe-app .radio-option .radio-content {
+        flex: 1;
+        text-align: right;
+        direction: rtl;
+        padding-left: 2rem;
+      }
+#transcribe-app .radio-option .radio-text {
+        font-weight: 500;
+        color: var(--text-color);
+        font-size: 0.9rem;
+        display: block;
+        margin-bottom: 0.1rem;
+        text-align: right;
+        direction: rtl;
+      }
+#transcribe-app .radio-option small {
+        font-size: 0.75rem;
+        color: var(--text-color);
+        opacity: 0.6;
+        line-height: 1.2;
+        text-align: right;
+        direction: rtl;
+      }
+#transcribe-app .radio-option input[type="radio"]:checked ~ .radio-content .radio-text {
+        color: var(--primary-color);
+        font-weight: 600;
+      }
+#transcribe-app #drop-area p {
+        margin: 0;
+      }
+#transcribe-app #drop-area {
+        border: 2px dashed var(--border-color);
+        border-radius: 12px;
+        padding: 1.25rem;
+        cursor: pointer;
+        background: linear-gradient(
+          135deg,
+          var(--secondary-color) 0%,
+          rgba(76, 175, 80, 0.12) 50%,
+          var(--secondary-color) 100%
+        );
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+      }
+#transcribe-app #drop-area::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(
+          45deg,
+          transparent 40%,
+          rgba(76, 175, 80, 0.03) 50%,
+          transparent 60%
+        );
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+#transcribe-app #drop-area:hover::before {
+        opacity: 1;
+      }
+#transcribe-app #drop-area:hover {
+        border-color: var(--primary-color);
+        background: linear-gradient(
+          135deg,
+          rgba(76, 175, 80, 0.08) 0%,
+          rgba(76, 175, 80, 0.15) 50%,
+          rgba(76, 175, 80, 0.08) 100%
+        );
+        transform: translateY(-2px);
+      }
+#transcribe-app #drop-area.highlight {
+        border-color: var(--primary-color);
+        background: linear-gradient(
+          135deg,
+          rgba(76, 175, 80, 0.1) 0%,
+          rgba(76, 175, 80, 0.2) 50%,
+          rgba(76, 175, 80, 0.1) 100%
+        );
+        transform: translateY(-3px);
+      }
+#transcribe-app #file-input {
+        display: none;
+      }
+#transcribe-app #file-name {
+        margin-top: 1rem;
+        font-weight: bold;
+      }
+#transcribe-app #transcribe-btn {
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        font-size: 1rem;
+        cursor: pointer;
+        border-radius: 8px;
+        margin-top: 1rem;
+        transition: all 0.3s ease;
+      }
+#transcribe-app #transcribe-btn:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+      }
+#transcribe-app #transcribe-btn:disabled {
+        background-color: var(--border-color);
+        cursor: not-allowed;
+      }
+/* Ensure perfect alignment of language select and transcribe button */
+#transcribe-app .transcribe-controls #transcribe-btn {
+        margin-top: 0;
+        height: 40px;
+        padding: 0 1rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+#transcribe-app .transcribe-controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+#transcribe-app #language-select {
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        height: 40px;
+        padding: 0 0.75rem; /* ~12px to match button's horizontal padding scale */
+        color: var(--text-color);
+        font-size: 1rem;
+      }
+#transcribe-app #progress-container {
+        width: 100%;
+        background-color: #f0f0f0;
+        border-radius: 4px;
+        margin-top: 1rem;
+        display: none;
+      }
+#transcribe-app #progress-bar {
+        width: 0;
+        height: 20px;
+        background-color: #4caf50;
+        border-radius: 4px;
+        transition: width 0.3s;
+      }
+#transcribe-app #progress-status {
+        display: none;
+        margin-top: 0.4rem;
+        text-align: center;
+        font-size: 0.9rem;
+        color: var(--text-color);
+        opacity: 0.8;
+      }
+#transcribe-app #transcription-container {
+        position: relative;
+        margin: 1rem auto 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+#transcribe-app #transcription {
+        width: 100%;
+        height: 200px;
+        border: 2px solid var(--border-color);
+        padding: 1rem;
+        text-align: right;
+        white-space: pre-wrap;
+        overflow-y: auto;
+        resize: vertical;
+        font-size: 1rem;
+        border-radius: 8px;
+        background-color: var(--input-bg);
+        color: var(--text-color);
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+        line-height: 1.5;
+      }
+#transcribe-app .speaker {
+        font-weight: bold;
+        cursor: default;
+      }
+#transcribe-app .edit-mode-active .speaker {
+        cursor: pointer;
+      }
+#transcribe-app .speaker-1 { color: #2196F3; }
+/* Blue */
+#transcribe-app .speaker-2 { color: #4CAF50; }
+/* Green */
+#transcribe-app .speaker-3 { color: #FF9800; }
+/* Orange */
+#transcribe-app .speaker-4 { color: #E91E63; }
+/* Pink */
+#transcribe-app .speaker-5 { color: #9C27B0; }
+/* Purple */
+#transcribe-app .speaker-6 { color: #F44336; }
+/* Red */
+#transcribe-app .speaker-7 { color: #00BCD4; }
+/* Cyan */
+#transcribe-app .speaker-8 { color: #8BC34A; }
+/* Light Green */
+#transcribe-app .speaker-9 { color: #FFC107; }
+/* Amber */
+#transcribe-app .speaker-10 { color: #607D8B; }
+/* Blue Grey */
+/* Dark theme speaker colors */
+[data-theme="dark"] #transcribe-app .speaker-1 { color: #64B5F6; }
+[data-theme="dark"] #transcribe-app .speaker-2 { color: #81C784; }
+[data-theme="dark"] #transcribe-app .speaker-3 { color: #FFB74D; }
+[data-theme="dark"] #transcribe-app .speaker-4 { color: #F06292; }
+[data-theme="dark"] #transcribe-app .speaker-5 { color: #BA68C8; }
+[data-theme="dark"] #transcribe-app .speaker-6 { color: #EF5350; }
+[data-theme="dark"] #transcribe-app .speaker-7 { color: #4DD0E1; }
+[data-theme="dark"] #transcribe-app .speaker-8 { color: #AED581; }
+[data-theme="dark"] #transcribe-app .speaker-9 { color: #FFD54F; }
+[data-theme="dark"] #transcribe-app .speaker-10 { color: #90A4AE; }
+#transcribe-app .transcript-segment {
+        transition: all 0.2s ease;
+        cursor: pointer;
+      }
+#transcribe-app .transcript-segment:hover {
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
+      }
+#transcribe-app .transcript-segment.playing {
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
+        text-decoration-color: var(--primary-color);
+        text-underline-offset: 2px;
+      }
+/* In edit mode, show text cursor on hover */
+#transcribe-app .edit-mode-active .transcript-segment {
+        cursor: text;
+      }
+#transcribe-app .transcript-segment.editing {
+        text-decoration: underline;
+        text-decoration-color: rgb(33, 150, 243);
+        text-decoration-thickness: 2px;
+        outline: none;
+        border: none;
+        box-shadow: none;
+      }
+[data-theme="dark"] #transcribe-app .transcript-segment.editing {
+        text-decoration: underline;
+        text-decoration-color: rgb(33, 150, 243);
+        text-decoration-thickness: 2px;
+        outline: none;
+        border: none;
+        box-shadow: none;
+      }
+/* Remove any default contentEditable outline/border */
+#transcribe-app .transcript-segment[contenteditable="true"]:focus {
+        outline: none;
+        border: none;
+        box-shadow: none;
+      }
+/* TipTap Editor Styles */
+#transcribe-app .tiptap-editor {
+        outline: none;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+#transcribe-app .tiptap-editor[dir="rtl"] {
+        direction: rtl;
+        text-align: right;
+      }
+#transcribe-app .tiptap-editor[dir="ltr"] {
+        direction: ltr;
+        text-align: left;
+      }
+#transcribe-app .tiptap-editor:focus {
+        outline: none;
+      }
+#transcribe-app .tiptap-editor .ProseMirror {
+        outline: none;
+        margin: 0;
+        padding: 0;
+      }
+#transcribe-app .tiptap-editor .ProseMirror p {
+        margin: 0;
+        padding: 0;
+      }
+#transcribe-app .tiptap-editor .ProseMirror:focus {
+        outline: none;
+      }
+#transcribe-app .tiptap-speaker-block {
+        display: block;
+      }
+#transcribe-app .tiptap-speaker-block + .tiptap-speaker-block {
+        margin-top: 1em;
+      }
+#transcribe-app .tiptap-segment {
+        display: inline;
+        cursor: text;
+      }
+#transcribe-app .tiptap-segment.highlighted, #transcribe-app .tiptap-editor .highlighted {
+        background-color: rgba(255, 193, 7, 0.3);
+        border-radius: 2px;
+        padding: 0px 2px;
+      }
+[data-theme="dark"] #transcribe-app .tiptap-segment.highlighted, [data-theme="dark"] #transcribe-app .tiptap-editor .highlighted {
+        background-color: rgba(255, 193, 7, 0.2);
+      }
+#transcribe-app .tiptap-segment.underlined {
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
+        text-decoration-color: rgba(255, 193, 7, 0.8);
+      }
+#transcribe-app .tiptap-segment.playing, #transcribe-app .tiptap-editor .playing {
+        text-decoration: underline;
+        text-decoration-thickness: 2px;
+        text-decoration-color: var(--primary-color);
+        text-underline-offset: 2px;
+      }
+/* Speaker label in TipTap - styled but not editable */
+#transcribe-app .tiptap-editor [data-speaker-label] {
+        cursor: pointer;
+        user-select: none;
+      }
+#transcribe-app .tiptap-editor [data-speaker-label]:hover {
+        text-decoration: underline;
+      }
+#transcribe-app .transcript-segment.highlighted {
+        background-color: rgba(255, 193, 7, 0.3);
+        border-radius: 2px;
+        padding: 2px 4px;
+        margin: -2px -4px;
+      }
+[data-theme="dark"] #transcribe-app .transcript-segment.highlighted {
+        background-color: rgba(255, 193, 7, 0.2);
+      }
+#transcribe-app .action-buttons {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 0.5rem;
+        margin-bottom: 0;
+      }
+#transcribe-app .actions-right, #transcribe-app .actions-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+#transcribe-app .action-buttons button {
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+#transcribe-app .action-buttons button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+#transcribe-app .download-menu {
+        position: relative;
+      }
+#transcribe-app .download-menu > button#download-menu-btn {
+        position: relative;
+      }
+#transcribe-app .download-menu > button#download-menu-btn:disabled {
+        cursor: not-allowed;
+      }
+#transcribe-app .download-menu {
+        display: inline-block;
+      }
+#transcribe-app .download-menu::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        height: 6px;
+      }
+#transcribe-app .download-dropdown {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        margin-top: 0;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        padding: 0.4rem 0;
+        min-width: 160px;
+        z-index: 200;
+        direction: rtl;
+        pointer-events: auto;
+      }
+#transcribe-app .download-menu:hover {
+        overflow: visible;
+      }
+#transcribe-app .download-menu:hover .download-dropdown {
+        display: block;
+      }
+#transcribe-app .download-menu:hover .download-dropdown {
+        display: block;
+      }
+#transcribe-app .download-dropdown button {
+        background: none;
+        border: none;
+        width: 100%;
+        text-align: right;
+        padding: 0.45rem 0.9rem;
+        cursor: pointer;
+        font-size: 0.8rem;
+        color: var(--text-color);
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        direction: rtl;
+      }
+#transcribe-app .download-dropdown-header {
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        padding: 0.35rem 0.9rem 0.25rem;
+        color: var(--text-color);
+        opacity: 0.7;
+        pointer-events: none;
+        border-bottom: 1px solid var(--border-color);
+        margin-bottom: 0.2rem;
+      }
+#transcribe-app .download-dropdown button:hover {
+        background: var(--secondary-color);
+        color: var(--primary-color);
+      }
+#transcribe-app .download-dropdown button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+#transcribe-app .hidden-download-original {
+        display: none !important;
+      }
+/* Standard inline SVG sizing inside action buttons */
+#transcribe-app .action-buttons button svg {
+        width: 20px;
+        height: 20px;
+      }
+/* Active indication for text-format toggle */
+#transcribe-app .action-buttons button.toggle-active {
+        background-color: var(--primary-color);
+        border-color: var(--primary-color);
+        color: #ffffff;
+      }
+#transcribe-app .action-buttons button.toggle-active i[data-lucide] {
+        color: #ffffff;
+      }
+#transcribe-app .action-buttons button.toggle-active svg {
+        color: #ffffff;
+      }
+/* Toggle emojis sizing */
+#transcribe-app #timestamps-toggle, #transcribe-app #diarization-toggle {
+        font-size: 18px;
+        line-height: 1;
+      }
+#transcribe-app #copy-btn {
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+#transcribe-app #copy-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+#transcribe-app #copy-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
+      }
+#transcribe-app #download-menu-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
+      }
+#transcribe-app #download-btn {
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+      }
+#transcribe-app #download-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+#transcribe-app #download-docx-btn {
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+#transcribe-app #download-docx-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+/* Sticky header for viewer tab (audio player + controls) */
+#transcribe-app #viewer-sticky-header {
+        position: sticky;
+        top: var(--app-header-h);
+        z-index: 90;
+        background-color: var(--container-bg);
+        padding: 1rem 0;
+        margin-bottom: 1rem;
+        border-bottom: 1px solid var(--border-color);
+      }
+/* Audio player in viewer tab */
+#transcribe-app #viewer-audio-player-container {
+        margin-bottom: 0.75rem;
+        display: none;
+      }
+#transcribe-app #viewer-audio-player-container.visible {
+        display: block;
+      }
+#transcribe-app #viewer-audio-player {
+        width: 100%;
+        max-width: 100%;
+        outline: none;
+      }
+/* Viewer processing state */
+#transcribe-app #viewer-processing-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 4rem 2rem;
+        text-align: center;
+      }
+#transcribe-app .processing-state-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+      }
+#transcribe-app .processing-spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid var(--border-color);
+        border-top-color: var(--primary-color);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+@keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+#transcribe-app #viewer-processing-title {
+        color: var(--text-color);
+        margin: 0;
+        font-size: 1.5rem;
+      }
+#transcribe-app .processing-status {
+        color: var(--text-color);
+        opacity: 0.8;
+        margin: 0;
+        font-size: 1rem;
+      }
+#transcribe-app .processing-eta {
+        color: var(--primary-color);
+        font-weight: 600;
+        margin: 0;
+        font-size: 1.1rem;
+      }
+#transcribe-app #download-docx-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
+      }
+#transcribe-app .support-link {
+        margin-top: 0.5rem;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.5rem;
+        text-decoration: none;
+        color: #000000;
+        font-weight: bold;
+        transition: opacity 0.2s;
+        flex-direction: row-reverse;
+      }
+#transcribe-app .support-link:hover {
+        opacity: 0.8;
+      }
+#transcribe-app .support-link img {
+        width: 24px;
+        height: 24px;
+      }
+#transcribe-app .links-container {
+        margin-top: 1.5rem;
+        display: flex;
+        justify-content: center;
+        gap: 0.5rem;
+        flex-direction: column;
+        align-items: center;
+      }
+#transcribe-app .contact-link {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.5rem;
+        text-decoration: none;
+        color: #2196f3;
+        font-weight: bold;
+        transition: opacity 0.2s;
+        flex-direction: row-reverse;
+      }
+#transcribe-app .contact-link:hover {
+        opacity: 0.8;
+      }
+#transcribe-app .contact-link svg {
+        width: 24px;
+        height: 24px;
+      }
+#transcribe-app .divider {
+        width: 80%;
+        height: 1px;
+        background-color: #e0e0e0;
+        margin: 1rem 0;
+      }
+#transcribe-app .display-options {
+        margin-top: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 1rem;
+      }
+#transcribe-app .slider-container {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+#transcribe-app .switch {
+        position: relative;
+        display: inline-block;
+        width: 48px;
+        height: 24px;
+      }
+#transcribe-app .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+#transcribe-app .slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: 0.4s;
+        border-radius: 24px;
+      }
+#transcribe-app .slider:before {
+        position: absolute;
+        content: "";
+        height: 18px;
+        width: 18px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: 0.4s;
+        border-radius: 50%;
+      }
+#transcribe-app input:checked + .slider {
+        background-color: #4caf50;
+      }
+#transcribe-app input:checked + .slider:before {
+        transform: translateX(24px);
+      }
+#transcribe-app .toast-container {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 2000;
+      }
+#transcribe-app .toast {
+        background-color: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem 1.5rem;
+        margin-bottom: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transform: translateX(400px);
+        opacity: 0;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        min-width: 300px;
+        max-width: 420px;
+        direction: rtl;
+        text-align: right;
+        line-height: 1.4;
+        white-space: normal;
+      }
+#transcribe-app .toast.show {
+        transform: translateX(0);
+        opacity: 1;
+      }
+#transcribe-app .toast.success {
+        border-left: 4px solid var(--primary-color);
+      }
+#transcribe-app .toast.error {
+        border-left: 4px solid #f44336;
+      }
+#transcribe-app .toast-message {
+        flex: 1;
+        color: var(--text-color);
+        white-space: normal;
+      }
+#transcribe-app .toast-close:hover {
+        opacity: 1;
+      }
+#transcribe-app .spinner-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        z-index: 3000;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+        gap: 1rem;
+      }
+#transcribe-app .spinner-overlay.show {
+        display: flex;
+      }
+#transcribe-app .spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid rgba(255, 255, 255, 0.3);
+        border-top-color: #ffffff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+@keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+#transcribe-app .spinner-message {
+        color: #ffffff;
+        font-size: 1.1rem;
+        font-weight: 500;
+        text-align: center;
+      }
+#transcribe-app .file-preview {
+        display: none;
+        background-color: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-top: 1rem;
+        text-align: right;
+      }
+#transcribe-app .file-preview.show {
+        display: block;
+      }
+#transcribe-app .file-info {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-direction: row-reverse;
+      }
+#transcribe-app .file-details {
+        flex: 1;
+        text-align: left;
+      }
+#transcribe-app .file-details strong {
+        display: block;
+        margin-bottom: 0.5rem;
+        color: var(--text-color);
+      }
+#transcribe-app .file-size {
+        font-size: 0.9rem;
+        color: var(--text-color);
+        opacity: 0.7;
+      }
+#transcribe-app .remove-file-btn {
+        background-color: #f2554a;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 0.5rem 1rem;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: all 0.3s ease;
+      }
+#transcribe-app .remove-file-btn:hover {
+        background-color: #f6463a;
+        transform: translateY(-1px);
+      }
+#transcribe-app .recovered-recording-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+#transcribe-app .site-footer {
+        margin-top: 2rem;
+        font-size: 0.75rem;
+        color: #777;
+        direction: rtl;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+        text-align: center;
+      }
+[data-theme="dark"] #transcribe-app .site-footer {
+        color: #aaa;
+      }
+#transcribe-app .site-footer a {
+        color: var(--primary-color);
+        text-decoration: none;
+        font-weight: 600;
+      }
+#transcribe-app .site-footer a:hover {
+        text-decoration: underline;
+      }
+/* Tab navigation styles */
+#transcribe-app .tabs {
+        display: flex;
+        gap: 0.5rem;
+        max-width: var(--shell-max);
+        margin-inline: auto;
+        padding-inline: 1rem;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+#transcribe-app .tabs::-webkit-scrollbar {
+        display: none;
+      }
+#transcribe-app .tab-button {
+        padding: 0.6rem 1.1rem;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 1rem;
+        font-weight: 500;
+        color: var(--text-color);
+        opacity: 0.6;
+        transition: all 0.2s ease;
+        border-bottom: 3px solid transparent;
+        white-space: nowrap;
+      }
+#transcribe-app .tab-button:hover {
+        opacity: 0.8;
+      }
+#transcribe-app .tab-button.active {
+        opacity: 1;
+        border-bottom-color: var(--primary-color);
+        color: var(--primary-color);
+      }
+#transcribe-app .tab-content {
+        display: none;
+      }
+#transcribe-app .tab-content.active {
+        display: block;
+      }
+/* Input method segmented control */
+#transcribe-app .input-method-bar {
+        display: flex;
+        background: var(--secondary-color);
+        border-radius: 8px;
+        padding: 3px;
+        margin-bottom: 1rem;
+        gap: 3px;
+      }
+#transcribe-app .input-method-btn {
+        flex: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+        padding: 0.45rem 0.5rem;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text-color);
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        opacity: 0.65;
+      }
+#transcribe-app .input-method-btn i {
+        width: 16px;
+        height: 16px;
+      }
+#transcribe-app .input-method-btn:hover {
+        opacity: 0.85;
+      }
+#transcribe-app .input-method-btn.active {
+        background: var(--container-bg);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        opacity: 1;
+      }
+#transcribe-app .input-method-panel {
+        display: none;
+      }
+#transcribe-app .input-method-panel.active {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: 4.5rem;
+        margin-bottom: 1rem;
+      }
+/* Files list styles */
+#transcribe-app .files-list {
+        margin-top: 1rem;
+      }
+#transcribe-app .file-item {
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        transition: all 0.2s ease;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+      }
+#transcribe-app .file-item-status {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+#transcribe-app .status-queued {
+        background-color: #9e9e9e;
+      }
+#transcribe-app .status-being-processed {
+        background-color: #2196f3;
+        animation: pulse 2s ease-in-out infinite;
+      }
+#transcribe-app .status-transcoding--- {
+        background-color: #2196f3;
+        animation: pulse 2s ease-in-out infinite;
+      }
+#transcribe-app .status-ready {
+        background-color: #4caf50;
+      }
+#transcribe-app .status-failed {
+        background-color: #e53935;
+      }
+@keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+#transcribe-app .file-item-info {
+        flex: 1;
+        text-align: right;
+        cursor: pointer;
+      }
+#transcribe-app .file-item-info:hover {
+        color: var(--primary-color);
+      }
+#transcribe-app .file-item-name {
+        font-weight: 600;
+        color: var(--text-color);
+        margin-bottom: 0.25rem;
+      }
+#transcribe-app .file-item-meta {
+        font-size: 0.85rem;
+        color: var(--text-color);
+        opacity: 0.6;
+      }
+#transcribe-app .file-item-actions {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        margin-left: 1rem;
+      }
+#transcribe-app .file-item-icon {
+        cursor: pointer;
+      }
+#transcribe-app .file-item-icon svg {
+        width: 24px;
+        height: 24px;
+        color: var(--primary-color);
+      }
+#transcribe-app .file-item-download-menu {
+        position: relative;
+        display: inline-block;
+      }
+#transcribe-app .file-item-download-menu .download-dropdown {
+        display: none;
+        position: absolute;
+        bottom: 100%;
+        right: 0;
+        margin-bottom: 0.25rem;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        padding: 0.4rem 0;
+        min-width: 140px;
+        z-index: 200;
+        direction: rtl;
+      }
+#transcribe-app .file-item-download-menu.open .download-dropdown {
+        display: block;
+      }
+#transcribe-app .file-item-download-btn {
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+      }
+#transcribe-app .file-item-download-btn:hover {
+        background: var(--container-bg);
+        border-color: var(--primary-color);
+      }
+#transcribe-app .file-item-download-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
+      }
+#transcribe-app .file-item-edit-btn {
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+      }
+#transcribe-app .file-item-edit-btn:hover {
+        background: var(--container-bg);
+        border-color: var(--primary-color);
+      }
+#transcribe-app .file-item-edit-btn svg {
+        width: 20px;
+        height: 20px;
+        color: var(--text-color);
+      }
+#transcribe-app .file-item-delete-btn {
+        background: #ffebee;
+        border: 1px solid #ef9a9a;
+        cursor: pointer;
+        padding: 0.5rem;
+        border-radius: 8px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+      }
+#transcribe-app .file-item-delete-btn:hover {
+        background: #f44336;
+        border-color: #d32f2f;
+      }
+#transcribe-app .file-item-delete-btn svg {
+        width: 20px;
+        height: 20px;
+        color: #c62828;
+      }
+#transcribe-app .file-item-delete-btn:hover svg {
+        color: #ffffff;
+      }
+[data-theme="dark"] #transcribe-app .file-item-delete-btn {
+        background: #5d1f1f;
+        border-color: #8b3030;
+      }
+[data-theme="dark"] #transcribe-app .file-item-delete-btn:hover {
+        background: #c62828;
+        border-color: #d32f2f;
+      }
+[data-theme="dark"] #transcribe-app .file-item-delete-btn svg {
+        color: #ef9a9a;
+      }
+#transcribe-app .file-item-name-input {
+        width: 100%;
+        padding: 0.25rem 0.5rem;
+        border: 2px solid var(--primary-color);
+        border-radius: 4px;
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--text-color);
+        background-color: var(--input-bg);
+        box-sizing: border-box;
+        font-family: inherit;
+      }
+#transcribe-app .file-item-name-input:focus {
+        outline: none;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
+      }
+#transcribe-app .info-link-btn {
+        background: none;
+        border: none;
+        color: var(--primary-color);
+        cursor: pointer;
+        font-size: 0.85rem;
+        text-decoration: underline;
+        padding: 0;
+        transition: opacity 0.2s;
+      }
+#transcribe-app .info-link-btn:hover {
+        opacity: 0.8;
+      }
+#transcribe-app .info-tooltip {
+        position: fixed;
+        z-index: 2500;
+        background-color: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+        max-width: 400px;
+        min-width: 300px;
+        direction: rtl;
+        text-align: right;
+      }
+#transcribe-app .tooltip-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--border-color);
+        font-weight: 600;
+        font-size: 1rem;
+        color: var(--text-color);
+      }
+#transcribe-app .tooltip-close {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        padding: 0;
+        color: var(--text-color);
+        line-height: 1;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: color 0.2s;
+      }
+#transcribe-app .tooltip-close:hover {
+        color: var(--primary-color);
+      }
+#transcribe-app .tooltip-content {
+        padding: 1rem 1.25rem;
+        color: var(--text-color);
+        font-size: 0.9rem;
+        line-height: 1.6;
+        white-space: pre-line;
+      }
+#transcribe-app .files-loading {
+        text-align: center;
+        padding: 2rem;
+        color: var(--text-color);
+        opacity: 0.6;
+      }
+#transcribe-app .files-empty {
+        text-align: center;
+        padding: 3rem 2rem;
+        color: var(--text-color);
+        opacity: 0.6;
+      }
+#transcribe-app .files-error {
+        text-align: center;
+        padding: 2rem;
+        color: #f44336;
+        background: rgba(244, 67, 54, 0.1);
+        border-radius: 8px;
+        margin-top: 1rem;
+      }
+/* Localization layout adjustments */
+#transcribe-app[dir] .modal-content {
+        text-align: start;
+      }
+#transcribe-app[dir] .modal .form-group {
+        text-align: start;
+      }
+#transcribe-app[dir] .modal .radio-content, #transcribe-app[dir] .modal .radio-option .radio-text, #transcribe-app[dir] .modal .form-help {
+        text-align: start;
+        direction: inherit;
+      }
+#transcribe-app[dir] .modal .radio-option {
+        direction: inherit;
+      }
+/* Keep RunPod token input LTR regardless of UI language */
+#transcribe-app #runpod-token {
+        direction: ltr;
+        text-align: left;
+      }
+/* Red mic button hover effect */
+#transcribe-app .record-mic-only-btn:hover {
+        background-color: #c82333 !important;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(220, 53, 69, 0.4);
+      }
+/* Dropdown menu item hover effect */
+#transcribe-app .record-dropdown button:hover {
+        background-color: var(--hover-bg);
+      }
+#transcribe-app .stats-footer-link {
+        background: none;
+        border: none;
+        color: var(--primary-color);
+        cursor: pointer;
+        font-weight: 600;
+        margin-top: 0.5rem;
+      }
+#transcribe-app .stats-footer-link:hover {
+        text-decoration: underline;
+      }
+/* Context Menu Styles */
+#transcribe-app .context-menu {
+        display: none;
+        position: fixed;
+        z-index: 2000;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        min-width: 150px;
+        padding: 4px 0;
+      }
+#transcribe-app .context-menu.show {
+        display: block;
+      }
+#transcribe-app .context-menu-item {
+        padding: 8px 16px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        color: var(--text-color);
+        transition: background 0.15s;
+        position: relative;
+      }
+#transcribe-app .context-menu-item:hover {
+        background: var(--secondary-color);
+      }
+#transcribe-app .context-menu-item.has-submenu::after {
+        content: "◄";
+        position: absolute;
+        left: 8px;
+        font-size: 0.7rem;
+      }
+#transcribe-app .context-submenu {
+        display: none;
+        position: absolute;
+        right: 100%;
+        top: 0;
+        margin-right: 2px;
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        min-width: 120px;
+        padding: 4px 0;
+        max-height: 300px;
+        overflow-y: auto;
+      }
+#transcribe-app .context-menu-item:hover > .context-submenu {
+        display: block;
+      }
+#transcribe-app .context-submenu-item {
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: var(--text-color);
+        transition: background 0.15s;
+        white-space: nowrap;
+      }
+#transcribe-app .context-submenu-item:hover {
+        background: var(--secondary-color);
+      }
+/* Transcription Statistics Styles */
+#transcribe-app #transcription-stats {
+        margin: 0 0 0.75rem 0;
+        display: none;
+      }
+#transcribe-app #transcription-stats.show {
+        display: block;
+      }
+#transcribe-app .stats-toggle {
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 0.5rem 0.75rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        transition: background 0.2s;
+        user-select: none;
+      }
+#transcribe-app .stats-toggle:hover {
+        background: var(--border-color);
+      }
+#transcribe-app .stats-toggle.expanded {
+        border-radius: 6px 6px 0 0;
+      }
+#transcribe-app .stats-toggle-icon {
+        transition: transform 0.2s;
+        font-size: 0.9rem;
+      }
+#transcribe-app .stats-toggle.expanded .stats-toggle-icon {
+        transform: rotate(90deg);
+      }
+#transcribe-app .stats-toggle-text {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text-color);
+      }
+#transcribe-app .stats-content {
+        display: none;
+        background: var(--secondary-color);
+        border: 1px solid var(--border-color);
+        border-top: none;
+        border-radius: 0 0 6px 6px;
+        padding: 0.75rem;
+      }
+#transcribe-app .stats-content.show {
+        display: block;
+      }
+#transcribe-app .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+#transcribe-app .stat-card {
+        background: var(--container-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 0.5rem 0.6rem;
+      }
+#transcribe-app .stat-label {
+        font-size: 0.75rem;
+        color: var(--text-color);
+        opacity: 0.7;
+        margin-bottom: 0.25rem;
+        line-height: 1.2;
+      }
+#transcribe-app .stat-value {
+        font-size: 1.1rem;
+        font-weight: bold;
+        color: var(--primary-color);
+      }
+#transcribe-app .chart-container {
+        position: relative;
+        height: 220px;
+        margin: 0.5rem 0;
+      }
+/* "Stats for nerds" dashboard. English-only ops view, so it is forced LTR
+         regardless of the surrounding RTL layout. */
+#transcribe-app #tab-stats {
+        --nerd-bg: #f5f6f8;
+        --nerd-panel: #ffffff;
+        --nerd-line: #e3e6ea;
+        --nerd-row-line: #eceef1;
+        --nerd-head: #fafbfc;
+        --nerd-ink: #1c1f24;
+        --nerd-dim: #6b7280;
+        --nerd-faint: #9aa0a8;
+      }
+[data-theme="dark"] #transcribe-app #tab-stats {
+        --nerd-bg: #16181c;
+        --nerd-panel: #1e2126;
+        --nerd-line: #2c3037;
+        --nerd-row-line: #262a30;
+        --nerd-head: #23262b;
+        --nerd-ink: #e6e8eb;
+        --nerd-dim: #9aa0a8;
+        --nerd-faint: #6b7280;
+      }
+#transcribe-app .nerd {
+        background: var(--nerd-bg);
+        color: var(--nerd-ink);
+        padding: 1.5rem;
+        border-radius: 12px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+#transcribe-app .nerd h1 {
+        font-weight: 600;
+        font-size: 1.5rem;
+        margin: 0 0 0.25rem;
+        color: var(--nerd-ink);
+      }
+#transcribe-app .nerd h2 {
+        font-weight: 600;
+        font-size: 1.05rem;
+        margin: 0 0 0.75rem;
+        color: var(--nerd-ink);
+      }
+#transcribe-app .nerd .sub {
+        color: var(--nerd-dim);
+        margin-bottom: 1.5rem;
+        font-size: 0.9rem;
+      }
+#transcribe-app .nerd-grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        margin-bottom: 1.5rem;
+      }
+#transcribe-app .nerd-panel {
+        background: var(--nerd-panel);
+        border: 1px solid var(--nerd-line);
+        border-radius: 12px;
+        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+      }
+#transcribe-app .nerd-card {
+        padding: 1.1rem 1.25rem;
+      }
+#transcribe-app .nerd-card .label {
+        color: var(--nerd-dim);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+#transcribe-app .nerd-card .value {
+        font-size: 1.8rem;
+        font-weight: 600;
+        margin-top: 0.35rem;
+      }
+#transcribe-app .nerd-card .unit {
+        font-size: 0.85rem;
+        color: var(--nerd-dim);
+        font-weight: 400;
+      }
+#transcribe-app .nerd-chart {
+        padding: 1.1rem 1.25rem;
+        margin-bottom: 1.5rem;
+      }
+#transcribe-app .nerd-chart-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 1rem;
+        margin-bottom: 0.75rem;
+      }
+#transcribe-app .nerd-chart-head .label {
+        color: var(--nerd-dim);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+#transcribe-app .nerd-chart-head .peak {
+        color: var(--nerd-faint);
+        font-size: 0.8rem;
+        white-space: nowrap;
+      }
+#transcribe-app .nerd-chart svg {
+        width: 100%;
+        height: 160px;
+        display: block;
+      }
+#transcribe-app .nerd-chart svg .axis {
+        stroke: var(--nerd-row-line);
+        stroke-width: 1;
+      }
+#transcribe-app .nerd-chart svg .axis-label {
+        fill: var(--nerd-faint);
+        font-size: 10px;
+      }
+#transcribe-app .nerd-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem 1rem;
+        margin-top: 0.75rem;
+      }
+#transcribe-app .nerd-legend .item {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.8rem;
+        color: var(--nerd-dim);
+      }
+#transcribe-app .nerd-legend .swatch {
+        width: 12px;
+        height: 3px;
+        border-radius: 2px;
+        display: inline-block;
+      }
+#transcribe-app .nerd table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+        background: var(--nerd-panel);
+        border: 1px solid var(--nerd-line);
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+      }
+#transcribe-app .nerd th, #transcribe-app .nerd td {
+        text-align: left;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--nerd-row-line);
+      }
+#transcribe-app .nerd tr:last-child td {
+        border-bottom: none;
+      }
+#transcribe-app .nerd th {
+        color: var(--nerd-dim);
+        font-weight: 500;
+        background: var(--nerd-head);
+      }
+#transcribe-app .nerd th.num, #transcribe-app .nerd td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+#transcribe-app .nerd .muted {
+        color: var(--nerd-faint);
+      }
+/* Phone layout: the tab strip becomes a bottom bar and the quota pill
+         drops to its own row so the title still fits. */
+@media (max-width: 640px) {
+#transcribe-app .app-bar {
+          flex-wrap: wrap;
+          padding: 0.5rem 0.75rem;
+        }
+#transcribe-app .app-bar h1 {
+          font-size: 1rem;
+        }
+#transcribe-app .balance-container.compact-balance {
+          order: 1;
+          flex-basis: 100%;
+          justify-content: center;
+        }
+#transcribe-app .tabs {
+          position: fixed;
+          inset-inline: 0;
+          bottom: 0;
+          z-index: 100;
+          justify-content: space-around;
+          background-color: var(--container-bg);
+          border-top: 1px solid var(--border-color);
+          padding: 0.25rem 0.5rem calc(0.25rem + env(safe-area-inset-bottom, 0px));
+        }
+#transcribe-app .tab-button, #transcribe-app .tab-button.active {
+          border-bottom: none;
+          padding: 0.55rem 0.5rem;
+          font-size: 0.85rem;
+        }
+#transcribe-app .app-main {
+          padding: 1rem 0.75rem;
+        }
+#transcribe-app .app-footer {
+          padding: 0 0.75rem calc(4.5rem + env(safe-area-inset-bottom, 0px));
+        }
+#transcribe-app .panel {
+          padding: 1rem;
+          border-radius: 12px;
+        }
+#transcribe-app .nerd {
+          padding: 1rem;
+        }
+}
+
+/* Inside the app's Transcribe view. */
+#transcribe-app { display: block; min-height: 0; background: transparent; }
+#transcribe-app .app-header { position: static; background: transparent; border-bottom: 0; }
+/* The app has its own title, install and theme; the language menu stays, for Yiddish. */
+#transcribe-app .app-bar h1, #transcribe-app #install-btn, #transcribe-app #theme-toggle { display: none !important; }
+#transcribe-app .app-bar { justify-content: flex-end; }
+
+/* Its sections (new, my files, viewer) are a row of tabs under the app's own bar,
+   on phones too, where the app's tab bar already holds the bottom of the screen;
+   and the app's own .tabs styles stay out. */
+#transcribe-app .tabs {
+  position: static;
+  inset: auto;
+  height: auto;
+  z-index: auto;
+  justify-content: flex-start;
+  background: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-top: 0;
+  padding: 0;
+  overflow-x: auto;
+}
+#transcribe-app .tabs button {
+  flex: none;
+  flex-direction: row;
+  gap: 0;
+  border-radius: 0;
+}
+#transcribe-app .app-footer {
+  padding-bottom: 1rem;
+}

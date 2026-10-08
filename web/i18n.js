@@ -236,17 +236,18 @@ const STRINGS = {
     offline: "Offline — showing what's on this device.",
     error: (msg) => `Something went wrong: ${msg}`,
     pointInbox: "Transcripts from Eliezer and other ivrit.ai services, as notifications.",
-    pointTranscribe: "Share a voice message or a recording into the app to transcribe it.",
+    pointTranscribe: "Transcribe recordings of any length, with who said what, kept in your Google Drive.",
     tabTranscribe: "Transcribe",
     transcribeTitle: "Transcribe",
     transcribeLede: "Hebrew audio into text, with ivrit.ai's models.",
-    serviceTitle: "transcribe.ivrit.ai",
-    serviceBody: "Upload recordings or paste a YouTube link, and get a transcript you can edit and download. It has its own Google sign-in.",
-    serviceOpen: "Open transcribe.ivrit.ai",
-    onDeviceTitle: "Coming: transcription on your phone",
-    onDeviceBody: "Short recordings will be transcribed on the phone itself, without uploading anything.",
+    connectDriveTitle: "Connect Google Drive",
+    connectDriveBody: "Transcripts are kept in your own Google Drive, in a folder of their own. Allow the app to keep them there to start transcribing.",
+    connectDrive: "Connect Google Drive",
+    connectDriveFirst: "Connect Google Drive first.",
+    driveOtherAccount: "That is a different Google account from the one you are signed in with.",
+    popupBlocked: "The sign-in window was blocked. Allow pop-ups for this site and try again.",
     sharedTitle: "Shared with the app",
-    sharedLede: "Send it to transcribe.ivrit.ai to transcribe it.",
+    sharedLede: "Transcribe it here.",
     sharedSend: "Transcribe",
     sharedUnnamed: "Recording",
     back: "Back",
@@ -524,17 +525,18 @@ const STRINGS = {
     offline: "אין חיבור — מוצג מה שיש במכשיר.",
     error: (msg) => `משהו השתבש: ${msg}`,
     pointInbox: "תמלולים מאליעזר ומשירותים נוספים של ivrit.ai, כהתראות.",
-    pointTranscribe: "שתפו הודעה קולית או הקלטה לאפליקציה כדי לתמלל אותה.",
+    pointTranscribe: "תמלול הקלטות בכל אורך, עם מי אמר מה, שנשמר ב-Google Drive שלכם.",
     tabTranscribe: "תמלול",
     transcribeTitle: "תמלול",
     transcribeLede: "אודיו בעברית לטקסט, עם המודלים של ivrit.ai.",
-    serviceTitle: "transcribe.ivrit.ai",
-    serviceBody: "מעלים הקלטות או מדביקים קישור ליוטיוב, ומקבלים תמלול שאפשר לערוך ולהוריד. ההתחברות שם נפרדת, עם Google.",
-    serviceOpen: "פתיחת transcribe.ivrit.ai",
-    onDeviceTitle: "בקרוב: תמלול בטלפון עצמו",
-    onDeviceBody: "הקלטות קצרות יתומללו בטלפון עצמו, בלי להעלות שום דבר.",
+    connectDriveTitle: "חיבור ל-Google Drive",
+    connectDriveBody: "התמלולים נשמרים ב-Google Drive שלכם, בתיקייה משלהם. אשרו לאפליקציה לשמור אותם שם כדי להתחיל לתמלל.",
+    connectDrive: "חיבור ל-Google Drive",
+    connectDriveFirst: "קודם מתחברים ל-Google Drive.",
+    driveOtherAccount: "זה חשבון Google אחר מזה שאתם מחוברים איתו.",
+    popupBlocked: "חלון ההתחברות נחסם. אפשרו חלונות קופצים לאתר הזה ונסו שוב.",
     sharedTitle: "שותף לאפליקציה",
-    sharedLede: "שלחו ל-transcribe.ivrit.ai כדי לתמלל.",
+    sharedLede: "תמללו אותו כאן.",
     sharedSend: "תמלול",
     sharedUnnamed: "הקלטה",
     back: "חזרה",
@@ -594,6 +596,8 @@ export function detectLocale(preferred) {
   return (navigator.languages ?? [navigator.language]).some((l) => /^(he|iw)\b/i.test(l)) ? "he" : "en";
 }
 
+// The Transcribe view (#transcribe-app) carries transcribe.ivrit.ai's own strings,
+// under the same attribute; they are its business (web/transcribe/i18n.js).
 export function setLocale(locale) {
   current = LOCALES.includes(locale) ? locale : "en";
   try {
@@ -602,12 +606,15 @@ export function setLocale(locale) {
   document.documentElement.lang = current;
   document.documentElement.dir = current === "he" ? "rtl" : "ltr";
   for (const node of document.querySelectorAll("[data-i18n]")) {
+    if (node.closest("#transcribe-app")) continue;
     node.textContent = t(node.dataset.i18n);
   }
   for (const node of document.querySelectorAll("[data-i18n-placeholder]")) {
+    if (node.closest("#transcribe-app")) continue;
     node.placeholder = t(node.dataset.i18nPlaceholder);
   }
   for (const node of document.querySelectorAll("[data-i18n-label]")) {
+    if (node.closest("#transcribe-app")) continue;
     node.setAttribute("aria-label", t(node.dataset.i18nLabel));
   }
 }

@@ -117,3 +117,9 @@
 .feed.settled .msg {
   animation: none;
 }
+
+/* The Transcribe view (web/transcribe/) is a working surface: as wide as its own
+   layout allows. */
+main.wide {
+  max-width: 1100px;
+}

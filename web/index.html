@@ -133,20 +133,18 @@
         <div id="feed" class="feed" aria-live="polite"></div>
       </section>
 
-      <section id="view-transcribe" class="view" hidden>
+      <section id="view-transcribe" class="view wide" hidden>
         <button id="transcribe-back" class="btn quiet small" type="button" hidden data-i18n="back"></button>
-        <h2 class="title" data-i18n="transcribeTitle"></h2>
-        <p class="lede" data-i18n="transcribeLede"></p>
         <div id="shared" class="panel" hidden></div>
-        <div class="panel">
-          <h3 data-i18n="serviceTitle"></h3>
-          <p class="muted" data-i18n="serviceBody"></p>
-          <div class="row"><a id="transcribe-open" class="btn primary" href="#"><span data-i18n="serviceOpen"></span><svg class="i"><use href="#i-chevron" /></svg></a></div>
+        <!-- Transcribing keeps files in the user's Google Drive: this browser has to
+             be signed in at the server with Drive (web/app.js, connectDrive). -->
+        <div id="transcribe-connect" class="panel" hidden>
+          <h3 data-i18n="connectDriveTitle"></h3>
+          <p class="muted" data-i18n="connectDriveBody"></p>
+          <div class="row"><button id="connect-drive" class="btn primary" type="button" data-i18n="connectDrive"></button></div>
         </div>
-        <div class="panel quiet-panel">
-          <h3 data-i18n="onDeviceTitle"></h3>
-          <p class="muted" data-i18n="onDeviceBody"></p>
-        </div>
+        <!-- transcribe.ivrit.ai's view, loaded here (web/transcribe/mount.js). -->
+        <div id="transcribe-mount"></div>
       </section>
 
       <section id="view-sources" class="view" hidden>

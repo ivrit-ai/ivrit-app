@@ -37,4 +37,20 @@ from local_file_utils import LocalFileStorageBackend  # noqa: E402
 app.file_storage_backend = LocalFileStorageBackend(base_dir=os.environ["HARNESS_DATA"])
 app.runpod_key_store.backend = app.file_storage_backend
 
+# For browser tests: sign this browser in as the server's sign-in would (no Google).
+if os.environ.get("HARNESS_TEST_LOGIN"):
+    from fastapi.responses import RedirectResponse
+
+    async def test_login(email: str, sub: str, to: str = "/"):
+        response = RedirectResponse(to, status_code=303)
+        app.auth_cookies.write_session(response, {
+            "user_email": email, "google_sub": sub, "refresh_token": "rt-" + email.split("@")[0],
+            "runpod_token": "", "runpod_key_load_failed": False,
+        })
+        return response
+
+    app.app.add_api_route("/__test/login", test_login, methods=["GET"])
+    # Ahead of the pages, which answer every path otherwise.
+    app.app.router.routes.insert(0, app.app.router.routes.pop())
+
 uvicorn.run(app.app, host="127.0.0.1", port=port, log_level="info")

@@ -3084,6 +3084,8 @@ async def complete_google_sign_in(request: Request, code: str) -> Response:
                         response,
                         {
                             "user_email": user_email,
+                            # The Google account itself, for the app's own session (/auth/session).
+                            "google_sub": str(user_data.get("id") or ""),
                             "refresh_token": refresh_token,
                             "runpod_token": runpod_token,
                             "runpod_key_load_failed": runpod_key_load_failed,
@@ -4794,6 +4796,128 @@ def check_port_available(port: int) -> bool:
         return True
     except OSError:
         return False
+
+
+if APP_SITE:
+
+    async def renewed_session(request: Request) -> Optional[dict]:
+        """The session with its RunPod key re-read, if the cookie is due for renewal
+        (as the page route does), else None."""
+        session = get_session(request)
+        if session is None or not auth_cookies.session_due_for_renewal(request):
+            return None
+        try:
+            runpod_token = await runpod_key_store.load(session["refresh_token"])
+            return {**session, "runpod_token": runpod_token, "runpod_key_load_failed": False}
+        except (GoogleAPIError, InvalidToken) as exc:
+            logger.warning("Session renewal skipped for %s: could not load RunPod key: %r", session["user_email"], exc)
+            return None
+
+    @app.get("/transcribe/boot", include_in_schema=False)
+    async def transcribe_boot(request: Request):
+        """What the app's Transcribe view needs to start: whether this browser is
+        signed in (with Drive), and the user's RunPod key status. Renews the cookie."""
+        session = get_session(request)
+        if session is None:
+            return JSONResponse({"signedIn": False}, headers={"Cache-Control": "no-store"})
+        renewed = await renewed_session(request)
+        current = renewed or session
+        response = JSONResponse({
+            "signedIn": True,
+            "email": current["user_email"],
+            "runpodKeyStatus": runpod_key_status(current),
+            "quotaIncreaseUrl": QUOTA_INCREASE_URL,
+        }, headers={"Cache-Control": "no-store"})
+        if renewed:
+            auth_cookies.write_session(response, renewed)
+            await remember_drive_grant(renewed["user_email"], renewed["refresh_token"])
+        return response
+
+    @app.get("/auth/session", include_in_schema=False)
+    async def app_session_from_cookie(request: Request):
+        """The app's own session (for Eliezer and Communicator) for whoever this
+        browser is signed in as. Same-origin only: no CORS, so other sites cannot read it."""
+        sessions = app.state.app_sessions
+        session = get_session(request)
+        if sessions is None:
+            return JSONResponse({"error": "sign_in_unavailable"}, status_code=503)
+        if session is None:
+            return JSONResponse({"error": "signed_out"}, status_code=401)
+        sub = session.get("google_sub")
+        response_session = None
+        if not sub:
+            # Signed in before the session kept the account id: ask Google once.
+            access_token = await get_access_token_from_refresh(session["refresh_token"])
+            async with aiohttp.ClientSession() as http:
+                async with http.get("https://www.googleapis.com/oauth2/v2/userinfo",
+                                    headers={"Authorization": f"Bearer {access_token}"}) as r:
+                    info = await r.json() if r.status == 200 else {}
+            sub = str(info.get("id") or "")
+            if not sub:
+                return JSONResponse({"error": "signed_out"}, status_code=401)
+            response_session = {**session, "google_sub": sub}
+        response = JSONResponse(sessions.issue(sub, session["user_email"]), headers={"Cache-Control": "no-store"})
+        if response_session:
+            auth_cookies.write_session(response, response_session)
+        return response
+
+    @app.post("/auth/drive", include_in_schema=False)
+    async def connect_drive(request: Request):
+        """The Android app's way in to Drive: an authorization code from the phone
+        (Google's AuthorizationClient, offline access, drive.file) becomes this
+        browser's session, as the web sign-in makes one. With the app's own session
+        as Bearer, the code must be for the same account."""
+        sessions = app.state.app_sessions
+        # From the app's own pages only: another site must not sign a visitor in
+        # as someone else.
+        own_origin = os.environ["BASE_URL"].rstrip("/")
+        if request.headers.get("origin") != own_origin or \
+                not request.headers.get("content-type", "").startswith("application/json"):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        body = await request.json()
+        code = str((body or {}).get("code") or "")
+        if not code:
+            return JSONResponse({"error": "code required"}, status_code=400)
+        async with aiohttp.ClientSession() as http:
+            async with http.post("https://oauth2.googleapis.com/token", data={
+                "code": code, "client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET,
+                # Codes issued to an Android app are exchanged with no redirect.
+                "redirect_uri": "", "grant_type": "authorization_code",
+            }) as r:
+                tokens = await r.json()
+            if "error" in tokens:
+                logger.warning("Drive code exchange failed: %s", tokens.get("error"))
+                return JSONResponse({"error": "exchange_failed"}, status_code=401)
+            granted = set(tokens.get("scope", "").split())
+            if "https://www.googleapis.com/auth/drive.file" not in granted or not tokens.get("refresh_token"):
+                return JSONResponse({"error": "errorDrivePermissionsRequired"}, status_code=403)
+            async with http.get("https://www.googleapis.com/oauth2/v2/userinfo",
+                                headers={"Authorization": f"Bearer {tokens['access_token']}"}) as r:
+                info = await r.json()
+        email, sub = info.get("email"), str(info.get("id") or "")
+        if not email:
+            return JSONResponse({"error": "exchange_failed"}, status_code=401)
+        header = request.headers.get("authorization", "")
+        if sessions and header.startswith("Bearer "):
+            try:
+                claims = sessions.verify(header[7:])
+            except Exception:
+                return JSONResponse({"error": "invalid_session"}, status_code=401)
+            if claims["sub"] != sub:
+                return JSONResponse({"error": "different_account"}, status_code=409)
+        refresh_token = tokens["refresh_token"]
+        try:
+            runpod_token, load_failed = await runpod_key_store.load(refresh_token), False
+        except (GoogleAPIError, InvalidToken) as exc:
+            logger.error("Failed to load stored RunPod key for %s: %r", email, exc)
+            runpod_token, load_failed = "", True
+        await remember_drive_grant(email, refresh_token)
+        response = JSONResponse({"ok": True, "email": email})
+        auth_cookies.write_session(response, {
+            "user_email": email, "google_sub": sub, "refresh_token": refresh_token,
+            "runpod_token": runpod_token, "runpod_key_load_failed": load_failed,
+        })
+        return response
 
 
 # Last: the app's pages answer whatever path no route above claims.

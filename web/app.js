@@ -1,22 +1,22 @@
 import { detectLocale, localized, locale, setLocale, t } from "./i18n.js";
 import { ApiError, createCommunicator, pushSupported } from "./client/communicator.js";
+import * as transcribeView from "./transcribe/mount.js";
 
 const $ = (id) => document.getElementById(id);
 const store = self.NotifierStore;
 // Notifications, accounts and sources are Communicator's: this app is one of
 // its clients, calling its API from this origin (see client/communicator.js).
 // Its devices are registered as "app" so Communicator can tell them apart.
-// Inside the installed app, the account is the Google account chosen on the
-// phone, held as the app's own session (see appToken): every call carries it,
-// and no cookie of Communicator's is used. In a browser, Communicator's own
-// sign-in stands.
+// The account is a Google account, held as the app's own session (see appToken):
+// chosen on the phone in the installed app, signed in with Google on this site in
+// a browser. Every call carries it; no cookie of Communicator's is used.
 const config = self.IVRIT_CONFIG;
 const inShell = Boolean(self.Capacitor?.isNativePlatform?.());
 const communicator = createCommunicator({
   base: config.communicator,
   client: "app",
   store,
-  token: inShell ? () => appToken() : null,
+  token: () => appToken(),
 });
 
 // The native shell (Capacitor) when this page runs inside the installed app,
@@ -956,6 +956,7 @@ function renderLocaleSwitches() {
 }
 
 async function changeLocale(next) {
+  transcribeView.setLocale(next);
   if (next === locale()) return;
   setLocale(next);
   renderLocaleSwitches();
@@ -1105,15 +1106,10 @@ function formatSize(bytes) {
 
 async function sendToTranscribe(file) {
   if (shell) return shell.ivrit.shareOn({ id: file.key, title: t("sharedChooser") });
-  const input = el("input", { type: "file", name: "media" });
-  const transfer = new DataTransfer();
-  transfer.items.add(new File([file.blob], file.name, { type: file.type }));
-  input.files = transfer.files;
-  const form = el("form", { method: "POST", action: `${config.transcribe}/share-target`, enctype: "multipart/form-data", hidden: true }, [input]);
-  document.body.append(form);
-  // The file is in memory now; the page is about to navigate away.
+  if (!(await showTranscribeApp())) return toast(t("connectDriveFirst"));
+  transcribeView.addFiles([new File([file.blob], file.name, { type: file.type })]);
   await discardShared(file.key);
-  form.submit();
+  renderTranscribe();
 }
 
 // ---------------------------------------------------------------- transcribe here, by Eliezer
@@ -1176,7 +1172,51 @@ async function appToken() {
   return session.token;
 }
 
+// In a browser: Google's sign-in on this site, in a popup (with Drive, which the
+// Transcribe view needs); the server keeps that in its cookie and gives the page
+// the app's session for it.
+function googlePopup() {
+  return new Promise((resolve) => {
+    const w = 600;
+    const h = 640;
+    const popup = open("/authorize", "GoogleLogin", `width=${w},height=${h},top=${(screen.height - h) / 2},left=${(screen.width - w) / 2}`);
+    if (!popup) {
+      toast(t("popupBlocked"));
+      return resolve(false);
+    }
+    const timer = setInterval(() => popup.closed && done(false), 500);
+    function onMessage(event) {
+      if (event.origin !== location.origin) return;
+      if (event.data?.type === "login_success") done(true);
+      if (event.data?.type === "login_failure") {
+        toast(event.data.message || t("googleFailed"));
+        done(false);
+      }
+    }
+    function done(ok) {
+      clearInterval(timer);
+      removeEventListener("message", onMessage);
+      resolve(ok);
+    }
+    addEventListener("message", onMessage);
+  });
+}
+
+// The app's session for whoever this browser is signed in as at the server.
+async function sessionFromCookie() {
+  const res = await fetch("/auth/session", { credentials: "same-origin" }).catch(() => null);
+  if (!res?.ok) return false;
+  writeSession({ ...(await res.json()), renewed_at: Date.now() });
+  return true;
+}
+
 async function signInWithGoogle() {
+  if (!shell) {
+    if (!(await googlePopup())) return;
+    if (await sessionFromCookie()) location.replace("/");
+    else toast(t("googleFailed"));
+    return;
+  }
   let idToken;
   try {
     ({ idToken } = await shell.ivrit.googleIdToken({ clientId: config.googleClientId, interactive: true }));
@@ -1364,8 +1404,74 @@ async function takeShared() {
   watchJobs();
 }
 
+// Transcribing files here, as transcribe.ivrit.ai does (web/transcribe/): it needs
+// this browser signed in at the server with Google and Drive. In a browser that is
+// Google's sign-in on this site; in the app, Drive is authorized on the phone and
+// the server is handed the code.
+let transcribeReady = null;
+
+async function connectDrive() {
+  if (shell) {
+    let code;
+    try {
+      ({ code } = await shell.ivrit.authorizeDrive({ clientId: config.googleClientId }));
+    } catch (err) {
+      if (err?.code === "UNIMPLEMENTED" || /not implemented/i.test(err?.message ?? "")) toast(t("updateApp"));
+      else if (err?.code !== "cancelled") toast(t("googleFailed"));
+      return false;
+    }
+    const token = await appToken();
+    const res = await fetch("/auth/drive", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ code }),
+    }).catch(() => null);
+    if (res?.status === 409) toast(t("driveOtherAccount"));
+    else if (!res?.ok) toast(t(res ? "googleFailed" : "offline"));
+    return Boolean(res?.ok);
+  }
+  return googlePopup();
+}
+
+async function showTranscribeApp() {
+  if (transcribeReady) return transcribeReady;
+  transcribeReady = (async () => {
+    let bootData;
+    try {
+      bootData = await transcribeView.boot();
+    } catch {
+      toast(t("offline"));
+      return false;
+    }
+    $("transcribe-connect").hidden = bootData.signedIn;
+    if (!bootData.signedIn) return false;
+    await transcribeView.mount($("transcribe-mount"), {
+      // The server no longer knows this browser (signed out elsewhere, or a long
+      // absence): connect again, and come back here.
+      signedOut() {
+        $("transcribe-connect").hidden = false;
+        $("transcribe-mount").hidden = true;
+      },
+    }, { bootData, locale: locale() });
+    return true;
+  })();
+  transcribeReady.then((ok) => !ok && (transcribeReady = null), () => (transcribeReady = null));
+  return transcribeReady;
+}
+
+$("connect-drive").addEventListener("click", async () => {
+  if (!(await connectDrive())) return;
+  if ($("transcribe-mount").hidden || $("transcribe-mount").childElementCount) {
+    // Already loaded under a lost sign-in: start it afresh.
+    location.hash = "#transcribe";
+    return location.reload();
+  }
+  showTranscribeApp();
+});
+
 async function renderTranscribe() {
-  $("transcribe-open").href = `${config.transcribe}/`;
+  showTranscribeApp();
   const box = $("shared");
   // In the app, shared files go straight on (takeShared); nothing waits here.
   if (shell) {
@@ -1418,6 +1524,8 @@ function showView(name) {
     else button.removeAttribute("aria-current");
   }
   for (const view of VIEWS) $(`view-${view}`).hidden = view !== name;
+  // Transcribing (files, the editor) wants the width of the screen.
+  $("main").classList.toggle("wide", name === "transcribe");
   window.scrollTo({ top: 0 });
   rerender();
 }
@@ -1570,20 +1678,14 @@ $("signout").addEventListener("click", async () => {
   const anonymous = state.me.kind === "anonymous";
   if (!(await ask(anonymous ? t("signOutAnonConfirm") : t("signOutConfirm"), { ok: t("signOut"), danger: anonymous }))) return;
   await forgetThisDevice();
-  if (shell) return leaveApp();
-  // An anonymous account is unreachable once signed out, so it is deleted
-  // rather than left behind.
-  if (anonymous) await del("/api/me").catch(() => {});
-  else await post("/api/logout").catch(() => {});
-  location.replace("/");
+  return leaveApp();
 });
 
 $("delete-account").addEventListener("click", async () => {
   if (!(await ask(t("deleteConfirm"), { ok: t("deleteAccount"), danger: true }))) return;
   await forgetThisDevice();
   await del("/api/me").catch(() => {});
-  if (shell) return leaveApp();
-  location.replace("/");
+  return leaveApp();
 });
 
 $("anon").addEventListener("click", async () => {
@@ -1715,10 +1817,6 @@ $("transcribe-back").addEventListener("click", () => {
 });
 
 function signInLink(node) {
-  if (!shell) {
-    node.href = communicator.loginUrl(`${location.origin}/`);
-    return node;
-  }
   node.href = "#";
   node.addEventListener("click", (event) => {
     event.preventDefault();
@@ -1731,7 +1829,9 @@ function signInLink(node) {
 // is no session of Communicator's to end.
 async function leaveApp() {
   writeSession(null);
-  await shell.ivrit.forgetGoogle().catch(() => {});
+  // The server's own sign-in (Drive, for transcribing) ends with it.
+  await fetch("/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+  await shell?.ivrit.forgetGoogle().catch(() => {});
   location.replace("/");
 }
 
@@ -1752,24 +1852,23 @@ async function start() {
   setLocale(detectLocale());
   renderLocaleSwitches();
   showIosHint();
-  if (shell) {
-    // A Google account is the only way in: no account-less use in the app.
-    $("anon").hidden = true;
-    document.querySelector('[data-i18n="anonCaveat"]').hidden = true;
-    // Signed in is having a session: no call to Google, no account sheet.
-    if (!(await appToken())) {
-      if (location.hash === "#shared") return showSharedSignedOut();
-      $("landing").hidden = false;
-      document.body.dataset.started = "1";
-      return;
-    }
+  // A Google account is the only way in: no account-less use.
+  $("anon").hidden = true;
+  document.querySelector('[data-i18n="anonCaveat"]').hidden = true;
+  // Signed in is having a session: no call to Google, no account sheet. In a
+  // browser the server may know this browser already (its cookie).
+  if (!(await appToken()) && (shell || !(await sessionFromCookie()))) {
+    if (location.hash === "#shared") return showSharedSignedOut();
+    $("landing").hidden = false;
+    document.body.dataset.started = "1";
+    return;
   }
   try {
     state.me = await api("/api/me");
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       // A session no longer accepted (say, a new signing key): sign in again.
-      if (shell) writeSession(null);
+      writeSession(null);
       if (location.hash === "#shared") return showSharedSignedOut();
       $("landing").hidden = false;
       document.body.dataset.started = "1";
@@ -1818,10 +1917,12 @@ async function start() {
   await openFromHash();
   if (shell) await takeShared();
   watchJobs();
-  if (location.hash === "#shared") {
-    history.replaceState(null, "", location.pathname);
+  if (location.hash === "#shared" || location.hash === "#transcribe") {
+    history.replaceState(null, "", location.pathname + location.search);
     showView("transcribe");
   }
+  // A transcript's link (a notification, or a link from transcribe.ivrit.ai).
+  if (new URLSearchParams(location.search).has("results")) showView("transcribe");
   reconcile();
 }
 
