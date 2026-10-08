@@ -151,6 +151,22 @@ class Database:
             max_seconds,
         )
 
+    # ---- Drive grants (refresh tokens, encrypted by the caller) ----
+
+    async def save_drive_grant(self, user_email: str, encrypted_refresh_token: str, updated_at: int):
+        await self.execute(
+            "INSERT INTO drive_grants (user_email, refresh_token, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (user_email) DO UPDATE SET "
+            "refresh_token = excluded.refresh_token, updated_at = excluded.updated_at",
+            user_email,
+            encrypted_refresh_token,
+            updated_at,
+        )
+
+    async def get_drive_grant(self, user_email: str):
+        row = await self.fetchrow("SELECT refresh_token FROM drive_grants WHERE user_email = ?", user_email)
+        return row["refresh_token"] if row else None
+
     # ---- web push subscriptions ----
 
     async def save_push_subscription(

@@ -84,6 +84,7 @@ BASE_PATH = get_base_path()
 # Import file storage backends (will be conditionally imported after args parsing)
 from local_file_utils import LocalFileStorageBackend
 from file_utils import FileStorageBackend
+import hub
 
 # Parse CLI arguments for configuration
 parser = argparse.ArgumentParser(description='Transcription service with rate limiting')
@@ -358,9 +359,14 @@ async def lifespan(app: FastAPI):
 
     # Start background event loop
     asyncio.create_task(event_loop())
+    if HUB_MODE:
+        log_message(f"Hub mode: jobs are scheduled by {hub.HUB_URL}")
+        asyncio.create_task(credit_loop())
 
     yield
 
+    if HUB_MODE:
+        await hub.client.close()
     await db.close()
 
 # Create FastAPI app
@@ -646,6 +652,17 @@ job_results = {}
 
 # Transcription progress tracking (job_id -> {percent, description})
 transcription_progress = {}
+
+# Hub mode (hub.py): Eliezer's hub decides when each job runs, shared with its own
+# voice messages; this server keeps the files, sends each when granted a credit, and
+# saves the result to Drive. hub_jobs: jobs registered from this process (job_id ->
+# job_desc); hub_running: those it holds credits for (job_id -> {handle, runpod,
+# cancelled, task}). Both are rebuilt from the hub after a restart.
+HUB_MODE = hub.ENABLED and not in_local_mode
+HUB_MAX_RUNNING = int(os.environ.get("HUB_MAX_RUNNING", "50"))
+HUB_HEARTBEAT_SECONDS = 30
+hub_jobs = {}
+hub_running = {}
 
 # Upload streaming subscribers per job_id
 upload_event_streams = {}
@@ -1039,6 +1056,95 @@ async def calculate_queue_time(queue_to_use, running_jobs, exclude_last=False):
 
 
 
+async def remember_drive_grant(user_email: Optional[str], refresh_token: Optional[str]):
+    """Keep the user's Drive access for jobs that finish when no request carries it
+    (after a restart). Hub mode only; never fails the caller."""
+    if not HUB_MODE or not user_email or not refresh_token:
+        return
+    try:
+        encrypted = auth_cookies.fernet.encrypt(refresh_token.encode()).decode()
+        await db.save_drive_grant(user_email, encrypted, int(time.time()))
+    except Exception as e:
+        logger.error("Could not store the Drive grant for %s: %r", user_email, e)
+
+
+async def stored_refresh_token(user_email: str) -> Optional[str]:
+    encrypted = await db.get_drive_grant(user_email)
+    if not encrypted:
+        return None
+    try:
+        return auth_cookies.fernet.decrypt(encrypted.encode()).decode()
+    except InvalidToken:
+        logger.error("The stored Drive grant for %s cannot be read with the current key", user_email)
+        return None
+
+
+async def active_transcriptions(user_email: str) -> int:
+    """Jobs of this user waiting for or in transcription (not counting transcoding)."""
+    if HUB_MODE:
+        try:
+            jobs = await hub.client.jobs(owner=hub.owner_of(user_email))
+            return sum(1 for j in jobs if j["status"] in ("queued", "running"))
+        except Exception as e:
+            logger.warning("Could not count %s's jobs at the hub: %r", user_email, e)
+    return len(user_jobs.get(user_email, set()))
+
+
+async def hub_queue_job(job_id, user_email, filename, duration, runpod_token, language, refresh_token, save_audio):
+    """queue_job in hub mode: register the job with the hub, which charges the quota
+    and decides when it runs."""
+    def build_error(error_key, *, status_code=400, i18n_vars=None):
+        payload = {"error": error_key, "i18n_key": error_key, "status_code": status_code}
+        if i18n_vars:
+            payload["i18n_vars"] = i18n_vars
+        return False, payload
+
+    byok = bool(runpod_token)
+    job_type = PRIVATE if byok else (SHORT if duration <= SHORT_JOB_THRESHOLD else LONG)
+    spec = {
+        "email": user_email,
+        "filename": filename,
+        "language": language,
+        "duration": duration,
+        "save_audio": bool(save_audio),
+        "path": temp_files.get(job_id),
+    }
+    await remember_drive_grant(user_email, refresh_token)
+    try:
+        view = await hub.client.register(job_id, hub.owner_of(user_email), duration, byok=byok, spec=spec)
+    except hub.HubError as e:
+        if e.status == 402:
+            await db.incr_stat("quota_denied", 1)
+            wait_seconds = (e.detail or {}).get("wait_seconds") if isinstance(e.detail, dict) else None
+            if wait_seconds is None:
+                return build_error("errorFileTooLargeForFreeService", status_code=429)
+            return build_error("errorRateLimitExceeded", status_code=429,
+                               i18n_vars={"minutes": max(1, math.ceil(wait_seconds / 60))})
+        logger.error("Hub refused job %s: %s", job_id, e)
+        return build_error("errorServerBusy", status_code=503)
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        logger.error("Hub unreachable registering job %s: %r", job_id, e)
+        return build_error("errorServerBusy", status_code=503)
+
+    hub_jobs[job_id] = box.Box(
+        qtime=time.time(), utime=time.time(), id=job_id, filename=filename, user_email=user_email,
+        duration=duration, runpod_token=runpod_token, uses_custom_runpod=byok, language=language,
+        refresh_token=refresh_token, save_audio=save_audio, job_type=job_type,
+    )
+    user_jobs.setdefault(user_email, set()).add(job_id)
+    queue_depth = max(0, (view.get("position") or 1) - 1)
+    capture_event(job_id, "job-queued", {"user": user_email, "queue-depth": queue_depth, "job-type": job_type, "custom-runpod": byok})
+    log_message(f"{user_email}: Job registered with the hub: {job_id}, position {view.get('position')}, job type: {job_type}")
+    eta = int(view.get("eta_seconds") or 0)
+    return True, {
+        "job_id": job_id,
+        "queue_depth": queue_depth,
+        "job_type": job_type,
+        "time_ahead_display": str(timedelta(seconds=eta)),
+        "time_ahead_seconds": eta,
+    }
+
+
 async def queue_job(job_id, user_email, filename, duration, runpod_token="", language="he", refresh_token: Optional[str] = None, save_audio: bool = False):
     # Try to add the job to the queue
     log_message(f"{user_email}: Queuing job {job_id}...")
@@ -1057,7 +1163,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
     else:
         user_batch_limit = 1
 
-    active_count = len(user_jobs.get(user_email, set()))
+    active_count = await active_transcriptions(user_email)
     if active_count >= user_batch_limit:
         return build_error("errorBatchLimitReached", status_code=400)
 
@@ -1072,6 +1178,9 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
                 "fileHours": f"{duration/3600:.1f}",
             },
         )
+
+    if HUB_MODE:
+        return await hub_queue_job(job_id, user_email, filename, duration, runpod_token, language, refresh_token, save_audio)
 
     # Check rate limits only if not using custom RunPod credentials
     custom_runpod_credentials = bool(runpod_token)
@@ -1253,9 +1362,11 @@ async def get_toc(request: Request):
     
     # Augment with in-memory jobs for this user
     in_memory_entries = []
-    
+    if HUB_MODE:
+        in_memory_entries = await hub_toc_entries(user_email, toc_version)
+
     # Check all queues for jobs from this user
-    for queue_type in [SHORT, LONG, PRIVATE]:
+    for queue_type in ([] if HUB_MODE else [SHORT, LONG, PRIVATE]):
         queue_to_use = queues[queue_type]
         running_jobs_to_use = running_jobs[queue_type]
         
@@ -1345,6 +1456,40 @@ async def get_toc(request: Request):
     toc_data["entries"] = in_memory_entries + toc_data["entries"]
     
     return JSONResponse(toc_data)
+
+
+async def hub_toc_entries(user_email: str, toc_version: str) -> list:
+    """The user's jobs waiting for or in transcription, as the hub sees them."""
+    try:
+        jobs = await hub.client.jobs(owner=hub.owner_of(user_email))
+    except Exception as e:
+        logger.warning("Could not list %s's jobs at the hub: %r", user_email, e)
+        return []
+    entries = []
+    for j in jobs:
+        if j["status"] not in ("queued", "running"):
+            continue
+        spec = j.get("spec") or {}
+        entry = {
+            "job_id": j["job_id"],
+            "source_filename": spec.get("filename"),
+            "language": spec.get("language"),
+            "duration_seconds": j["duration"],
+            "submitted_at": datetime.fromtimestamp(j["created_at"]).isoformat(),
+            "status": "Queued" if j["status"] == "queued" else "Being processed",
+            "toc_version": toc_version,
+        }
+        if j.get("eta_seconds") is not None and j["lane"] != "byok":
+            entry["eta_seconds"] = int(j["eta_seconds"]) + SUBMISSION_DELAY
+        if j.get("position") is not None:
+            entry["queue_position"] = j["position"]
+        # This server's own view is fresher than the hub's last heartbeat.
+        progress = transcription_progress.get(j["job_id"]) or (j.get("progress") or {})
+        if j["status"] == "running" and progress.get("percent") is not None:
+            entry["progress_percent"] = progress["percent"]
+            entry["progress_description"] = progress.get("description") or progress.get("stage") or ""
+        entries.append(entry)
+    return entries
 
 
 @app.get("/appdata/results/{results_id}", dependencies=[Depends(require_google_login)])
@@ -2313,6 +2458,17 @@ async def get_quota(request: Request):
     if not user_email:
         return JSONResponse({"error": "errorUserNotFound", "i18n_key": "errorUserNotFound"}, status_code=400)
     
+    if HUB_MODE:
+        try:
+            quota = await hub.client.quota(hub.owner_of(user_email))
+        except Exception as e:
+            logger.warning("Could not read %s's quota at the hub: %r", user_email, e)
+            return JSONResponse({"error": "errorServerBusy", "i18n_key": "errorServerBusy"}, status_code=503)
+        return JSONResponse({
+            "remainingMinutes": quota["remaining_seconds"] / 60,
+            "maxMinutesPerWeek": quota["cap_seconds"] / 60,
+        })
+
     user_bucket = await get_user_quota(user_email)
     remaining_minutes = user_bucket.get_remaining_minutes()
 
@@ -2915,6 +3071,7 @@ async def complete_google_sign_in(request: Request, code: str) -> Response:
                         runpod_token = ""
                         runpod_key_load_failed = True
 
+                    await remember_drive_grant(user_email, refresh_token)
                     response = templates.TemplateResponse("close_window.html", {"request": request, "success": True})
                     auth_cookies.write_session(
                         response,
@@ -3617,7 +3774,7 @@ async def validate_upload_request_metadata(
         user_batch_limit = 1
 
     # Count active transcription jobs
-    active_job_count = len(user_jobs.get(user_email, set()))
+    active_job_count = await active_transcriptions(user_email)
 
     # Count active transcoding jobs (queued + running)
     transcoding_count = 0
@@ -3793,6 +3950,9 @@ def clean_some_unicode_from_text(text):
 
 @app.get("/download/{job_id}")
 async def download_file(job_id: str, request: Request):
+    # In hub mode RunPod is given a link signed for the job; nobody else can fetch it.
+    if HUB_MODE and not hub.media_token_valid(job_id, request.query_params.get("t")):
+        return JSONResponse({"error": "File not found"}, status_code=404)
     if job_id not in temp_files:
         return JSONResponse({"error": "File not found"}, status_code=404)
 
@@ -3844,8 +4004,11 @@ async def handle_failed_job(job_desc, consumed_seconds, failure_reason):
     already failed and there is nothing left to salvage by propagating.
     """
     # Zero for jobs on the user's own RunPod credentials, which never touch the
-    # quota in the first place — there is nothing to give back to them.
-    if consumed_seconds:
+    # quota in the first place — there is nothing to give back to them. In hub mode
+    # the hub charged the job, and refunds it when the credit comes back failed.
+    if HUB_MODE:
+        refunded = not job_desc.uses_custom_runpod
+    elif consumed_seconds:
         try:
             # Re-read rather than reusing the bucket consume() was called on: it is
             # minutes stale by now and may have been replaced by a concurrent job.
@@ -3964,7 +4127,10 @@ async def notify_job_finished(job_desc, status, results_id):
     await asyncio.gather(*(push_one(sub) for sub in subscriptions))
 
 
-async def transcribe_job(job_desc):
+async def transcribe_job(job_desc, hub_entry=None):
+    """Transcribe one job and save it to the user's Drive. In hub mode hub_entry is the
+    credit it runs under: the RunPod job id is recorded there (so a restarted server
+    can reattach), and the outcome is left in job_desc.outcome for the hub."""
     job_id = job_desc.id
     consumed_seconds = 0
     transcript_delivered = False
@@ -3973,11 +4139,14 @@ async def transcribe_job(job_desc):
     try:
         log_message(f"{job_desc.user_email}: beginning transcription of {job_desc}, file name={job_desc.filename}")
 
-        temp_file_path = temp_files[job_id]
+        temp_file_path = temp_files.get(job_id)
         duration = job_desc.duration
+        # Fresh: a job can run again (granted anew after a restart).
+        job_results[job_id] = {"results": [], "completion_time": None}
 
-        # Consume quota only if not using custom RunPod credentials
-        if not job_desc.uses_custom_runpod:
+        # Consume quota only if not using custom RunPod credentials (in hub mode the
+        # hub charged it when the job was registered)
+        if not job_desc.uses_custom_runpod and not HUB_MODE:
             user_bucket = await get_user_quota(job_desc.user_email)
             user_bucket.consume(duration)
             await db.save_quota(
@@ -4076,14 +4245,48 @@ async def transcribe_job(job_desc):
 
             m = ivrit.load_model(engine='runpod', model=selected_model, api_key=api_key, endpoint_id=endpoint_id, core_engine='stable-whisper')
 
+            attach = None
+            if hub_entry is not None:
+                previous = hub_entry.get("runpod") or {}
+                if previous.get("job") and previous.get("endpoint") == endpoint_id:
+                    attach = previous["job"]
+
+                def submitted(runpod_job_id, runpod_endpoint_id):
+                    hub_entry["runpod"] = {"job": runpod_job_id, "endpoint": runpod_endpoint_id}
+                    # Tell the hub now, not at the next heartbeat: from here on a
+                    # restart must reattach rather than need the file again.
+                    hub_entry["report"].set()
+                hub.report_runpod_submissions(submitted)
+
             # Process streaming results
-            if in_dev:
+            if attach:
+                # Submitted before this server restarted: wait for that run rather than
+                # paying for another, and fall back to one if it is gone.
+                log_message(f"{job_desc.user_email}: reattaching job {job_id} to RunPod job {attach}")
+
+                async def reattached():
+                    try:
+                        async for segment in hub.attach_runpod(api_key, endpoint_id, attach):
+                            yield segment
+                        return
+                    except Exception as e:
+                        if job_id not in temp_files:
+                            raise
+                        log_message(f"{job_desc.user_email}: reattaching {job_id} failed ({e}), transcribing again")
+                    base_url = os.environ["BASE_URL"]
+                    url = urljoin(base_url, f"/download/{job_id}") + "?t=" + hub.media_token(job_id)
+                    async for segment in m.transcribe_async(url=url, diarize=True, on_progress=progress_callback):
+                        yield segment
+                segs = reattached()
+            elif in_dev:
                 # In dev mode, use the local file
                 segs = m.transcribe_async(path=temp_file_path, diarize=True, on_progress=progress_callback)
             else:
                 # In production mode, send file as URL
                 base_url = os.environ["BASE_URL"]
                 download_url = urljoin(base_url, f"/download/{job_id}")
+                if HUB_MODE:
+                    download_url += "?t=" + hub.media_token(job_id)
                 segs = m.transcribe_async(url=download_url, diarize=True, on_progress=progress_callback)
         
         try:
@@ -4277,6 +4480,7 @@ async def transcribe_job(job_desc):
             # the handler around the TOC update. Runs after cleanup so the synthetic
             # "Being processed" entry /appdata/toc derives from running_jobs is gone
             # before the durable failure entry replaces it.
+            job_desc.outcome = ("done", None) if transcript_delivered else ("failed", failure_reason or "failed")
             if not transcript_delivered:
                 await handle_failed_job(job_desc, consumed_seconds, failure_reason)
         # The job thread will terminate itself in the next iteration of the transcribe_job function
@@ -4407,12 +4611,153 @@ async def prune_stats_history():
     )
 
 
+async def credit_loop():
+    """Hub mode: take credits from the hub, and run the jobs they are for."""
+    while True:
+        try:
+            free = HUB_MAX_RUNNING - len(hub_running)
+            if free <= 0:
+                await asyncio.sleep(1)
+                continue
+            for grant in await hub.client.wait(free, 20, byok=True):
+                await start_granted(grant)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Credit loop: %r", e)
+            await asyncio.sleep(5)
+
+
+async def start_granted(grant: dict):
+    job_id = grant["job_id"]
+    running = hub_running.get(job_id)
+    if running:
+        # This server's credit lapsed (heartbeats lost) and the hub granted the job
+        # again: it is still running here, now under the new credit.
+        running["handle"] = grant["handle"]
+        return
+    job_desc = hub_jobs.get(job_id) or await rebuild_job_desc(grant)
+    if job_desc is None:
+        logger.error("Granted job %s cannot be run here (no Drive grant or RunPod key); failing it", job_id)
+        await hub.client.done(grant["handle"], "failed", error="lost")
+        return
+    entry = {"handle": grant["handle"], "runpod": grant.get("backend_ref"), "cancelled": False, "task": None,
+             "report": asyncio.Event()}
+    hub_running[job_id] = entry
+    entry["task"] = asyncio.create_task(run_granted(job_desc, entry))
+
+
+async def rebuild_job_desc(grant: dict):
+    """A job registered before this server restarted, from what the hub kept of it."""
+    spec = grant.get("spec") or {}
+    email = spec.get("email")
+    if not email:
+        return None
+    refresh_token = await stored_refresh_token(email)
+    if not refresh_token:
+        return None
+    byok = grant["lane"] == "byok"
+    runpod_token = ""
+    if byok:
+        try:
+            runpod_token = await runpod_key_store.load(refresh_token)
+        except Exception as e:
+            logger.error("Could not load %s's RunPod key for job %s: %r", email, grant["job_id"], e)
+            return None
+        if not runpod_token:
+            return None
+    path = spec.get("path")
+    if path and os.path.exists(path):
+        temp_files[grant["job_id"]] = path
+    duration = float(spec.get("duration") or 0)
+    return box.Box(
+        qtime=time.time(), utime=time.time(), id=grant["job_id"], filename=spec.get("filename"),
+        user_email=email, duration=duration, runpod_token=runpod_token, uses_custom_runpod=byok,
+        language=spec.get("language") or "he", refresh_token=refresh_token,
+        save_audio=bool(spec.get("save_audio")),
+        job_type=PRIVATE if byok else (SHORT if duration <= SHORT_JOB_THRESHOLD else LONG),
+    )
+
+
+async def run_granted(job_desc, entry: dict):
+    job_id = job_desc.id
+    heartbeat = asyncio.create_task(credit_heartbeat(job_desc, entry))
+    outcome = ("failed", "failed")
+    try:
+        if not entry["runpod"] and job_id not in temp_files:
+            # The file was kept by a server since replaced (a deploy), and RunPod
+            # never had it: the user has to send it again.
+            log_message(f"{job_desc.user_email}: file for job {job_id} is gone; failing it")
+            await record_unfinished_job(job_desc, "failed")
+            await notify_job_finished(job_desc, "failed", None)
+            await handle_failed_job(job_desc, 0, "errorMediaLost")
+            outcome = ("failed", "media_lost")
+        else:
+            running_jobs[job_desc.job_type][job_id] = job_desc
+            await transcribe_job(job_desc, hub_entry=entry)
+            outcome = job_desc.get("outcome") or outcome
+    except asyncio.CancelledError:
+        outcome = ("failed", "cancelled")
+    except Exception as e:
+        logger.error("Running granted job %s failed: %r", job_id, e)
+    finally:
+        heartbeat.cancel()
+        hub_running.pop(job_id, None)
+        hub_jobs.pop(job_id, None)
+        if job_desc.user_email in user_jobs:
+            user_jobs[job_desc.user_email].discard(job_id)
+            if not user_jobs[job_desc.user_email]:
+                del user_jobs[job_desc.user_email]
+    status, error = outcome
+    await hub.client.done(entry["handle"], status, error=error, duration=job_desc.duration)
+
+
+async def credit_heartbeat(job_desc, entry: dict):
+    """Keep the job's credit, tell the hub how far along it is, and stop it if asked."""
+    while True:
+        # Every HUB_HEARTBEAT_SECONDS, or at once when there is news (the RunPod job id).
+        try:
+            await asyncio.wait_for(entry["report"].wait(), HUB_HEARTBEAT_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+        entry["report"].clear()
+        progress = transcription_progress.get(job_desc.id) or {}
+        percent = progress.get("percent")
+        eta = None
+        started = job_desc.get("transcribe_start_time")
+        if started and percent:
+            eta = (time.time() - started) * (100 - percent) / max(percent, 1)
+        try:
+            answer = await hub.client.progress(
+                entry["handle"], stage=progress.get("description") or "transcribing",
+                percent=percent, eta_s=eta, backend_ref=entry["runpod"],
+            )
+        except Exception as e:
+            logger.warning("Heartbeat for job %s failed: %r", job_desc.id, e)
+            continue
+        if answer is None:
+            # Lapsed; the hub grants the job again, and start_granted adopts the new credit.
+            logger.warning("Credit for job %s lapsed; waiting to be granted it again", job_desc.id)
+            continue
+        if answer.get("cancel"):
+            log_message(f"{job_desc.user_email}: job {job_desc.id} cancelled")
+            entry["cancelled"] = True
+            runpod = entry.get("runpod") or {}
+            if runpod.get("job"):
+                api_key = job_desc.runpod_token or os.environ.get("RUNPOD_API_KEY", "")
+                await hub.cancel_runpod(api_key, runpod["endpoint"], runpod["job"])
+            if entry.get("task"):
+                entry["task"].cancel()
+            return
+
+
 async def event_loop():
     while True:
         await submit_next_transcoding_task()
-        await submit_next_task(queues[SHORT], running_jobs[SHORT], max_parallel_jobs[SHORT], SHORT)
-        await submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG], LONG)
-        await submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE], PRIVATE)
+        if not HUB_MODE:
+            await submit_next_task(queues[SHORT], running_jobs[SHORT], max_parallel_jobs[SHORT], SHORT)
+            await submit_next_task(queues[LONG], running_jobs[LONG], max_parallel_jobs[LONG], LONG)
+            await submit_next_task(queues[PRIVATE], running_jobs[PRIVATE], max_parallel_jobs[PRIVATE], PRIVATE)
         await cleanup_old_results()
         await check_heartbeat_timeout()
         # Bookkeeping only: a database blip must not take the scheduler down with it.
