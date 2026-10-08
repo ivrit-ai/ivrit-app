@@ -1172,34 +1172,61 @@ function watchJobs() {
   if (!polling && eliezerReady()) polling = setTimeout(pollJobs, 0);
 }
 
+// Files being sent right now, so a share arriving mid-upload is not sent twice.
+const sending = new Set();
+
+// Sends one shared file to Eliezer; true once it is queued there. On failure
+// the file stays among the shared files, where it can be sent again.
 async function transcribeHere(file) {
-  let token;
+  if (sending.has(file.key)) return false;
+  sending.add(file.key);
   try {
-    token = await googleIdToken(true);
-  } catch (err) {
-    if (err?.code !== "cancelled") toast(t("googleFailed"));
-    return;
+    let token;
+    try {
+      token = await googleIdToken(true);
+    } catch (err) {
+      if (err?.code !== "cancelled") toast(t("googleFailed"));
+      return false;
+    }
+    let res;
+    try {
+      res = await shell.ivrit.uploadShared({ id: file.key, url: `${config.eliezer}/app/v1/jobs`, token });
+    } catch {
+      toast(t("offline"));
+      return false;
+    }
+    if (res.status !== 202) {
+      if (res.status === 401) googleToken = null;
+      const reason = { 401: "googleFailed", 413: "appError_too_large", 415: "appError_unsupported", 429: "tooManyPending" }[res.status];
+      toast(reason ? t(reason) : t("error", res.status));
+      return false;
+    }
+    const { job_id } = JSON.parse(res.body);
+    await store.put([jobMessage({ job_id, status: "queued", filename: file.name, created_at: Date.now() / 1000, duration: file.durationMs / 1000 })]);
+    await setPendingJobs([...(await pendingJobs()), job_id]);
+    await discardShared(file.key);
+    return true;
+  } finally {
+    sending.delete(file.key);
   }
-  toast(t("uploading"));
-  let res;
-  try {
-    res = await shell.ivrit.uploadShared({ id: file.key, url: `${config.eliezer}/app/v1/jobs`, token });
-  } catch {
-    return toast(t("offline"));
+}
+
+// What was just shared into the app: whatever Eliezer takes is sent at once,
+// without asking, and appears in the inbox as it is transcribed. Anything else
+// waits in the Transcribe tab.
+async function takeShared() {
+  if (!state.me || state.me.offline) return;
+  const files = await sharedFiles().catch(() => []);
+  if (!files.length) return;
+  let sent = 0;
+  for (const file of files.filter(fitsEliezer)) if (await transcribeHere(file)) sent++;
+  const left = files.length - sent;
+  if (sent) {
+    await loadMessages();
+    toast(t("transcribing"));
+    watchJobs();
   }
-  if (res.status !== 202) {
-    if (res.status === 401) googleToken = null;
-    const reason = { 401: "googleFailed", 413: "appError_too_large", 415: "appError_unsupported", 429: "tooManyPending" }[res.status];
-    return toast(reason ? t(reason) : t("error", res.status));
-  }
-  const { job_id } = JSON.parse(res.body);
-  await store.put([jobMessage({ job_id, status: "queued", filename: file.name, created_at: Date.now() / 1000, duration: file.durationMs / 1000 })]);
-  await setPendingJobs([...(await pendingJobs()), job_id]);
-  await discardShared(file.key);
-  await loadMessages();
-  toast(t("transcribing"));
-  showView("inbox");
-  watchJobs();
+  showView(left ? "transcribe" : "inbox");
 }
 
 async function renderTranscribe() {
@@ -1223,15 +1250,21 @@ async function renderTranscribe() {
             ]),
             eliezerReady() && !fitsEliezer(file) ? el("div", { class: "sub", text: t("tooBigHere") }) : null,
           ]),
+          // Normally sent on arrival (takeShared); here only if that failed.
           fitsEliezer(file)
-            ? el("button", { class: "btn primary small", type: "button", text: t("transcribeHere"), onclick: () => transcribeHere(file) })
-            : null,
-          el("button", {
-            class: `btn small${fitsEliezer(file) ? " quiet" : " primary"}`,
-            type: "button",
-            text: t(eliezerReady() ? "sendOn" : "sharedSend"),
-            onclick: () => sendToTranscribe(file),
-          }),
+            ? el("button", {
+                class: "btn primary small",
+                type: "button",
+                text: t(sending.has(file.key) ? "uploading" : "transcribeHere"),
+                disabled: sending.has(file.key),
+                onclick: () => takeShared(),
+              })
+            : el("button", {
+                class: "btn primary small",
+                type: "button",
+                text: t(eliezerReady() ? "sendOn" : "sharedSend"),
+                onclick: () => sendToTranscribe(file),
+              }),
           el("button", {
             class: "icon-btn",
             type: "button",
@@ -1457,7 +1490,7 @@ if (shell) {
     if (state.me && id) location.hash = `#m/${encodeURIComponent(id)}`;
   });
   shell.ivrit.addListener("shared", () => {
-    if (state.me) showView("transcribe");
+    if (state.me) takeShared();
     else showSharedSignedOut();
   });
   shell.ivrit.addListener("pushToken", () => {
@@ -1660,7 +1693,7 @@ async function start() {
   const opened = await shell?.ivrit.takeOpened().catch(() => null);
   if (opened?.id) history.replaceState(null, "", `/#m/${encodeURIComponent(opened.id)}`);
   await openFromHash();
-  if (shell && (await shell.ivrit.sharedFiles().catch(() => ({ files: [] }))).files.length) showView("transcribe");
+  if (shell) await takeShared();
   watchJobs();
   if (location.hash === "#shared") {
     history.replaceState(null, "", location.pathname);
