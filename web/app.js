@@ -1394,14 +1394,48 @@ async function takeShared() {
   const files = await sharedFiles().catch(() => []);
   if (!files.length) return;
   let sent = 0;
+  const longer = [];
   for (const file of files) {
-    if (!fitsEliezer(file)) await refuseShared(file);
+    if (!fitsEliezer(file)) longer.push(file);
     else if ((await send(file)) && !file.uploadId) sent++;
   }
   await loadMessages();
+  if (longer.length && (await sendToFiles(longer))) return;
   if (sent) toast(t("transcribing"));
   showView("inbox");
   watchJobs();
+}
+
+// Longer than a clip: transcribed as a file, with speakers, into My files (the
+// Transcribe view), which needs Drive. Uploaded natively in the background. True
+// when the Transcribe view is what the user should see now.
+async function sendToFiles(files) {
+  if (!shell) {
+    for (const file of files) await refuseShared(file);
+    return false;
+  }
+  const bootData = await transcribeView.boot().catch(() => null);
+  if (!bootData?.signedIn) {
+    // Drive first; once connected, the files go on (connect-drive calls takeShared).
+    showView("transcribe");
+    return true;
+  }
+  let queued = 0;
+  for (const file of files) {
+    try {
+      await shell.ivrit.uploadToTranscribe({ id: file.key, base: location.origin, language: "he", saveAudio: true });
+      queued++;
+    } catch (err) {
+      if (err?.code === "UNIMPLEMENTED" || /not implemented/i.test(err?.message ?? "")) toast(t("updateApp"));
+      await refuseShared(file);
+    }
+  }
+  if (!queued) return false;
+  toast(t("sentToFiles"));
+  showView("transcribe");
+  await showTranscribeApp();
+  document.querySelector('#transcribe-app .tab-button[data-tab="files"]')?.click();
+  return true;
 }
 
 // Transcribing files here, as transcribe.ivrit.ai does (web/transcribe/): it needs
@@ -1462,6 +1496,8 @@ async function showTranscribeApp() {
 
 $("connect-drive").addEventListener("click", async () => {
   if (!(await connectDrive())) return;
+  // Long recordings shared in were waiting for Drive.
+  if (shell) takeShared();
   if ($("transcribe-mount").hidden || $("transcribe-mount").childElementCount) {
     // Already loaded under a lost sign-in: start it afresh.
     location.hash = "#transcribe";
@@ -1727,6 +1763,17 @@ if (shell) {
     await loadMessages();
     if (state.view === "inbox") renderInbox();
     watchJobs();
+  });
+  // A long recording on its way into My files: queued there, refused, or the sign-in
+  // (Drive) is gone.
+  shell.ivrit.addListener("fileUpload", async ({ state: progress, error }) => {
+    if (progress === "signin") {
+      showView("transcribe");
+      $("transcribe-connect").hidden = false;
+    } else if (progress === "failed") {
+      toast(t("fileUploadFailed"));
+    }
+    if (state.view === "transcribe") document.querySelector('#transcribe-app .tab-button[data-tab="files"]')?.click();
   });
   shell.ivrit.addListener("pushToken", () => {
     localStorage.removeItem("reconciled_at");

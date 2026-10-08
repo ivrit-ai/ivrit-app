@@ -1,12 +1,17 @@
 package ai.ivrit.app;
 
 import android.Manifest;
+import android.app.Activity;
 import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import androidx.activity.result.ActivityResult;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.IntentSenderRequest;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.JSArray;
@@ -18,6 +23,8 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import com.google.android.gms.auth.api.identity.AuthorizationResult;
+import com.google.android.gms.auth.api.identity.Identity;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.messaging.FirebaseMessaging;
 import java.io.FileInputStream;
@@ -43,10 +50,15 @@ import org.json.JSONArray;
 public class IvritNativePlugin extends Plugin {
     private static volatile IvritNativePlugin current;
     private String pendingOpen;
+    private ActivityResultLauncher<IntentSenderRequest> driveConsent;
+    private PluginCall pendingDrive;
 
     @Override
     public void load() {
         current = this;
+        // Registered now: an activity takes these only before it has started.
+        driveConsent = getActivity().registerForActivityResult(
+            new ActivityResultContracts.StartIntentSenderForResult(), this::driveConsented);
         Notifications.ensureChannel(getContext());
         handleOnNewIntent(getActivity().getIntent());
     }
@@ -195,6 +207,63 @@ public class IvritNativePlugin extends Plugin {
         });
     }
 
+    // --- Google Drive, for transcripts ---------------------------------------
+
+    /**
+     * Access to the user's Drive (DriveAccess): Google's screen if not granted yet,
+     * otherwise at once. Resolves with {code}, for the server (POST /auth/drive).
+     */
+    @PluginMethod
+    public void authorizeDrive(PluginCall call) {
+        String clientId = call.getString("clientId");
+        if (clientId == null || clientId.isEmpty()) {
+            call.reject("no client id", "no_client_id");
+            return;
+        }
+        if (pendingDrive != null) pendingDrive.reject("superseded", "cancelled");
+        pendingDrive = call;
+        Identity.getAuthorizationClient(getActivity())
+            .authorize(DriveAccess.request(clientId))
+            .addOnSuccessListener(result -> {
+                if (result.hasResolution() && result.getPendingIntent() != null) {
+                    driveConsent.launch(new IntentSenderRequest.Builder(result.getPendingIntent().getIntentSender()).build());
+                } else {
+                    driveAuthorized(result);
+                }
+            })
+            .addOnFailureListener(e -> {
+                PluginCall pending = pendingDrive;
+                pendingDrive = null;
+                if (pending != null) pending.reject(String.valueOf(e.getMessage()), "failed");
+            });
+    }
+
+    private void driveConsented(ActivityResult consent) {
+        if (pendingDrive == null) return;
+        if (consent.getResultCode() != Activity.RESULT_OK) {
+            PluginCall pending = pendingDrive;
+            pendingDrive = null;
+            pending.reject("cancelled", "cancelled");
+            return;
+        }
+        try {
+            driveAuthorized(Identity.getAuthorizationClient(getActivity()).getAuthorizationResultFromIntent(consent.getData()));
+        } catch (Exception e) {
+            PluginCall pending = pendingDrive;
+            pendingDrive = null;
+            pending.reject(String.valueOf(e.getMessage()), "failed");
+        }
+    }
+
+    private void driveAuthorized(AuthorizationResult result) {
+        PluginCall pending = pendingDrive;
+        pendingDrive = null;
+        if (pending == null) return;
+        String code = result.getServerAuthCode();
+        if (code == null || code.isEmpty()) pending.reject("no code", "failed");
+        else pending.resolve(new JSObject().put("code", code));
+    }
+
     @PluginMethod
     public void forgetGoogle(PluginCall call) {
         GoogleAccount.forget(getActivity());
@@ -222,6 +291,34 @@ public class IvritNativePlugin extends Plugin {
         Shares.markUpload(getContext(), id, uploadId);
         TranscribeWorker.enqueue(getContext(), id, base, token, uploadId, call.getString("origin", ""), call.getString("title", ""));
         call.resolve();
+    }
+
+    /**
+     * A shared recording too long for a clip, into the app's own transcription
+     * (FileUploadWorker): uploaded in the background to base (this site), signed in by
+     * the web view's cookie, into My files.
+     */
+    @PluginMethod
+    public void uploadToTranscribe(PluginCall call) {
+        String id = call.getString("id", "");
+        String base = call.getString("base", "");
+        if (Shares.find(getContext(), id) == null || !base.startsWith("https://")) {
+            call.reject("cannot upload", "bad_request");
+            return;
+        }
+        // The web view's cookie, on disk before a worker in another moment reads it.
+        android.webkit.CookieManager.getInstance().flush();
+        FileUploadWorker.enqueue(getContext(), id, base, call.getString("language", "he"), Boolean.TRUE.equals(call.getBoolean("saveAudio", true)));
+        call.resolve();
+    }
+
+    /** From FileUploadWorker: queued, failed (with the server's reason), or signin. */
+    static void fileUpload(String shareId, String state, String error) {
+        IvritNativePlugin plugin = current;
+        if (plugin == null) return;
+        JSObject data = new JSObject().put("id", shareId).put("state", state);
+        if (error != null) data.put("error", error);
+        plugin.notifyListeners("fileUpload", data, true);
     }
 
     /** From TranscribeWorker: queued, done, failed (with error), or signin (token ran out). */

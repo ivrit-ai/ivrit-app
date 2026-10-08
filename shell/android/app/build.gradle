@@ -56,6 +56,7 @@ dependencies {
     implementation "androidx.credentials:credentials:$credentialsVersion"
     implementation "androidx.credentials:credentials-play-services-auth:$credentialsVersion"
     implementation "com.google.android.libraries.identity.googleid:googleid:$googleIdVersion"
+    implementation "com.google.android.gms:play-services-auth:$playServicesAuthVersion"
     implementation "androidx.work:work-runtime:$workVersion"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
