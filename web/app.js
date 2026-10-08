@@ -138,6 +138,8 @@ function avatar({ icon: src, name }, big = false) {
 }
 
 function messageAvatar(message) {
+  // The app's own transcriptions carry the app's mark.
+  if (message.source_id === APP_SOURCE) return avatar({ icon: "/icons/icon-192.png", name: "ivrit.ai" });
   const source = sourceOf(message);
   return avatar({ icon: source?.icon, name: sourceName(message) });
 }
@@ -497,7 +499,7 @@ function renderMessage(m, index) {
   const expanded = state.expanded.has(m.id);
   const body = m.body
     ? el("div", {
-        class: `msg-body${expanded ? "" : " clamp"}`,
+        class: `msg-body${expanded ? "" : " clamp"}${m.kind === "pending" ? " pending" : ""}`,
         dir: "auto",
         lang: m.lang ?? undefined,
         text: m.body,
@@ -1034,7 +1036,7 @@ const SHARE_CACHE = "share-inbox";
 async function sharedFiles() {
   if (shell) {
     const { files } = await shell.ivrit.sharedFiles();
-    return files.map((f) => ({ key: f.id, name: f.name || t("sharedUnnamed"), type: f.type, size: f.size }));
+    return files.map((f) => ({ key: f.id, name: f.name || t("sharedUnnamed"), type: f.type, size: f.size, durationMs: f.durationMs }));
   }
   const cache = await caches.open(SHARE_CACHE);
   const files = [];
@@ -1070,6 +1072,130 @@ async function sendToTranscribe(file) {
   form.submit();
 }
 
+// ---------------------------------------------------------------- transcribe here, by Eliezer
+
+// A clip shared into the app that Eliezer takes (up to 10 minutes, 20 MB) goes
+// straight to Eliezer, under the Google account chosen on the phone: the app
+// sends Google's ID token, which Eliezer checks with Google, and nothing else
+// is involved. The result is fetched back and kept here as a message from the
+// app itself (APP_SOURCE), with the app's mark.
+const APP_SOURCE = "ivrit-app";
+const ELIEZER_MAX_SECONDS = 600;
+const ELIEZER_MAX_BYTES = 20 * 1024 * 1024;
+const POLL_MS = 3000;
+
+const eliezerReady = () => Boolean(shell && config.eliezer && config.googleClientId);
+const fitsEliezer = (file) =>
+  eliezerReady() && file.durationMs > 0 && file.durationMs <= ELIEZER_MAX_SECONDS * 1000 && file.size <= ELIEZER_MAX_BYTES;
+
+let googleToken = null;
+
+// A Google ID token lasts an hour; one is reused until a minute before that.
+async function googleIdToken(interactive) {
+  if (googleToken && googleToken.exp - 60_000 > Date.now()) return googleToken.idToken;
+  const { idToken } = await shell.ivrit.googleIdToken({ clientId: config.googleClientId, interactive });
+  const claims = JSON.parse(atob(idToken.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+  googleToken = { idToken, exp: claims.exp * 1000 };
+  return idToken;
+}
+
+async function eliezer(path, { interactive = false } = {}) {
+  const token = await googleIdToken(interactive);
+  const res = await fetch(`${config.eliezer}${path}`, { headers: { authorization: `Bearer ${token}` } });
+  if (res.status === 401) googleToken = null;
+  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => ({})));
+  return res.json();
+}
+
+function clock(seconds) {
+  const s = Math.round(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// A job, as a message in the inbox: waiting, its transcript, or why there is none.
+function jobMessage(job) {
+  const failed = job.status === "failed";
+  return {
+    id: `app-${job.job_id}`,
+    created_at: Math.round(job.created_at * 1000),
+    source: "ivrit.ai",
+    source_id: APP_SOURCE,
+    // Without its extension: "הודעה.ogg" would read backwards in a Hebrew line.
+    title: job.filename?.replace(/\.[a-z0-9]{1,5}$/i, "") || null,
+    subtitle: job.duration ? clock(job.duration) : null,
+    body: job.status === "done" ? job.text : failed ? t(`appError_${job.error}`, job.wait_minutes) : t("transcribingNow"),
+    kind: job.status === "queued" ? "pending" : failed ? "notice" : "transcript",
+    lang: job.status === "done" ? "he" : null,
+  };
+}
+
+async function pendingJobs() {
+  return (await store.getMeta("app_jobs").catch(() => null)) ?? [];
+}
+
+async function setPendingJobs(ids) {
+  await store.setMeta("app_jobs", ids);
+}
+
+// While the app is open, waiting jobs are checked every few seconds; whatever
+// finished while it was closed is picked up on the next open.
+let polling = null;
+
+async function pollJobs() {
+  polling = null;
+  const ids = await pendingJobs();
+  if (!ids.length || document.visibilityState !== "visible") return;
+  const left = [];
+  for (const id of ids) {
+    try {
+      const job = await eliezer(`/app/v1/jobs/${encodeURIComponent(id)}`);
+      await store.put([jobMessage(job)]);
+      if (job.status === "queued") left.push(id);
+    } catch (err) {
+      // Gone (older than three days, or another account): stop asking.
+      if (!(err instanceof ApiError && err.status === 404)) left.push(id);
+    }
+  }
+  await setPendingJobs(left);
+  await loadMessages();
+  if (state.view === "inbox") renderInbox();
+  if (left.length) polling = setTimeout(pollJobs, POLL_MS);
+}
+
+function watchJobs() {
+  if (!polling && eliezerReady()) polling = setTimeout(pollJobs, 0);
+}
+
+async function transcribeHere(file) {
+  let token;
+  try {
+    token = await googleIdToken(true);
+  } catch (err) {
+    if (err?.code !== "cancelled") toast(t("googleFailed"));
+    return;
+  }
+  toast(t("uploading"));
+  let res;
+  try {
+    res = await shell.ivrit.uploadShared({ id: file.key, url: `${config.eliezer}/app/v1/jobs`, token });
+  } catch {
+    return toast(t("offline"));
+  }
+  if (res.status !== 202) {
+    if (res.status === 401) googleToken = null;
+    const reason = { 401: "googleFailed", 413: "appError_too_large", 415: "appError_unsupported", 429: "tooManyPending" }[res.status];
+    return toast(reason ? t(reason) : t("error", res.status));
+  }
+  const { job_id } = JSON.parse(res.body);
+  await store.put([jobMessage({ job_id, status: "queued", filename: file.name, created_at: Date.now() / 1000, duration: file.durationMs / 1000 })]);
+  await setPendingJobs([...(await pendingJobs()), job_id]);
+  await discardShared(file.key);
+  await loadMessages();
+  toast(t("transcribing"));
+  showView("inbox");
+  watchJobs();
+}
+
 async function renderTranscribe() {
   $("transcribe-open").href = `${config.transcribe}/`;
   const box = $("shared");
@@ -1078,7 +1204,7 @@ async function renderTranscribe() {
   if (!files.length) return box.replaceChildren();
   box.replaceChildren(
     el("h3", { text: t("sharedTitle") }),
-    el("p", { class: "muted", text: t(shell ? "sharedLedeApp" : "sharedLede") }),
+    el("p", { class: "muted", text: t(eliezerReady() ? "sharedLedeEliezer" : shell ? "sharedLedeApp" : "sharedLede") }),
     el(
       "div",
       { class: "list" },
@@ -1086,9 +1212,20 @@ async function renderTranscribe() {
         el("div", { class: "list-row" }, [
           el("div", { class: "grow" }, [
             el("div", { dir: "auto", text: file.name }),
-            el("div", { class: "sub" }, [el("bdi", { dir: "ltr", text: formatSize(file.size) })]),
+            el("div", { class: "sub" }, [
+              el("bdi", { dir: "ltr", text: [file.durationMs > 0 ? clock(file.durationMs / 1000) : null, formatSize(file.size)].filter(Boolean).join(" · ") }),
+            ]),
+            eliezerReady() && !fitsEliezer(file) ? el("div", { class: "sub", text: t("tooBigHere") }) : null,
           ]),
-          el("button", { class: "btn primary small", type: "button", text: t("sharedSend"), onclick: () => sendToTranscribe(file) }),
+          fitsEliezer(file)
+            ? el("button", { class: "btn primary small", type: "button", text: t("transcribeHere"), onclick: () => transcribeHere(file) })
+            : null,
+          el("button", {
+            class: `btn small${fitsEliezer(file) ? " quiet" : " primary"}`,
+            type: "button",
+            text: t(eliezerReady() ? "sendOn" : "sharedSend"),
+            onclick: () => sendToTranscribe(file),
+          }),
           el("button", {
             class: "icon-btn",
             type: "button",
@@ -1269,6 +1406,7 @@ $("signout").addEventListener("click", async () => {
   const anonymous = state.me.kind === "anonymous";
   if (!(await ask(anonymous ? t("signOutAnonConfirm") : t("signOutConfirm"), { ok: t("signOut"), danger: anonymous }))) return;
   await forgetThisDevice();
+  shell?.ivrit.forgetGoogle().catch(() => {});
   // An anonymous account is unreachable once signed out, so it is deleted
   // rather than left behind.
   if (anonymous) await del("/api/me").catch(() => {});
@@ -1343,6 +1481,7 @@ document.addEventListener("visibilitychange", async () => {
     await notify.refresh();
     renderNotifyBanner();
     if (state.view === "settings") renderPermission();
+    watchJobs();
   }
   reconcile();
   refreshInbox();
@@ -1513,6 +1652,7 @@ async function start() {
   if (opened?.id) history.replaceState(null, "", `/#m/${encodeURIComponent(opened.id)}`);
   await openFromHash();
   if (shell && (await shell.ivrit.sharedFiles().catch(() => ({ files: [] }))).files.length) showView("transcribe");
+  watchJobs();
   if (location.hash === "#shared") {
     history.replaceState(null, "", location.pathname);
     showView("transcribe");

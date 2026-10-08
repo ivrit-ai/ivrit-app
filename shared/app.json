@@ -6,6 +6,7 @@
   "startUrl": "/",
   "communicator": "https://communicator.ivrit.ai",
   "transcribe": "https://transcribe.ivrit.ai",
+  "eliezer": "https://status.eliezer.ivrit.ai",
   "handoffUrl": "ai.ivrit.app://auth",
   "themeColor": "#F7F6F3",
   "backgroundColor": "#F7F6F3",

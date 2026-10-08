@@ -3,6 +3,7 @@ package ai.ivrit.app;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
+import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.provider.OpenableColumns;
 import android.util.Log;
@@ -39,12 +40,14 @@ final class Shares {
         final File file;
         final String name;
         final String type;
+        final long durationMs;
 
-        Entry(String id, File file, String name, String type) {
+        Entry(String id, File file, String name, String type, long durationMs) {
             this.id = id;
             this.file = file;
             this.name = name;
             this.type = type;
+            this.durationMs = durationMs;
         }
     }
 
@@ -86,7 +89,7 @@ final class Shares {
             if (in == null) return;
             byte[] buffer = new byte[64 * 1024];
             for (int n; (n = in.read(buffer)) > 0; ) out.write(buffer, 0, n);
-            JSONObject meta = new JSONObject().put("name", name).put("type", type);
+            JSONObject meta = new JSONObject().put("name", name).put("type", type).put("durationMs", durationOf(file));
             try (OutputStream m = new FileOutputStream(new File(dir(context), id + ".json"))) {
                 m.write(meta.toString().getBytes(StandardCharsets.UTF_8));
             }
@@ -94,6 +97,24 @@ final class Shares {
             Log.w(TAG, "could not keep a shared file", e);
             //noinspection ResultOfMethodCallIgnored
             file.delete();
+        }
+    }
+
+    /** How long the recording is, or -1 if it cannot be read: the app sends short ones to Eliezer. */
+    private static long durationOf(File file) {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(file.getPath());
+            String ms = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            return ms == null ? -1 : Long.parseLong(ms);
+        } catch (Exception e) {
+            return -1;
+        } finally {
+            try {
+                retriever.release();
+            } catch (Exception ignored) {
+                // Nothing held.
+            }
         }
     }
 
@@ -114,7 +135,7 @@ final class Shares {
         if (!file.isFile() || !meta.isFile()) return null;
         try {
             JSONObject m = new JSONObject(read(meta));
-            return new Entry(id, file, m.optString("name"), m.optString("type", "application/octet-stream"));
+            return new Entry(id, file, m.optString("name"), m.optString("type", "application/octet-stream"), m.optLong("durationMs", -1));
         } catch (Exception e) {
             return null;
         }
@@ -137,7 +158,14 @@ final class Shares {
             if (name.endsWith(".json")) continue;
             Entry entry = find(context, name);
             if (entry == null) continue;
-            out.put(new JSObject().put("id", entry.id).put("name", entry.name).put("type", entry.type).put("size", entry.file.length()));
+            out.put(
+                new JSObject()
+                    .put("id", entry.id)
+                    .put("name", entry.name)
+                    .put("type", entry.type)
+                    .put("size", entry.file.length())
+                    .put("durationMs", entry.durationMs)
+            );
         }
         return out;
     }

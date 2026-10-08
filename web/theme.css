@@ -94,3 +94,9 @@
   font-size: 12px;
   color: var(--muted);
 }
+
+/* A transcription still on its way (see "transcribe here" in app.js). */
+.msg-body.pending {
+  color: var(--muted);
+  font-style: italic;
+}

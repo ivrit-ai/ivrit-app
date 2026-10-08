@@ -16,6 +16,10 @@ const PORT = Number(process.env.XHOSTD_HTTP_PORT || process.env.XHOST_HTTP_PORT 
 const CONFIG = {
   communicator: (process.env.COMMUNICATOR_URL || APP.communicator).replace(/\/+$/, ""),
   transcribe: (process.env.TRANSCRIBE_URL || APP.transcribe).replace(/\/+$/, ""),
+  eliezer: (process.env.ELIEZER_URL || APP.eliezer).replace(/\/+$/, ""),
+  // The app's web OAuth client: Google issues the app's ID tokens to it, and
+  // Eliezer accepts tokens issued to it. Unset, transcribing in the app is off.
+  googleClientId: process.env.GOOGLE_CLIENT_ID || null,
 };
 const CONFIG_JS = `self.IVRIT_CONFIG = ${JSON.stringify(CONFIG)};\n`;
 

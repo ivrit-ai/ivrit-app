@@ -20,7 +20,15 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.messaging.FirebaseMessaging;
-import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.json.JSONArray;
 
 /**
@@ -164,7 +172,92 @@ public class IvritNativePlugin extends Plugin {
         if (plugin != null) plugin.notifyListeners("pushToken", new JSObject(), true);
     }
 
+    // --- the Google account ------------------------------------------------
+
+    /** A Google ID token for clientId (the app's web OAuth client): silent if possible, the account picker if interactive. */
+    @PluginMethod
+    public void googleIdToken(PluginCall call) {
+        String clientId = call.getString("clientId");
+        if (clientId == null || clientId.isEmpty()) {
+            call.reject("no client id", "no_client_id");
+            return;
+        }
+        GoogleAccount.idToken(getActivity(), clientId, Boolean.TRUE.equals(call.getBoolean("interactive", false)), new GoogleAccount.Result() {
+            @Override
+            public void ok(String idToken, String email, String name) {
+                call.resolve(new JSObject().put("idToken", idToken).put("email", email).put("name", name));
+            }
+
+            @Override
+            public void error(String code, String message) {
+                call.reject(message, code);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void forgetGoogle(PluginCall call) {
+        GoogleAccount.forget(getActivity());
+        call.resolve();
+    }
+
     // --- shared files ------------------------------------------------------
+
+    private static final ExecutorService UPLOADS = Executors.newSingleThreadExecutor();
+
+    /**
+     * Sends a shared file to url as the request body, with its type, its name in
+     * X-Filename and the given bearer token: Eliezer's POST /app/v1/jobs. Native, so
+     * the file never crosses into the page. Resolves with the HTTP status and body.
+     */
+    @PluginMethod
+    public void uploadShared(PluginCall call) {
+        Shares.Entry entry = Shares.find(getContext(), call.getString("id", ""));
+        String url = call.getString("url");
+        if (entry == null || url == null || !url.startsWith("https://")) {
+            call.reject("nothing to upload", "not_found");
+            return;
+        }
+        String token = call.getString("token", "");
+        UPLOADS.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(url).openConnection();
+                connection.setRequestMethod("POST");
+                connection.setDoOutput(true);
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(60000);
+                connection.setFixedLengthStreamingMode(entry.file.length());
+                connection.setRequestProperty("Content-Type", entry.type);
+                connection.setRequestProperty("X-Filename", URLEncoder.encode(entry.name, "UTF-8").replace("+", "%20"));
+                connection.setRequestProperty("Authorization", "Bearer " + token);
+                try (InputStream in = new FileInputStream(entry.file); OutputStream out = connection.getOutputStream()) {
+                    byte[] buffer = new byte[64 * 1024];
+                    for (int n; (n = in.read(buffer)) > 0; ) out.write(buffer, 0, n);
+                }
+                int status = connection.getResponseCode();
+                InputStream body = status < 400 ? connection.getInputStream() : connection.getErrorStream();
+                String text = "";
+                if (body != null) {
+                    try (InputStream in = body) {
+                        text = new String(readAll(in), StandardCharsets.UTF_8);
+                    }
+                }
+                call.resolve(new JSObject().put("status", status).put("body", text));
+            } catch (Exception e) {
+                call.reject(String.valueOf(e.getMessage()), "network");
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        });
+    }
+
+    private static byte[] readAll(InputStream in) throws java.io.IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        for (int n; (n = in.read(buffer)) > 0; ) out.write(buffer, 0, n);
+        return out.toByteArray();
+    }
 
     @PluginMethod
     public void sharedFiles(PluginCall call) {
