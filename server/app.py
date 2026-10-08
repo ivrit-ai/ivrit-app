@@ -166,6 +166,14 @@ if in_local_mode:
 else:
     file_storage_backend: FileStorageBackend = GoogleDriveStorageBackend()
 
+# Short clips (voice messages, recordings shared into the app) are kept, for users
+# who choose to, in a Drive folder of their own, apart from the transcriptions.
+CLIPS_FOLDER_NAME = os.environ.get("CLIPS_DRIVE_FOLDER_NAME", "ivrit.ai clips")
+if in_local_mode:
+    clips_storage_backend = None
+else:
+    clips_storage_backend = GoogleDriveStorageBackend(folder_name=CLIPS_FOLDER_NAME)
+
 # Users' own RunPod keys are stored encrypted on their Drive; local mode never
 # talks to RunPod, so it needs neither the store nor the encryption key.
 if in_local_mode:
@@ -4860,6 +4868,93 @@ if APP_SITE:
         if response_session:
             auth_cookies.write_session(response, response_session)
         return response
+
+    async def app_user(request: Request) -> Optional[str]:
+        """Who is asking: this browser's sign-in (the cookie) or the app's own session
+        (Bearer). The email, or None."""
+        session = get_session(request)
+        if session:
+            return session["user_email"]
+        header = request.headers.get("authorization", "")
+        sessions = app.state.app_sessions
+        if sessions and header.startswith("Bearer "):
+            try:
+                return sessions.verify(header[7:])["email"]
+            except Exception:
+                return None
+        return None
+
+    @app.get("/settings", include_in_schema=False)
+    async def get_settings(request: Request):
+        """The user's choices, and whether this server can reach their Drive."""
+        email = await app_user(request)
+        if not email:
+            return JSONResponse({"error": "signed_out"}, status_code=401)
+        return JSONResponse({
+            "clipsToDrive": await db.get_clips_to_drive(email),
+            "driveConnected": bool(await db.get_drive_grant(email)),
+        }, headers={"Cache-Control": "no-store"})
+
+    @app.post("/settings", include_in_schema=False)
+    async def save_settings(request: Request):
+        email = await app_user(request)
+        if not email:
+            return JSONResponse({"error": "signed_out"}, status_code=401)
+        body = await request.json()
+        if "clipsToDrive" in (body or {}):
+            await db.set_clips_to_drive(email, bool(body["clipsToDrive"]), int(time.time()))
+        return await get_settings(request)
+
+    CLIP_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
+
+    @app.post("/clips/save", include_in_schema=False)
+    async def save_clip(request: Request):
+        """A short transcript the app has (a voice message, a shared recording), kept
+        in the user's clips folder in Drive, if they chose so: {id, title, text,
+        duration, origin, created_at}. Saving one twice keeps one."""
+        email = await app_user(request)
+        if not email:
+            return JSONResponse({"error": "signed_out"}, status_code=401)
+        if not await db.get_clips_to_drive(email):
+            return JSONResponse({"saved": False, "reason": "off"})
+        refresh_token = await stored_refresh_token(email)
+        if not refresh_token:
+            return JSONResponse({"saved": False, "reason": "drive_not_connected"}, status_code=409)
+        clip = await request.json()
+        clip_id = str((clip or {}).get("id") or "")
+        text = (clip or {}).get("text")
+        if not CLIP_ID.match(clip_id) or not isinstance(text, str) or len(text) > 200_000:
+            return JSONResponse({"error": "bad clip"}, status_code=400)
+        entry = {
+            "id": clip_id,
+            "title": str(clip.get("title") or "")[:300] or None,
+            "duration_seconds": clip.get("duration"),
+            "origin": str(clip.get("origin") or "")[:40] or None,
+            "created_at": clip.get("created_at"),
+            "saved_at": datetime.now().isoformat(),
+        }
+        identifier = get_user_identifier(refresh_token=refresh_token, user_email=email)
+        file_name = f"{hashlib.sha256(clip_id.encode()).hexdigest()[:32]}.json.gz"
+        async with get_toc_lock(email + ":clips"):
+            toc_id = await clips_storage_backend.find_file_by_name("toc.json.gz", identifier)
+            toc = {"entries": []}
+            if toc_id:
+                raw = await clips_storage_backend.download_file_bytes(toc_id, identifier)
+                if raw:
+                    toc = json.loads(gzip.decompress(raw))
+            if any(e.get("id") == clip_id for e in toc.get("entries", [])):
+                return JSONResponse({"saved": True, "already": True})
+            data = gzip.compress(json.dumps({**entry, "text": text}, ensure_ascii=False).encode())
+            if not await clips_storage_backend.upload_file(file_name, data, "application/gzip", identifier, email):
+                return JSONResponse({"saved": False, "reason": "drive_failed"}, status_code=502)
+            toc.setdefault("entries", []).append({**entry, "file": file_name})
+            toc_data = gzip.compress(json.dumps(toc, ensure_ascii=False).encode())
+            ok = (await clips_storage_backend.update_file(toc_id, toc_data, "application/gzip", identifier, email)
+                  if toc_id else
+                  await clips_storage_backend.upload_file("toc.json.gz", toc_data, "application/gzip", identifier, email))
+            if not ok:
+                return JSONResponse({"saved": False, "reason": "drive_failed"}, status_code=502)
+        return JSONResponse({"saved": True})
 
     @app.post("/auth/drive", include_in_schema=False)
     async def connect_drive(request: Request):

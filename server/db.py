@@ -167,6 +167,22 @@ class Database:
         row = await self.fetchrow("SELECT refresh_token FROM drive_grants WHERE user_email = ?", user_email)
         return row["refresh_token"] if row else None
 
+    # ---- user settings ----
+
+    async def get_clips_to_drive(self, user_email: str):
+        row = await self.fetchrow("SELECT clips_to_drive FROM user_settings WHERE user_email = ?", user_email)
+        return row["clips_to_drive"] if row else None
+
+    async def set_clips_to_drive(self, user_email: str, on: bool, updated_at: int):
+        await self.execute(
+            "INSERT INTO user_settings (user_email, clips_to_drive, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (user_email) DO UPDATE SET "
+            "clips_to_drive = excluded.clips_to_drive, updated_at = excluded.updated_at",
+            user_email,
+            on,
+            updated_at,
+        )
+
     # ---- web push subscriptions ----
 
     async def save_push_subscription(

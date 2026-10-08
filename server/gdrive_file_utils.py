@@ -49,8 +49,9 @@ def _raise_write_error(context: str, status: int, body: str) -> NoReturn:
 class GoogleDriveStorageBackend(FileStorageBackend):
     """Google Drive implementation of file storage backend."""
     
-    def __init__(self):
-        pass
+    def __init__(self, folder_name: str = DRIVE_FOLDER_NAME):
+        # The app keeps transcriptions in one folder and short clips in another.
+        self.folder_name = folder_name
     
     async def get_available_storage_bytes(self, user_identifier: Optional[str]) -> Optional[int]:
         """Return the user's free Drive space, or None if it cannot be determined."""
@@ -85,7 +86,7 @@ class GoogleDriveStorageBackend(FileStorageBackend):
         if not user_identifier:
             return None
 
-        cache_key = _get_folder_cache_key(user_identifier)
+        cache_key = f"{self.folder_name}:{_get_folder_cache_key(user_identifier)}"
         cached = folder_id_cache.get(cache_key)
         if cached:
             return cached
@@ -99,7 +100,7 @@ class GoogleDriveStorageBackend(FileStorageBackend):
             "Authorization": f"Bearer {token}",
         }
         params = {
-            "q": f"name = '{DRIVE_FOLDER_NAME}' and mimeType = '{FOLDER_MIME_TYPE}' and trashed = false",
+            "q": f"name = '{self.folder_name}' and mimeType = '{FOLDER_MIME_TYPE}' and trashed = false",
             "spaces": "drive",
             "fields": "files(id,name)",
             "pageSize": 1,
@@ -135,7 +136,7 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                     "Content-Type": "application/json",
                 }
                 metadata = {
-                    "name": DRIVE_FOLDER_NAME,
+                    "name": self.folder_name,
                     "mimeType": FOLDER_MIME_TYPE,
                 }
                 async with session.post(
@@ -151,7 +152,7 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                             folder_id_cache[cache_key] = folder_id
                             logger.info(
                                 "Created Drive folder '%s' with id %s",
-                                DRIVE_FOLDER_NAME,
+                                self.folder_name,
                                 folder_id,
                             )
                             return folder_id

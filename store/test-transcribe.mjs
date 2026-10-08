@@ -43,6 +43,10 @@ try {
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 
   await page.goto(`${origin}/__test/login?email=dana@example.com&sub=dana-sub&to=/%23transcribe`);
+  // First run: keep short recordings in Drive? Yes.
+  const asked = await page.waitForSelector("dialog[open]", { timeout: 20000 }).catch(() => null);
+  check("the first run asks whether to keep short recordings in Drive", Boolean(asked) && (await asked.textContent()).includes("Drive"));
+  if (asked) await page.click("#confirm-ok");
   const mounted = await page.waitForSelector("#transcribe-app #file-input", { state: "attached", timeout: 40000 }).catch(() => null);
   check("the Transcribe view loads transcribe's page inside the app", Boolean(mounted), errors.join(" | "));
   await page.waitForTimeout(1500);
@@ -91,6 +95,24 @@ try {
   const back = await page.locator("#transcribe-app [data-i18n='backToFiles']").first().textContent();
   check("...every string of it (none left as a key)", back && back !== "backToFiles", back);
   await page.screenshot({ path: path.join(OUT, "bt-4-english.png") });
+
+  // A short transcript the app has, kept in the clips folder (once).
+  const clip = await page.evaluate(async () => {
+    const { token } = JSON.parse(localStorage.getItem("app_session"));
+    const post = () => fetch("/clips/save", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id: "app-test-clip", title: "voice note", text: "שלום, זה תמלול קצר", origin: "whatsapp", created_at: new Date().toISOString() }),
+    }).then((r) => r.json());
+    const settings = await fetch("/settings", { headers: { authorization: `Bearer ${token}` } }).then((r) => r.json());
+    return { settings, first: await post(), second: await post() };
+  });
+  check("the answer is kept", clip.settings.clipsToDrive === true && clip.settings.driveConnected === true, JSON.stringify(clip.settings));
+  check("a short transcript is saved to the clips folder, once", clip.first.saved === true && clip.second.already === true, JSON.stringify(clip));
+  const { readdirSync } = await import("node:fs");
+  const clipsDir = path.join(info.work, "drive", "clips", "rt-dana");
+  const files = (() => { try { return readdirSync(clipsDir); } catch { return []; } })();
+  check("...in a folder apart from the transcriptions", files.includes("toc.json.gz") && files.length === 2, files.join(","));
 
   const realErrors = errors.filter((e) => !/favicon|ERR_|Failed to load resource/.test(e));
   check("no script errors", realErrors.length === 0, realErrors.join(" | ").slice(0, 600));

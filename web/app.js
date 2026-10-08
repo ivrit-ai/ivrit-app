@@ -441,6 +441,7 @@ async function refreshCatalog() {
 
 async function loadMessages() {
   state.messages = await store.all();
+  saveClips();
   const unread = state.messages.filter((m) => !m.read).length;
   $("unread-badge").hidden = !unread;
   $("unread-badge").textContent = unread > 99 ? "99+" : String(unread);
@@ -1547,6 +1548,93 @@ async function renderTranscribe() {
   );
 }
 
+// ---------------------------------------------------------------- clips in Drive
+
+// Short transcripts - voice messages from Eliezer, recordings shared into the app -
+// are kept in the user's Google Drive too, in a folder of their own, if they choose
+// (asked once, changeable in Settings). The app has each of them in its inbox, and
+// hands each new one to this site's server, which writes it there.
+async function server(path, { method = "GET", body } = {}) {
+  const token = await appToken();
+  const res = await fetch(path, {
+    method,
+    credentials: "same-origin",
+    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { "content-type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => ({})));
+  return res.json();
+}
+
+async function loadSettings() {
+  state.settings = await server("/settings").catch(() => null);
+  return state.settings;
+}
+
+async function setClipsToDrive(on) {
+  if (on && !state.settings?.driveConnected && !(await connectDrive())) return false;
+  state.settings = await server("/settings", { method: "POST", body: { clipsToDrive: on } });
+  saveClips();
+  return true;
+}
+
+// Once, after signing in for the first time.
+async function askClips() {
+  const settings = await loadSettings();
+  if (!settings || settings.clipsToDrive !== null) return saveClips();
+  const yes = await ask(t("clipsAsk"), { ok: t("clipsYes") });
+  await setClipsToDrive(yes).catch(() => toast(t("error", "settings")));
+  renderClipsSetting();
+}
+
+function renderClipsSetting() {
+  $("clips-drive").checked = Boolean(state.settings?.clipsToDrive);
+  $("clips-drive").disabled = !state.settings;
+}
+
+$("clips-drive").addEventListener("change", async (event) => {
+  const on = event.target.checked;
+  event.target.disabled = true;
+  try {
+    if (!(await setClipsToDrive(on))) event.target.checked = !on;
+  } catch {
+    event.target.checked = !on;
+    toast(t("error", "settings"));
+  }
+  renderClipsSetting();
+});
+
+const isClip = (m) => m.kind === "transcript" && (isAppMessage(m) || m.source_id === "eliezer");
+let savingClips = null;
+
+async function saveClips() {
+  if (!state.settings?.clipsToDrive || !state.settings.driveConnected || savingClips || !state.messages) return;
+  savingClips = (async () => {
+    const saved = new Set((await store.getMeta("clips_saved")) ?? []);
+    for (const m of state.messages.filter(isClip)) {
+      if (saved.has(m.id)) continue;
+      try {
+        await server("/clips/save", {
+          method: "POST",
+          body: {
+            id: m.id,
+            title: m.title ?? null,
+            text: m.body,
+            origin: m.source_id === APP_SOURCE ? "app" : "whatsapp",
+            created_at: new Date(m.created_at).toISOString(),
+          },
+        });
+        saved.add(m.id);
+      } catch (err) {
+        // Drive is no longer connected: stop until it is.
+        if (err.status === 409) state.settings.driveConnected = false;
+        break;
+      }
+    }
+    await store.setMeta("clips_saved", [...saved]);
+  })().finally(() => (savingClips = null));
+}
+
 // ---------------------------------------------------------------- views
 
 const VIEWS = ["inbox", "transcribe", "sources", "settings"];
@@ -1581,6 +1669,7 @@ function rerender() {
     renderDevices().catch(() => {});
     renderStorage();
     renderDiagnostics();
+    loadSettings().then(renderClipsSetting);
   }
 }
 
@@ -1971,6 +2060,7 @@ async function start() {
   // A transcript's link (a notification, or a link from transcribe.ivrit.ai).
   if (new URLSearchParams(location.search).has("results")) showView("transcribe");
   reconcile();
+  askClips();
 }
 
 start();
