@@ -38,6 +38,9 @@ ELIEZER_PYTHON = os.environ.get("ELIEZER_PYTHON", sys.executable)
 WORK = tempfile.mkdtemp(prefix="hub-mode-")
 TOKEN = "app-server-token"
 SESSION_KEY = Fernet.generate_key().decode()
+APP_SESSION_KEY = subprocess.run(
+    ["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"],
+    capture_output=True, text=True, check=True).stdout
 results = []
 
 
@@ -256,7 +259,7 @@ def main():
         GOOGLE_CLIENT_ID="test-client", GOOGLE_CLIENT_SECRET="test-secret", SESSION_ENCRYPTION_KEY=SESSION_KEY,
         RUNPOD_API_KEY="rp-key", RUNPOD_ENDPOINT_ID="ep-shared", RUNPOD_KEY_ENCRYPTION_KEY=Fernet.generate_key().decode(),
         HUB_URL=f"http://127.0.0.1:{hub_port}", APP_SERVER_TOKEN=TOKEN, HARNESS_DATA=data,
-        HARNESS_RUNPOD_URL=f"http://127.0.0.1:{rp_port}", TMPDIR=tmp,
+        HARNESS_RUNPOD_URL=f"http://127.0.0.1:{rp_port}", TMPDIR=tmp, APP_SESSION_KEY=APP_SESSION_KEY,
     )
     log = open(os.path.join(WORK, "app.log"), "a")
 
@@ -287,6 +290,43 @@ def main():
     hubq = psycopg.connect(hub_db, autocommit=True)
     try:
         app_process, api = start_app()
+
+        # --- the app's own site, on the same server
+        def get(path, **kw):
+            r = urllib.request.Request(api.base + path, **kw)
+            try:
+                with urllib.request.urlopen(r, timeout=10) as resp:
+                    return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read()
+            except urllib.error.HTTPError as e:
+                return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read()
+        status, headers, body = get("/")
+        check("/ is the app's page", status == 200 and b"app.js" in body and headers.get("cache-control") == "no-cache",
+              (status, headers.get("cache-control")))
+        status, headers, _ = get("/icons/icon-192.png")
+        check("icons are cached for a day", status == 200 and "max-age=86400" in headers.get("cache-control", ""), headers)
+        status, headers, body = get("/config.js")
+        check("/config.js names the app's client", status == 200 and b'"googleClientId": "test-client"' in body, body)
+        status, _, body = get("/sw.js")
+        check("/sw.js is the app's worker", status == 200 and body == open(os.path.join(SERVER, "..", "web", "sw.js"), "rb").read())
+        status, headers, _ = get("/transcribe")
+        check("transcribe.ivrit.ai's page moved to /transcribe, behind sign-in",
+              status in (200, 303) and (status == 200 or "/login" in headers.get("location", "")), (status, headers))
+        status, _, body = get("/.well-known/jwks.json")
+        check("the session keys are published", status == 200 and json.loads(body)["keys"][0]["kid"], body[:100])
+        status, _, body = get("/auth/google", data=b'{"idToken": "a.b.c"}', method="POST",
+                              headers={"Content-Type": "application/json"})
+        check("a bad Google token is refused", status == 401, (status, body))
+        sys.path.insert(0, SERVER)
+        from app_sessions import Sessions
+        token = Sessions(f"https://app.ivrit.ai", "test-client", APP_SESSION_KEY).issue("s1", "s1@example.com")["token"]
+        status, _, body = get("/auth/renew", method="POST", headers={"Authorization": "Bearer " + token})
+        renewed = json.loads(body) if status == 200 else {}
+        check("a session renews, for 90 days", renewed.get("token")
+              and renewed["expires_at"] > (time.time() + 89 * 86400) * 1000, (status, body[:100]))
+        status, _, _ = get("/auth/renew", method="POST", headers={"Authorization": "Bearer " + token[:-4] + "AAAA"})
+        check("a forged session does not", status == 401, status)
+        status, _, _ = get("/languages")
+        check("the transcription API still wants a sign-in", status == 401, status)
 
         # --- one file, all the way to Drive
         rp.delay = 1.0

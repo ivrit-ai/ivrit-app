@@ -7,8 +7,13 @@ web app, adding Firebase push, Android's notification settings and shares.
 
 - `web/` — the app itself: plain JS, no build step. Hebrew and English, light
   and dark.
-- `server.js` — serves `web/`, `/config.js` (where the services are) and
-  `/privacy`.
+- `server/` — the app's server (Python, FastAPI), which began as a copy of
+  transcribe.ivrit.ai's (`git subtree`, history kept): transcription (uploads,
+  Drive, quota, users' own RunPod keys) scheduled through Eliezer's hub
+  (`server/hub.py`), and the app's own site (`server/app_site.py`): `web/`,
+  `/config.js`, sign-in sessions (`server/app_sessions.py`), `/privacy`.
+  transcribe.ivrit.ai's page is at `/transcribe` until `web/` does everything
+  it does. Tests: `server/tests/test_hub_mode.py` (end to end, with the hub).
 - `shell/` — the native shells: `shell/android/` now, `shell/ios/` later. The
   web app is loaded from app.ivrit.ai, so UI changes ship without a store
   release; only native code needs one. Native code is in

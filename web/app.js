@@ -1139,7 +1139,7 @@ const fitsEliezer = (file) =>
 
 // Signing in is Google's, once: the Google ID token from the phone's account
 // sheet is exchanged with this site's server for the app's own session (see
-// session.js there), which names the same Google account and lasts months.
+// server/app_sessions.py), which names the same Google account and lasts months.
 // It is renewed at most once a day while the app is used, so an active user
 // stays signed in, as in Gmail. Eliezer and Communicator accept it.
 const SESSION_KEY = "app_session";

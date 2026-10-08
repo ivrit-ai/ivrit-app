@@ -85,6 +85,7 @@ BASE_PATH = get_base_path()
 from local_file_utils import LocalFileStorageBackend
 from file_utils import FileStorageBackend
 import hub
+import app_site
 
 # Parse CLI arguments for configuration
 parser = argparse.ArgumentParser(description='Transcription service with rate limiting')
@@ -659,6 +660,10 @@ transcription_progress = {}
 # job_desc); hub_running: those it holds credits for (job_id -> {handle, runpod,
 # cancelled, task}). Both are rebuilt from the hub after a restart.
 HUB_MODE = hub.ENABLED and not in_local_mode
+# The ivrit.ai app's own site (app_site.py: web/, its config and sign-in sessions),
+# when this server runs from the app's repo. Its pages take "/", and transcribe.ivrit.ai's
+# page moves to /transcribe until the app's own pages do everything it does.
+APP_SITE = app_site.available() and not in_local_mode
 HUB_MAX_RUNNING = int(os.environ.get("HUB_MAX_RUNNING", "50"))
 HUB_HEARTBEAT_SECONDS = 30
 hub_jobs = {}
@@ -1268,7 +1273,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
         return build_error("errorServerBusy", status_code=503)
 
 
-@app.get("/")
+@app.get("/transcribe" if APP_SITE else "/", name="index")
 async def index(request: Request):
     if in_dev or in_local_mode:
         response = templates.TemplateResponse("index.html", {
@@ -2486,8 +2491,10 @@ async def service_worker():
     is gone, and a script response that is not the script fails worker
     registration. The file has no secrets.
     """
+    # On the app's site, the app's own worker (receiving its pushes and shares).
+    worker = app_site.WEB_DIR / "sw.js" if APP_SITE else BASE_PATH / "static" / "sw.js"
     return FileResponse(
-        str(BASE_PATH / "static" / "sw.js"),
+        str(worker),
         media_type="application/javascript",
         headers={"Cache-Control": "no-cache"},
     )
@@ -4787,6 +4794,12 @@ def check_port_available(port: int) -> bool:
         return True
     except OSError:
         return False
+
+
+# Last: the app's pages answer whatever path no route above claims.
+if APP_SITE:
+    app_site.install_routes(app, GOOGLE_CLIENT_ID)
+    app_site.mount_pages(app)
 
 
 if __name__ == "__main__":

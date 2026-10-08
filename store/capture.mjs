@@ -8,7 +8,7 @@
 // with Docker for its test database, and Chromium (CHROME, default
 // Playwright's cache).
 import { mkdirSync, readFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import path from "node:path";
 import { chromium } from "playwright-core";
 
@@ -31,12 +31,30 @@ const comm = await startApp({
   FCM_SERVICE_ACCOUNT: JSON.stringify(fcm.account),
   FCM_API_BASE: fcm.origin,
 });
-const web = spawn(process.execPath, ["server.js"], {
-  cwd: ROOT,
-  env: { ...process.env, XHOST_HTTP_PORT: String(appPort), COMMUNICATOR_URL: comm.origin },
-  stdio: ["ignore", "pipe", "inherit"],
+// The app's pages, as the site serves them, pointed at this Communicator.
+const APP = JSON.parse(readFileSync(path.join(ROOT, "shared/app.json"), "utf8"));
+const TYPES = { ".html": "text/html", ".js": "application/javascript", ".css": "text/css", ".svg": "image/svg+xml",
+  ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json", ".webmanifest": "application/manifest+json" };
+const WEB = path.join(ROOT, "web");
+const web = createServer((req, res) => {
+  const { pathname } = new URL(req.url, appOrigin);
+  if (pathname === "/config.js") {
+    res.writeHead(200, { "content-type": "application/javascript" });
+    const config = { communicator: comm.origin, transcribe: APP.transcribe, eliezer: APP.eliezer, googleClientId: null };
+    return res.end(`self.IVRIT_CONFIG = ${JSON.stringify(config)};\n`);
+  }
+  const file = path.join(WEB, pathname.endsWith("/") ? `${pathname}index.html` : pathname);
+  try {
+    if (!file.startsWith(WEB)) throw new Error("outside");
+    const body = readFileSync(file);
+    res.writeHead(200, { "content-type": TYPES[path.extname(file)] ?? "application/octet-stream" });
+    res.end(body);
+  } catch {
+    res.writeHead(404);
+    res.end();
+  }
 });
-await new Promise((r) => web.stdout.once("data", r));
+await new Promise((r) => web.listen(appPort, r));
 
 // Eliezer, as in production.
 const admin = await createUser(pool, { email: process.env.ADMIN_EMAIL ?? "admin@example.com" });
@@ -198,7 +216,7 @@ await screen("settings", dana, {
 });
 
 await browser.close();
-web.kill();
+web.close();
 await comm.stop();
 await fcm.close();
 await pool.end();
