@@ -6,6 +6,7 @@
 //   node scripts/play.mjs icon <file.png>         sets the listing's icon
 //   node scripts/play.mjs graphics                feature graphic and screenshots from store/
 //   node scripts/play.mjs upload <file.aab> [track] [notes]
+//   node scripts/play.mjs promote <versionCode> <track> [notes]   e.g. promote 12 alpha
 //
 // The key is ~/keys/ivrit-app-play-publisher.json, or PLAY_SERVICE_ACCOUNT.
 import { createSign } from "node:crypto";
@@ -90,6 +91,26 @@ try {
     for (const shot of shots) await put("phoneScreenshots", `${store}phone/${shot}`);
     await call("POST", `${API}/edits/${edit.id}:commit`);
     console.log(`${lang}: feature graphic and ${shots.length} phone screenshots`);
+  } else if (command === "promote") {
+    // A build already on Play, released on another track (e.g. internal → alpha,
+    // which is closed testing). Here `file` is the version code. Until Google has
+    // reviewed the app, Play accepts only a draft here, which is then sent for
+    // review from the Play Console; PLAY_STATUS=draft makes one.
+    const { defaultLanguage } = await call("GET", `${API}/edits/${edit.id}/details`);
+    await call("PUT", `${API}/edits/${edit.id}/tracks/${track}`, {
+      json: {
+        track,
+        releases: [
+          {
+            versionCodes: [String(file)],
+            status: process.env.PLAY_STATUS || "completed",
+            ...(notes ? { releaseNotes: [{ language: defaultLanguage, text: notes }] } : {}),
+          },
+        ],
+      },
+    });
+    await call("POST", `${API}/edits/${edit.id}:commit`);
+    console.log(`${process.env.PLAY_STATUS === "draft" ? "drafted" : "released"} versionCode ${file} on ${track}`);
   } else if (command === "upload") {
     const bundle = await call("POST", `${UPLOAD}/edits/${edit.id}/bundles?uploadType=media`, {
       body: readFileSync(file),
@@ -110,7 +131,7 @@ try {
     await call("POST", `${API}/edits/${edit.id}:commit`);
     console.log(`released versionCode ${bundle.versionCode} to ${track}`);
   } else {
-    throw new Error("usage: play.mjs status | listing | icon <file.png> | graphics | upload <file.aab> [track] [notes]");
+    throw new Error("usage: play.mjs status | listing | icon <file.png> | graphics | upload <file.aab> [track] [notes] | promote <versionCode> <track> [notes]");
   }
 } finally {
   if (command === "status" || command === "listing") await call("DELETE", `${API}/edits/${edit.id}`).catch(() => {});
