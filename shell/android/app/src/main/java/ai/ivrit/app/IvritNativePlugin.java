@@ -201,6 +201,38 @@ public class IvritNativePlugin extends Plugin {
         call.resolve();
     }
 
+    // --- transcription in the background -----------------------------------
+
+    /**
+     * Hands a shared file to a TranscribeWorker: uploaded to Eliezer (base) with
+     * the Google token, then watched until its transcript is ready. uploadId is the
+     * page's id for it, which makes a re-enqueue (say, with a fresher token) the
+     * same upload.
+     */
+    @PluginMethod
+    public void enqueueTranscription(PluginCall call) {
+        String id = call.getString("id", "");
+        String uploadId = call.getString("uploadId", "");
+        String base = call.getString("base", "");
+        String token = call.getString("token", "");
+        if (Shares.find(getContext(), id) == null || uploadId.isEmpty() || !base.startsWith("https://") || token.isEmpty()) {
+            call.reject("cannot enqueue", "bad_request");
+            return;
+        }
+        Shares.markUpload(getContext(), id, uploadId);
+        TranscribeWorker.enqueue(getContext(), id, base, token, uploadId, call.getString("origin", ""), call.getString("title", ""));
+        call.resolve();
+    }
+
+    /** From TranscribeWorker: queued, done, failed (with error), or signin (token ran out). */
+    static void transcription(String uploadId, String state, String error) {
+        IvritNativePlugin plugin = current;
+        if (plugin == null) return;
+        JSObject data = new JSObject().put("uploadId", uploadId).put("state", state);
+        if (error != null) data.put("error", error);
+        plugin.notifyListeners("transcription", data, true);
+    }
+
     // --- shared files ------------------------------------------------------
 
     private static final ExecutorService UPLOADS = Executors.newSingleThreadExecutor();

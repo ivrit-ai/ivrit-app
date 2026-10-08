@@ -87,6 +87,33 @@ final class Notifications {
         }
     }
 
+    /**
+     * A transcript of a recording shared into the app, ready while the app was
+     * closed (see TranscribeWorker). It opens on that message, whose id the page
+     * keeps as "app-" plus the upload id.
+     */
+    static void showTranscript(Context context, String uploadId, String title, String text, String origin) {
+        if (!allowed(context)) return;
+        ensureChannel(context);
+        String messageId = "app-" + uploadId;
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_ivrit)
+            .setContentTitle(title == null || title.isEmpty() ? context.getString(R.string.app_name) : title)
+            .setContentText(text)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setAutoCancel(true)
+            .setLargeIcon(BitmapFactory.decodeResource(
+                context.getResources(), "whatsapp".equals(origin) ? R.drawable.whatsapp_mark : R.mipmap.ic_launcher))
+            .setContentIntent(openIntent(context, messageId));
+        try {
+            NotificationManagerCompat.from(context).notify(messageId.hashCode(), builder.build());
+        } catch (SecurityException ignored) {
+            // Permission withdrawn between the check and here.
+        }
+    }
+
     private static PendingIntent openIntent(Context context, String id) {
         Intent intent = new Intent(context, MainActivity.class)
             .setAction(Intent.ACTION_VIEW)

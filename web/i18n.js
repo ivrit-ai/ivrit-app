@@ -289,6 +289,7 @@ const STRINGS = {
     appError_unsupported: "This file isn't a recording that can be transcribed.",
     appError_duration_failed: "This file isn't a recording that can be transcribed.",
     appError_expired: "The transcription didn't finish in time. Try sending it again.",
+    updateApp: "Update the app from Google Play to transcribe recordings.",
   },
 
   he: {
@@ -576,6 +577,7 @@ const STRINGS = {
     appError_unsupported: "הקובץ אינו הקלטה שאפשר לתמלל.",
     appError_duration_failed: "הקובץ אינו הקלטה שאפשר לתמלל.",
     appError_expired: "התמלול לא הסתיים בזמן. נסו לשלוח שוב.",
+    updateApp: "כדי לתמלל הקלטות, עדכנו את האפליקציה מ-Google Play.",
   },
 };
 

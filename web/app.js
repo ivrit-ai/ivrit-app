@@ -1055,6 +1055,7 @@ async function sharedFiles() {
       size: f.size,
       durationMs: f.durationMs,
       origin: f.origin || "",
+      uploadId: f.uploadId || "",
     }));
   }
   const cache = await caches.open(SHARE_CACHE);
@@ -1136,16 +1137,20 @@ function clock(seconds) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// A job, as a message in the inbox: waiting, its transcript, or why there is none.
-function jobMessage(job, origin) {
+const untitled = (name) => name?.replace(/\.[a-z0-9]{1,5}$/i, "") || null;
+const appSource = (origin) => (origin === "whatsapp" ? WHATSAPP_SOURCE : APP_SOURCE);
+
+// A job at Eliezer, as a message in the inbox: waiting, its transcript, or why
+// there is none. Keyed by the app's upload id, which exists before the job
+// does (see send()); jobs from before upload ids, by their own.
+function jobMessage(job) {
   const failed = job.status === "failed";
   return {
-    id: `app-${job.job_id}`,
+    id: `app-${job.upload_id || job.job_id}`,
     created_at: Math.round(job.created_at * 1000),
     source: "ivrit.ai",
-    source_id: origin === "whatsapp" ? WHATSAPP_SOURCE : APP_SOURCE,
-    // Without its extension: "הודעה.ogg" would read backwards in a Hebrew line.
-    title: job.filename?.replace(/\.[a-z0-9]{1,5}$/i, "") || null,
+    source_id: appSource(job.origin),
+    title: untitled(job.filename),
     subtitle: job.duration ? clock(job.duration) : null,
     body: job.status === "done" ? job.text : failed ? t(`appError_${job.error}`, job.wait_minutes) : t("transcribingNow"),
     kind: job.status === "queued" ? "pending" : failed ? "notice" : "transcript",
@@ -1153,84 +1158,103 @@ function jobMessage(job, origin) {
   };
 }
 
-async function pendingJobs() {
-  return (await store.getMeta("app_jobs").catch(() => null)) ?? [];
+// Uploads handed to the background, by upload id, until Eliezer has their
+// result: { origin, title, duration, created }.
+async function uploads() {
+  return (await store.getMeta("app_uploads").catch(() => null)) ?? {};
 }
 
-async function setPendingJobs(ids) {
-  await store.setMeta("app_jobs", ids);
+async function setUploads(list) {
+  await store.setMeta("app_uploads", list);
 }
 
-// While the app is open, waiting jobs are checked every few seconds; whatever
-// finished while it was closed is picked up on the next open.
+async function failUpload(uploadId, error) {
+  const list = await uploads();
+  const upload = list[uploadId];
+  delete list[uploadId];
+  await setUploads(list);
+  if (!upload) return;
+  await store.put([
+    {
+      id: `app-${uploadId}`,
+      created_at: upload.created,
+      source: "ivrit.ai",
+      source_id: appSource(upload.origin),
+      title: upload.title,
+      subtitle: upload.duration ? clock(upload.duration) : null,
+      body: t(`appError_${error}`),
+      kind: "notice",
+    },
+  ]);
+}
+
+// One shared file into the background: the native side uploads it to Eliezer
+// (retrying until it gets through, even with the app closed), waits for the
+// transcript and notifies; the inbox shows it waiting meanwhile. A file handed
+// over before keeps its upload id, so sending it again is the same upload.
+async function send(file) {
+  let token;
+  try {
+    token = await googleIdToken(true);
+  } catch (err) {
+    if (err?.code !== "cancelled") toast(t("googleFailed"));
+    return false;
+  }
+  const uploadId = file.uploadId || crypto.randomUUID();
+  if (!file.uploadId) {
+    const upload = { origin: file.origin, title: untitled(file.name), duration: file.durationMs / 1000, created: Date.now() };
+    await setUploads({ ...(await uploads()), [uploadId]: upload });
+    await store.put([jobMessage({ upload_id: uploadId, status: "queued", filename: file.name, created_at: upload.created / 1000, duration: upload.duration, origin: file.origin })]);
+  }
+  try {
+    await shell.ivrit.enqueueTranscription({ id: file.key, base: config.eliezer, token, uploadId, origin: file.origin, title: untitled(file.name) ?? "" });
+    return true;
+  } catch (err) {
+    // An older build of the app, without background transcription.
+    toast(err?.code === "UNIMPLEMENTED" || /not implemented/i.test(err?.message ?? "") ? t("updateApp") : t("error", "enqueue"));
+    return false;
+  }
+}
+
+// Following them: Eliezer's list of this account's jobs, which also brings back
+// any the app lost track of (its data cleared, say). Messages deleted here stay
+// deleted. True while any is still on its way.
+async function syncJobs() {
+  const { jobs } = await eliezer("/app/v1/jobs");
+  await store.put(jobs.map(jobMessage));
+  const list = await uploads();
+  for (const [id, upload] of Object.entries(list)) {
+    const job = jobs.find((j) => j.upload_id === id);
+    if (job && job.status !== "queued") delete list[id];
+    // Never arrived in a day: lost (the file gone, the account changed).
+    else if (!job && Date.now() - upload.created > DAY_MS) {
+      await failUpload(id, "expired");
+      delete list[id];
+    }
+  }
+  await setUploads(list);
+  return Object.keys(list).length > 0 || jobs.some((j) => j.status === "queued");
+}
+
+// While the app is open, a few seconds apart as long as something is on its way.
 let polling = null;
 
 async function pollJobs() {
   polling = null;
-  const ids = await pendingJobs();
-  if (!ids.length || document.visibilityState !== "visible") return;
-  const left = [];
-  for (const id of ids) {
-    try {
-      const job = await eliezer(`/app/v1/jobs/${encodeURIComponent(id)}`);
-      // Where the recording came from is known only here, from when it was shared.
-      const existing = await store.get(`app-${id}`).catch(() => null);
-      await store.put([jobMessage(job, existing?.source_id === WHATSAPP_SOURCE ? "whatsapp" : "")]);
-      if (job.status === "queued") left.push(id);
-    } catch (err) {
-      // Gone (older than three days, or another account): stop asking.
-      if (!(err instanceof ApiError && err.status === 404)) left.push(id);
-    }
+  if (document.visibilityState !== "visible" || !state.me || state.me.offline) return;
+  let more = false;
+  try {
+    more = await syncJobs();
+  } catch {
+    more = Object.keys(await uploads()).length > 0;
   }
-  await setPendingJobs(left);
   await loadMessages();
   if (state.view === "inbox") renderInbox();
-  if (left.length) polling = setTimeout(pollJobs, POLL_MS);
+  if (more) polling = setTimeout(pollJobs, POLL_MS);
 }
 
 function watchJobs() {
   if (!polling && eliezerReady()) polling = setTimeout(pollJobs, 0);
-}
-
-// Files being sent right now, so a share arriving mid-upload is not sent twice.
-const sending = new Set();
-
-// Sends one shared file to Eliezer; true once it is queued there. On failure
-// the file stays among the shared files, where it can be sent again.
-async function transcribeHere(file) {
-  if (sending.has(file.key)) return false;
-  sending.add(file.key);
-  try {
-    let token;
-    try {
-      token = await googleIdToken(true);
-    } catch (err) {
-      if (err?.code !== "cancelled") toast(t("googleFailed"));
-      return false;
-    }
-    let res;
-    try {
-      res = await shell.ivrit.uploadShared({ id: file.key, url: `${config.eliezer}/app/v1/jobs`, token });
-    } catch {
-      toast(t("offline"));
-      return false;
-    }
-    if (res.status !== 202) {
-      if (res.status === 401) googleToken = null;
-      const reason = { 401: "googleFailed", 413: "appError_too_large", 415: "appError_unsupported", 429: "tooManyPending" }[res.status];
-      toast(reason ? t(reason) : t("error", res.status));
-      return false;
-    }
-    const { job_id } = JSON.parse(res.body);
-    await store.put([
-      jobMessage({ job_id, status: "queued", filename: file.name, created_at: Date.now() / 1000, duration: file.durationMs / 1000 }, file.origin),
-    ]);
-    await setPendingJobs([...(await pendingJobs()), job_id]);
-    await discardShared(file.key);
-    return true;
-  } finally {
-    sending.delete(file.key);
-  }
 }
 
 // A recording Eliezer does not take (over 10 minutes or 20 MB, or no readable
@@ -1243,8 +1267,8 @@ async function refuseShared(file) {
       id: `app-local-${file.key}`,
       created_at: Date.now(),
       source: "ivrit.ai",
-      source_id: file.origin === "whatsapp" ? WHATSAPP_SOURCE : APP_SOURCE,
-      title: file.name.replace(/\.[a-z0-9]{1,5}$/i, ""),
+      source_id: appSource(file.origin),
+      title: untitled(file.name),
       subtitle: file.durationMs > 0 ? clock(file.durationMs / 1000) : null,
       body: t(reason),
       kind: "notice",
@@ -1253,31 +1277,34 @@ async function refuseShared(file) {
   await discardShared(file.key);
 }
 
-// What was just shared into the app: whatever Eliezer takes is sent at once,
+// What was shared into the app: whatever Eliezer takes goes to it at once,
 // without asking, and appears in the inbox as it is transcribed; anything else
-// is answered there as not supported. Only a send that failed waits in the
-// Transcribe tab, to be tried again.
+// is answered there as not supported. Files handed over earlier and still here
+// (their upload needed a fresh sign-in) are handed over again.
 async function takeShared() {
   if (!state.me || state.me.offline) return;
   const files = await sharedFiles().catch(() => []);
   if (!files.length) return;
-  let failed = 0;
+  let sent = 0;
   for (const file of files) {
     if (!fitsEliezer(file)) await refuseShared(file);
-    else if (!(await transcribeHere(file))) failed++;
+    else if ((await send(file)) && !file.uploadId) sent++;
   }
   await loadMessages();
-  if (files.length > failed) {
-    toast(t("transcribing"));
-    watchJobs();
-  }
-  showView(failed ? "transcribe" : "inbox");
+  if (sent) toast(t("transcribing"));
+  showView("inbox");
+  watchJobs();
 }
 
 async function renderTranscribe() {
   $("transcribe-open").href = `${config.transcribe}/`;
   const box = $("shared");
-  const files = (await sharedFiles().catch(() => [])).filter((file) => !shell || fitsEliezer(file));
+  // In the app, shared files go straight on (takeShared); nothing waits here.
+  if (shell) {
+    box.hidden = true;
+    return;
+  }
+  const files = await sharedFiles().catch(() => []);
   box.hidden = !files.length;
   if (!files.length) return box.replaceChildren();
   box.replaceChildren(
@@ -1294,21 +1321,7 @@ async function renderTranscribe() {
               el("bdi", { dir: "ltr", text: [file.durationMs > 0 ? clock(file.durationMs / 1000) : null, formatSize(file.size)].filter(Boolean).join(" · ") }),
             ]),
           ]),
-          // Normally sent on arrival (takeShared); here only if that failed.
-          fitsEliezer(file)
-            ? el("button", {
-                class: "btn primary small",
-                type: "button",
-                text: t(sending.has(file.key) ? "uploading" : "transcribeHere"),
-                disabled: sending.has(file.key),
-                onclick: () => takeShared(),
-              })
-            : el("button", {
-                class: "btn primary small",
-                type: "button",
-                text: t(eliezerReady() ? "sendOn" : "sharedSend"),
-                onclick: () => sendToTranscribe(file),
-              }),
+          el("button", { class: "btn primary small", type: "button", text: t("sharedSend"), onclick: () => sendToTranscribe(file) }),
           el("button", {
             class: "icon-btn",
             type: "button",
@@ -1536,6 +1549,14 @@ if (shell) {
   shell.ivrit.addListener("shared", () => {
     if (state.me) takeShared();
     else showSharedSignedOut();
+  });
+  // From the background transcription: refused for good, or on its way / done
+  // (then the next look at Eliezer's jobs shows it).
+  shell.ivrit.addListener("transcription", async ({ uploadId, state: progress, error }) => {
+    if (progress === "failed" && ["too_large", "unsupported"].includes(error)) await failUpload(uploadId, error);
+    await loadMessages();
+    if (state.view === "inbox") renderInbox();
+    watchJobs();
   });
   shell.ivrit.addListener("pushToken", () => {
     localStorage.removeItem("reconciled_at");

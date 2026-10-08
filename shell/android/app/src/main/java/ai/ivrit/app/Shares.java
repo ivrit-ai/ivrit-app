@@ -42,6 +42,7 @@ final class Shares {
         final String type;
         final long durationMs;
         final String origin;
+        String uploadId = "";
 
         Entry(String id, File file, String name, String type, long durationMs, String origin) {
             this.id = id;
@@ -163,9 +164,11 @@ final class Shares {
         if (!file.isFile() || !meta.isFile()) return null;
         try {
             JSONObject m = new JSONObject(read(meta));
-            return new Entry(
+            Entry entry = new Entry(
                 id, file, m.optString("name"), m.optString("type", "application/octet-stream"), m.optLong("durationMs", -1), m.optString("origin", "")
             );
+            entry.uploadId = m.optString("uploadId", "");
+            return entry;
         } catch (Exception e) {
             return null;
         }
@@ -196,9 +199,24 @@ final class Shares {
                     .put("size", entry.file.length())
                     .put("durationMs", entry.durationMs)
                     .put("origin", entry.origin)
+                    .put("uploadId", entry.uploadId)
             );
         }
         return out;
+    }
+
+    /** Marks a file as handed to a TranscribeWorker, under the page's upload id. */
+    static void markUpload(Context context, String id, String uploadId) {
+        if (!id.matches("\\d+-\\d+")) return;
+        File metaFile = new File(dir(context), id + ".json");
+        try {
+            JSONObject meta = new JSONObject(read(metaFile)).put("uploadId", uploadId);
+            try (OutputStream out = new FileOutputStream(metaFile)) {
+                out.write(meta.toString().getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "could not mark a shared file", e);
+        }
     }
 
     static void discard(Context context, String id) {
