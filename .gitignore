@@ -6,4 +6,3 @@ tmp-*
 dist/
 shell/node_modules/
 shell/android/app/google-services.json
-web/lab/models/

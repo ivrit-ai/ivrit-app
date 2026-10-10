@@ -207,6 +207,17 @@
         fetch(report("quant-summary"), { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify(all) }).catch(() => {});
       })();
 
+      // The models are made on the server after each update; until then, say so.
+      Promise.all(QUANT.map((d) => fetch(`/lab/models/${d}/manifest.json`, { method: "HEAD", cache: "no-store" }).then((r) => r.ok, () => false)))
+        .then((ready) => {
+          if (ready.every(Boolean)) return;
+          const a = document.getElementById("quant");
+          a.setAttribute("aria-disabled", "true");
+          a.classList.add("quiet");
+          a.removeAttribute("href");
+          a.textContent = "3. השוואת דחיסות: המודלים בהכנה בשרת, נסו שוב בעוד כמה דקות";
+        });
+
       for (const id of ["bench", "run", "quant"]) {
         const a = document.getElementById(id);
         if (!result.webgpu) a.setAttribute("aria-disabled", "true"), a.classList.add("quiet");

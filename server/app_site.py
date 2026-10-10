@@ -136,4 +136,10 @@ def install_routes(app: FastAPI, google_client_id: Optional[str]):
 
 
 def mount_pages(app: FastAPI):
+    # The lab's quantized models, made at start-up into LAB_MODELS_DIR
+    # (scripts/lab_models.py); missing until then.
+    lab_models = os.environ.get("LAB_MODELS_DIR")
+    if lab_models:
+        os.makedirs(lab_models, exist_ok=True)
+        app.mount("/lab/models", Pages(directory=lab_models), name="lab-models")
     app.mount("/", Pages(directory=WEB_DIR, html=True), name="pages")

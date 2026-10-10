@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""The on-device lab's quantized Whisper models, made at build time.
+"""The on-device lab's quantized Whisper models, made when the server starts.
 
 The lab (web/lab/) compares q8, q5 and q4 versions of ivrit-ai's
 whisper-large-v3-turbo transcribing on the phone itself, with whisper-gpu (see
 scripts/build-lab.sh). Until they are published on ivrit-ai's Hugging Face, the
 app serves them: this re-quantizes the public f16 model (already in whisper-gpu's
-format) into each, under web/lab/models/<dtype>/, so the files come from the
-build rather than from git.
+format) into each, under <out>/<dtype>/, in the background as the server starts
+(launch.sh; a build making them took longer than xhost allows), so the files
+come from Hugging Face rather than from git. A model's manifest.json is written
+last: while it is missing, the model is not ready.
 
 Only f16 matrices are re-quantized, by the same rules and block layouts as
 whisper-gpu's tools/convert.py (which quantizes from f32; from f16 differs by
@@ -65,7 +67,14 @@ def quantize_q45(a: np.ndarray, dtype: str) -> bytes:
     return np.concatenate(words, axis=1).astype("<u4").tobytes()
 
 
-QUANTIZE = {"q8": quantize_q8, "q5": lambda a: quantize_q45(a, "q5"), "q4": lambda a: quantize_q45(a, "q4")}
+_QUANTIZE = {"q8": quantize_q8, "q5": lambda a: quantize_q45(a, "q5"), "q4": lambda a: quantize_q45(a, "q4")}
+# About a million weights at a time, converted from f16 chunk by chunk, so even
+# the 66M-weight token embedding stays small in memory beside the server.
+CHUNK = BLOCK << 15
+QUANTIZE = {
+    d: (lambda f: lambda h: b"".join(f(h[i:i + CHUNK].astype(np.float32)) for i in range(0, h.size, CHUNK)))(f)
+    for d, f in _QUANTIZE.items()
+}
 
 
 class Shards:
@@ -120,7 +129,7 @@ def read(source: str, name: str) -> bytes:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default=SOURCE)
-    ap.add_argument("--out", default=os.path.join(ROOT, "web", "lab", "models"))
+    ap.add_argument("--out", default=os.environ.get("LAB_MODELS_DIR", "/tmp/lab-models"))
     ap.add_argument("dtypes", nargs="*")
     args = ap.parse_args()
     dtypes = args.dtypes
@@ -155,7 +164,7 @@ def main():
         for name, info in by_shard[shard]:
             payload = raw[info["offset"]:info["offset"] + info["bytes"]]
             quantizable = info["dtype"] == "f16" and name not in KEEP_F16 and info["shape"][-1] % BLOCK == 0
-            values = np.frombuffer(payload, dtype="<f2").astype(np.float32) if quantizable else None
+            values = np.frombuffer(payload, dtype="<f2") if quantizable else None
             for d in dtypes:
                 data, dtype = (QUANTIZE[d](values), d) if quantizable else (payload, info["dtype"])
                 at_shard, at_offset = writers[d].write(data)
