@@ -26,6 +26,10 @@
       .tests .btn { justify-content: center; white-space: normal; text-align: center; min-width: 0; }
       .note { font-size: 14px; color: var(--muted); }
       pre { direction: ltr; text-align: left; white-space: pre-wrap; font-size: 12px; color: var(--muted); }
+      .results { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 12px; }
+      .results th, .results td { padding: 6px 4px; border-top: 1px solid var(--line-soft); text-align: start; }
+      .results td.n { direction: ltr; text-align: end; font-variant-numeric: tabular-nums; }
+      .said { font-size: 14px; color: var(--ink-2); }
     </style>
   </head>
   <body>
@@ -42,8 +46,11 @@
       <div class="tests">
         <a id="bench" class="btn" href="#">1. מדידת מהירות (בלי הורדה, כמה דקות)</a>
         <a id="run" class="btn" href="#">2. תמלול הקלטה לדוגמה (הורדה חד-פעמית של 1.6GB)</a>
+        <a id="quant" class="btn primary" href="#">3. השוואת דחיסות: q8, ‏q5, ‏q4 (הורדה חד-פעמית של כ-2GB)</a>
       </div>
-      <p class="note">בדיקה 2 מורידה את המודל המלא, עדיף ב-Wi-Fi. הוא נשמר במכשיר, כך שבפעם הבאה הבדיקה מתחילה מיד. השאירו את המסך דלוק עד שהבדיקה מסתיימת.</p>
+      <!-- Test 3's results, kept on the device as each run finishes. -->
+      <div id="quant-results"></div>
+      <p class="note">בדיקה 3 מתמללת את אותה הקלטה שלוש פעמים, עם המודל בשלוש רמות דחיסה, אחת אחרי השנייה, וחוזרת לכאן עם הטבלה. בדיקה 2 מורידה את המודל המלא, עדיף ב-Wi-Fi. הוא נשמר במכשיר, כך שבפעם הבאה הבדיקה מתחילה מיד. השאירו את המסך דלוק עד שהבדיקה מסתיימת.</p>
       <pre id="raw"></pre>
     </main>
     <script type="module">
@@ -143,7 +150,64 @@
       document.getElementById("bench").href = `./whisper/bench.html?auto&post=${encodeURIComponent(report("bench"))}`;
       document.getElementById("run").href =
         `./whisper/run.html?model=${encodeURIComponent(MODEL)}&audio=${encodeURIComponent(`${MODEL}/sample_he_30s.wav`)}&beams=1&post=${encodeURIComponent(report("run"))}`;
-      for (const id of ["bench", "run"]) {
+      // Test 3: the same recording with the model at q8, then q5, then q4, each
+      // in a fresh page (only one model on the GPU at a time), served by this
+      // app for now (web/lab/models, made by scripts/lab_models.py).
+      const QUANT = ["q8", "q5", "q4"];
+      const SIZES = { q8: "878 MB", q5: "591 MB", q4: "495 MB" };
+      const STORE = "lab-quant";
+      const runUrl = (i) => {
+        const d = QUANT[i];
+        const base = `${location.origin}/lab/models/${d}`;
+        const next = i + 1 < QUANT.length ? runUrl(i + 1) : `${location.origin}/lab/#quant-results`;
+        const params = new URLSearchParams({
+          model: base, audio: `${base}/sample_he_30s.wav`, beams: "1", label: d, store: STORE,
+          post: report(`run-${d}`), next,
+        });
+        return `${location.origin}/lab/whisper/run.html?${params}`;
+      };
+      document.getElementById("quant").href = runUrl(0);
+      document.getElementById("quant").addEventListener("click", () => {
+        try { localStorage.removeItem(STORE); } catch {}
+      });
+
+      // Characters that differ from q8's text, after dropping spaces and punctuation.
+      const plain = (t) => (t || "").replace(/[\s.,!?;:"'()\-–—׳״]/g, "");
+      function distance(a, b) {
+        let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+        for (let i = 1; i <= a.length; i++) {
+          const cur = [i];
+          for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+          prev = cur;
+        }
+        return prev[b.length];
+      }
+      (function showQuant() {
+        let all = {};
+        try { all = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch {}
+        if (!Object.keys(all).length) return;
+        const box = document.getElementById("quant-results");
+        const ref = plain(all.q8?.text);
+        const row = (cells) => `<tr>${cells.join("")}</tr>`;
+        const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+        const rows = QUANT.filter((d) => all[d]).map((d) => {
+          const r = all[d];
+          if (!r.ok) return row([`<td>${d}</td>`, `<td colspan="5">נכשל: ${esc((r.error || "").split("\n")[0])}</td>`]);
+          const cer = ref && d !== "q8" ? `${((distance(ref, plain(r.text)) / ref.length) * 100).toFixed(1)}%` : "—";
+          return row([
+            `<td>${d}</td>`, `<td class="n">${SIZES[d]}</td>`, `<td class="n">${r.loadSeconds?.toFixed(1)}s</td>`,
+            `<td class="n">${r.took?.toFixed(1)}s</td>`, `<td class="n">${(r.audioSeconds / r.took).toFixed(2)}×</td>`, `<td class="n">${cer}</td>`,
+          ]);
+        });
+        box.innerHTML = `<h2>תוצאות: השוואת דחיסות</h2>
+          <table class="results"><thead><tr><th>מודל</th><th>גודל</th><th>טעינה</th><th>תמלול</th><th>מהירות</th><th>שונה מ-q8</th></tr></thead>
+          <tbody>${rows.join("")}</tbody></table>
+          <p class="note">מהירות: שניות של הקלטה לכל שנייה של עבודה (מעל 1× - מהר מזמן אמת). הטעינה בפעם הראשונה כוללת את ההורדה.</p>
+          ${QUANT.filter((d) => all[d]?.text).map((d) => `<p class="said"><b>${d}:</b> ${esc(all[d].text)}</p>`).join("")}`;
+        fetch(report("quant-summary"), { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify(all) }).catch(() => {});
+      })();
+
+      for (const id of ["bench", "run", "quant"]) {
         const a = document.getElementById(id);
         if (!result.webgpu) a.setAttribute("aria-disabled", "true"), a.classList.add("quiet");
       }
