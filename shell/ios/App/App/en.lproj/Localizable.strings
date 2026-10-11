@@ -1,0 +1,3 @@
+/* What a notification says if the app cannot open the message (Communicator's apns.js sends these keys). */
+"PUSH_TITLE" = "ivrit.ai";
+"PUSH_BODY" = "New message";

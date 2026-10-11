@@ -1,7 +1,7 @@
 {
   "name": "ivrit-app-shell",
   "private": true,
-  "description": "The ivrit.ai app's native shells (Capacitor): Android now, iPhone later.",
+  "description": "The ivrit.ai app's native shells (Capacitor): Android and iPhone.",
   "scripts": {
     "sync": "cap sync"
   },
@@ -10,6 +10,7 @@
     "@capacitor/app": "^8.1.2",
     "@capacitor/browser": "^8.0.5",
     "@capacitor/cli": "^8.5.2",
-    "@capacitor/core": "^8.5.2"
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/ios": "^8.5.3"
   }
 }

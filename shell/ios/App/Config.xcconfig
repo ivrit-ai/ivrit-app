@@ -1,0 +1,17 @@
+// The iPhone app's build settings that are not secrets (see docs/ios.md).
+// Signing keys never go here: CI signs with an App Store Connect API key.
+
+// The Apple Developer team (App Store Connect → Membership).
+IVRIT_TEAM_ID =
+DEVELOPMENT_TEAM = $(IVRIT_TEAM_ID)
+
+// Google sign-in: the app's iOS OAuth client (Google Cloud → Credentials), and
+// the same id reversed, which Google's sign-in returns to. Until it is set, the
+// app builds, but signing in with Google answers "no_client_id".
+GOOGLE_IOS_CLIENT_ID =
+GOOGLE_REVERSED_CLIENT_ID = ai.ivrit.app.google-unset
+
+// shared/app.json's version, and a build number that only grows; CI sets both
+// (scripts/build-ios.sh), as scripts/build-android.sh does for Android.
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1

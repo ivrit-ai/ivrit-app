@@ -1,0 +1,57 @@
+# The iPhone app (shell/ios), built on a Mac. Every change to the shells is
+# compiled for the simulator, unsigned; run by hand with "testflight" to sign it
+# and upload it to App Store Connect (scripts/build-ios.sh).
+name: iPhone app
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "shell/**"
+      - "scripts/build-ios.sh"
+      - "scripts/check-native-api.mjs"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+    inputs:
+      testflight:
+        description: "Sign and upload to TestFlight"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the build number counts commits
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The newest Xcode on the runner
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+      - run: brew install xcodegen
+      - name: Both shells and the web app agree (shell/native-api.json)
+        run: node scripts/check-native-api.mjs
+      - name: Build for the simulator
+        if: ${{ !inputs.testflight }}
+        run: scripts/build-ios.sh simulator
+      - name: Sign and upload to TestFlight
+        if: ${{ inputs.testflight }}
+        env:
+          ASC_KEY: ${{ secrets.ASC_KEY }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          IVRIT_TEAM_ID: ${{ secrets.IVRIT_TEAM_ID }}
+        run: |
+          export ASC_KEY_PATH="$RUNNER_TEMP/asc.p8"
+          printf '%s' "$ASC_KEY" > "$ASC_KEY_PATH"
+          scripts/build-ios.sh testflight
