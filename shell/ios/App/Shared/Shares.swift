@@ -39,6 +39,7 @@ enum Shares {
     /// Copies one attachment in under id. False when it could not be read.
     static func keep(_ provider: NSItemProvider, as type: UTType, id: String) async -> Bool {
         let target = dir.appendingPathComponent(id)
+        let suggested = provider.suggestedName
         let name: String? = await withCheckedContinuation { done in
             // The file exists only during this callback, so it is copied here.
             _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
@@ -46,7 +47,7 @@ enum Shares {
                 do {
                     try? FileManager.default.removeItem(at: target)
                     try FileManager.default.copyItem(at: url, to: target)
-                    done.resume(returning: provider.suggestedName.flatMap { named($0, like: url) } ?? url.lastPathComponent)
+                    done.resume(returning: suggested.flatMap { named($0, like: url) } ?? url.lastPathComponent)
                 } catch {
                     done.resume(returning: nil)
                 }
