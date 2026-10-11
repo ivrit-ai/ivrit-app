@@ -8,5 +8,9 @@
   },
   "android": {
     "backgroundColor": "#F7F6F3"
+  },
+  "ios": {
+    "backgroundColor": "#F7F6F3",
+    "contentInset": "never"
   }
 }

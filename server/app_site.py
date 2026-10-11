@@ -53,7 +53,9 @@ def make_sessions(google_client_id: Optional[str]):
         logger.warning("App sign-in is off: APP_SESSION_KEY or GOOGLE_CLIENT_ID is not set")
         return None
     issuer = os.environ.get("APP_SESSION_ISSUER") or f"https://{_app_config()['host']}"
-    return Sessions(issuer, google_client_id, key, os.environ.get("GOOGLE_JWKS_URL"))
+    # GOOGLE_IOS_CLIENT_ID: the iPhone app's own OAuth client (see docs/ios.md).
+    others = [c.strip() for c in os.environ.get("GOOGLE_IOS_CLIENT_ID", "").split(",")]
+    return Sessions(issuer, google_client_id, key, os.environ.get("GOOGLE_JWKS_URL"), others)
 
 
 def install_routes(app: FastAPI, google_client_id: Optional[str]):
@@ -82,6 +84,23 @@ def install_routes(app: FastAPI, google_client_id: Optional[str]):
         if not path.exists():
             return JSONResponse([], status_code=404)
         return FileResponse(path, media_type="application/json")
+
+    # iPhone checks this to open links to app.ivrit.ai in the app (universal
+    # links). Needs the Apple Developer team id, which names the app.
+    @app.get("/.well-known/apple-app-site-association", include_in_schema=False)
+    async def apple_app_site_association():
+        team = os.environ.get("APPLE_TEAM_ID", "").strip()
+        if not team:
+            return JSONResponse({}, status_code=404)
+        app_id = f"{team}.{app_json['packageId']}"
+        return JSONResponse(
+            {"applinks": {"details": [{"appIDs": [app_id], "components": [
+                # Downloads, the lab and Google's sign-in stay in the browser.
+                *({"/": path, "exclude": True} for path in ("/download/*", "/lab/*", "/login/*", "/auth/*")),
+                {"/": "/*"},
+            ]}]}},
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
 
     @app.get("/.well-known/jwks.json", include_in_schema=False)
     async def jwks():

@@ -219,11 +219,13 @@ const notify = shell
       async register() {
         const reg = await shell.ivrit.pushRegistration();
         return communicator.registerNativeDevice({
-          transport: "fcm",
+          // Builds from before the iPhone app name no transport: Firebase.
+          transport: reg.transport ?? "fcm",
           token: reg.token,
           key: reg.key,
           oldToken: reg.previousToken,
-          label: "ivrit.ai · Android",
+          environment: reg.environment,
+          label: nativeStatus?.platform === "ios" ? "ivrit.ai · iPhone" : "ivrit.ai · Android",
         });
       },
     }
@@ -323,7 +325,10 @@ function notificationTrouble() {
 }
 
 function helpSteps(trouble) {
-  if (shell) return t(trouble === "nopopup" ? "helpAppPopup" : trouble === "denied" ? "helpAppDenied" : "helpAppFailed");
+  if (shell) {
+    const ios = nativeStatus?.platform === "ios" && trouble !== "failed" ? "Ios" : "";
+    return t(`${trouble === "nopopup" ? "helpAppPopup" : trouble === "denied" ? "helpAppDenied" : "helpAppFailed"}${ios}`);
+  }
   const { os, browser } = platform();
   const host = location.host;
   if (trouble === "ios-install") return t("helpIos-install");
@@ -1779,7 +1784,9 @@ function askPopupResult() {
     // Nothing at all: a block we can see explains it first; otherwise it is the device.
     const trouble = notificationTrouble();
     if (trouble) return showPopupTest(helpPanel(trouble, { retry: runPopupTest }));
-    showPopupTest(stepsPanel(t("nothingHelpTitle"), t("nothingHelpLead"), t(`nothing${popupKind()}`), runPopupTest));
+    // In the iPhone app, not a Home Screen web app: no Safari to leave.
+    const kind = shell && popupKind() === "Ios" ? "IosApp" : popupKind();
+    showPopupTest(stepsPanel(t("nothingHelpTitle"), t("nothingHelpLead"), t(`nothing${kind}`), runPopupTest));
   };
   showPopupTest(
     el("p", { class: "step-label", text: t("testAsk") }),
@@ -1908,6 +1915,11 @@ if (shell) {
   shell.ivrit.addListener("pushToken", () => {
     localStorage.removeItem("reconciled_at");
     if (state.me) reconcile();
+  });
+  // A link to this site opened in the app (iPhone's universal links): go there.
+  shell.app.addListener("appUrlOpen", ({ url }) => {
+    const target = new URL(url, location.href);
+    if (target.origin === location.origin && target.href !== location.href) location.assign(target.href);
   });
 }
 

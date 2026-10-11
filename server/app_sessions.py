@@ -15,7 +15,7 @@ valid here.
 import base64
 import hashlib
 import time
-from typing import Optional
+from typing import Optional, Sequence
 
 import jwt
 from cryptography.hazmat.primitives import serialization
@@ -36,9 +36,13 @@ def _uint(n: int) -> str:
 
 
 class Sessions:
-    def __init__(self, issuer: str, google_client_id: str, private_key_pem: str, google_jwks_url: Optional[str] = None):
+    def __init__(self, issuer: str, google_client_id: str, private_key_pem: str, google_jwks_url: Optional[str] = None,
+                 other_client_ids: Sequence[str] = ()):
         self.issuer = issuer.rstrip("/")
         self.google_client_id = google_client_id
+        # Google's iPhone sign-in issues ID tokens for the app's iOS client, not
+        # the web client Android's tokens are for; both are this app.
+        self.audiences = [google_client_id, *[c for c in other_client_ids if c]]
         self.key = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
         numbers = self.key.public_key().public_numbers()
         n, e = _uint(numbers.n), _uint(numbers.e)
@@ -67,7 +71,7 @@ class Sessions:
         session. Blocking (fetches Google's keys): call it off the event loop."""
         key = self._google.get_signing_key_from_jwt(id_token).key
         claims = jwt.decode(
-            id_token, key, algorithms=["RS256"], audience=self.google_client_id, issuer=GOOGLE_ISSUERS,
+            id_token, key, algorithms=["RS256"], audience=self.audiences, issuer=GOOGLE_ISSUERS,
             leeway=60, options={"require": ["sub", "email", "exp", "iat"]},
         )
         if claims.get("email_verified") is not True:

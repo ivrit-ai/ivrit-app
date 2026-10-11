@@ -97,7 +97,8 @@ public class IvritNativePlugin extends Plugin {
             .put("available", available)
             .put("permission", permission)
             .put("popup", importance >= NotificationManager.IMPORTANCE_HIGH)
-            .put("importance", importance);
+            .put("importance", importance)
+            .put("platform", "android");
     }
 
     @PluginMethod
@@ -150,7 +151,10 @@ public class IvritNativePlugin extends Plugin {
                 return;
             }
             String token = task.getResult();
-            JSObject result = new JSObject().put("token", token).put("key", Store.pushKeyText(getContext()));
+            JSObject result = new JSObject()
+                .put("transport", "fcm")
+                .put("token", token)
+                .put("key", Store.pushKeyText(getContext()));
             String previous = Store.swapToken(getContext(), token);
             if (previous != null) result.put("previousToken", previous);
             call.resolve(result);

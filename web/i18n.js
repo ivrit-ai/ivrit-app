@@ -130,6 +130,11 @@ const STRINGS = {
       "Settings → Apps → ivrit.ai (or Chrome) → Notifications: make sure they're on.",
       "Then test again.",
     ],
+    nothingIosApp: () => [
+      "Settings → Notifications → ivrit.ai: make sure Allow Notifications is on.",
+      "Make sure a Focus mode or Do Not Disturb isn't on.",
+      "Close the app and reopen it, then test again.",
+    ],
     nothingIos: () => [
       "Open ivrit.ai from the Home Screen icon, not from Safari.",
       "Settings → Notifications → ivrit.ai: make sure Allow Notifications is on.",
@@ -281,6 +286,16 @@ const STRINGS = {
     helpAppFailed: () => [
       "Check that the phone is online, then close and reopen the app.",
       "If it keeps happening, write to info@ivrit.ai.",
+    ],
+    helpAppDeniedIos: () => [
+      "Tap “Open settings” below: it opens ivrit.ai's notification settings.",
+      "Turn on “Allow Notifications”.",
+      "Come back to the app.",
+    ],
+    helpAppPopupIos: () => [
+      "Tap “Open settings” below: it opens ivrit.ai's notification settings.",
+      "Under “Alerts”, turn on “Banners”, and set the banner style to “Persistent” if you want them to stay.",
+      "Come back to the app.",
     ],
     openSettings: "Open settings",
     bannerNoPopup: "Messages arrive, but don't pop up on screen.",
@@ -434,6 +449,11 @@ const STRINGS = {
       "הגדרות ← אפליקציות ← ivrit.ai (או Chrome) ← התראות: ודאו שהן מופעלות.",
       "ואז בדקו שוב.",
     ],
+    nothingIosApp: () => [
+      "הגדרות ← עדכונים ← ivrit.ai: ודאו ש„אפשר עדכונים” מופעל.",
+      "ודאו שמצב ריכוז או „נא לא להפריע” כבוי.",
+      "סגרו את האפליקציה ופתחו אותה מחדש, ובדקו שוב.",
+    ],
     nothingIos: () => [
       "פתחו את ivrit.ai מהסמל במסך הבית, לא מ-Safari.",
       "הגדרות ← עדכונים ← ivrit.ai: ודאו ש„אפשר עדכונים” מופעל.",
@@ -584,6 +604,16 @@ const STRINGS = {
     helpAppFailed: () => [
       "ודאו שיש חיבור לאינטרנט, ואז סגרו ופתחו מחדש את האפליקציה.",
       "אם זה חוזר, כתבו לנו: info@ivrit.ai.",
+    ],
+    helpAppDeniedIos: () => [
+      "הקישו על „פתיחת ההגדרות” למטה: ייפתחו הגדרות העדכונים של ivrit.ai.",
+      "הפעילו „אפשר עדכונים”.",
+      "חזרו לאפליקציה.",
+    ],
+    helpAppPopupIos: () => [
+      "הקישו על „פתיחת ההגדרות” למטה: ייפתחו הגדרות העדכונים של ivrit.ai.",
+      "תחת „התראות”, הפעילו „באנרים”, ואם תרצו שיישארו על המסך – בחרו „קבוע”.",
+      "חזרו לאפליקציה.",
     ],
     openSettings: "פתיחת ההגדרות",
     bannerNoPopup: "ההודעות מגיעות, אבל לא קופצות על המסך.",

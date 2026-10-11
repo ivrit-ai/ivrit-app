@@ -36,3 +36,17 @@ if [ -d "$res" ]; then
   done
   rm -rf "$tmp"
 fi
+
+# The iPhone shell: one 1024px icon, which iOS rounds and scales itself. Apple
+# refuses transparency in it, so the full-bleed (maskable) art is flattened.
+ios=shell/ios/App/App/Assets.xcassets/AppIcon.appiconset
+if [ -d "$ios" ]; then
+  rsvg-convert -w 1024 -h 1024 "$brand/maskable.svg" | convert - -background white -alpha remove -alpha off -type TrueColor "PNG24:$ios/AppIcon-512@2x.png"
+  # The launch screen: the mark on the app's background, centred (iOS crops the square to the screen).
+  splash=shell/ios/App/App/Assets.xcassets/Splash.imageset
+  rsvg-convert -w 480 -h 480 "$brand/ayin.svg" -o "$splash/mark.png"
+  convert -size 2732x2732 xc:'#F7F6F3' "$splash/mark.png" -gravity center -composite -type TrueColor "PNG24:$splash/splash-2732x2732.png"
+  rm "$splash/mark.png"
+  cp "$splash/splash-2732x2732.png" "$splash/splash-2732x2732-1.png"
+  cp "$splash/splash-2732x2732.png" "$splash/splash-2732x2732-2.png"
+fi
