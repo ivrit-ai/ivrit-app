@@ -1,113 +1,92 @@
 # The ivrit.ai app on iPhone (App Store)
 
-How the app comes to iPhone: the same web app (app.ivrit.ai) in a native shell,
-as on Android, with the native parts iOS needs, built and shipped through the App
-Store.
+The same web app (app.ivrit.ai) in a native shell, as on Android, with the
+native parts iOS needs, built and shipped through the App Store. One codebase:
+only the native shell is per platform.
 
-## What already carries over
+## What is shared, and what is not
 
-The app is a web app loaded by a thin native shell (Capacitor, `shell/`). On
-iPhone, the same shell project gets an `ios/` platform: a WKWebView loading
-https://app.ivrit.ai, the same `server.url` as Android. Everything in `web/` runs
-there unchanged:
-- the inbox, sources, settings;
-- transcribing (My files, the editor, exports, recording via getUserMedia);
-- sign-in sessions (`server/app_sessions.py`), Eliezer and Communicator.
-
-UI changes keep shipping without App Store releases, as they do on Android. Only
-native code needs a release.
-
-## What is native, and how each Android part maps
-
-The web app talks to the shell through one plugin, `IvritNative`, called through
-Capacitor's bridge (`web/app.js` `nativePlugin`). iOS gets the same plugin in
-Swift with the same method names and answers, so the web app needs only small
-platform checks.
-
-| Method | Android today | iOS |
+| Part | Where | Shared? |
 |---|---|---|
-| `notificationStatus`, `requestPermission`, `openNotificationSettings` | channel importance, POST_NOTIFICATIONS | `UNUserNotificationCenter` authorization (alert, banner); settings deep link |
-| `pushRegistration` | Firebase token | APNs device token, registered with Communicator as `transport: "apns"` |
-| incoming push | `PushService` decrypts the sealed message and shows it | a **Notification Service Extension** decrypts the sealed message before iOS shows it (see Push) |
-| `takeOpened` | notification intent extra | `UNUserNotificationCenterDelegate` response |
-| `googleIdToken`, `forgetGoogle` | Credential Manager | GoogleSignIn-iOS SDK, an iOS OAuth client, same server client id |
-| `authorizeDrive` | `AuthorizationClient` with offline access | GoogleSignIn `addScopes([drive.file])` with server auth code; same `/auth/drive` |
-| `sharedFiles`, `discardShared`, `shareOn` | share intents into the app | a **Share Extension** target writing into an App Group folder; the app reads it there |
-| `enqueueTranscription` (clips to Eliezer), `uploadToTranscribe` (files to My files) | WorkManager | background `URLSession` uploads, which iOS finishes even with the app suspended |
-| `configure` | native notification text, sources | the same, kept in the App Group for the extension |
+| The app itself: inbox, transcription, My files, editor, settings | `web/` | One copy, loaded from app.ivrit.ai by both shells and browsers. Changes ship without a store release. |
+| The server, Eliezer, Communicator | `server/`, other repos | One copy. Communicator reaches iPhones through Apple (`apns`) as it reaches Android through Firebase (`fcm`). |
+| Shell settings | `shell/capacitor.config.json` | One file, a section per platform. |
+| What the page may ask of the shell | `shell/native-api.json` | One contract. `scripts/check-native-api.mjs` checks that both shells implement it and that the web app asks for nothing else. CI runs it. |
+| Native code | `shell/android` (Java), `shell/ios` (Swift) | Written twice, to the contract. |
 
-## Push
+The page tells the platforms apart only for wording, from
+`notificationStatus().platform` (which settings screen to describe). Behaviour
+comes from the shell's answers: `pushRegistration()` names its transport, for
+instance, so the page never has to know which push service is behind it.
 
-Communicator seals each message per device (AES-256-GCM, a key per device) and,
-for Android, sends it through Firebase. iOS cannot run app code for a data-only
-push when the app is not running, so:
-- **Communicator sends straight to Apple (APNs, HTTP/2 with a .p8 token key)**: an
-  alert payload with `mutable-content: 1`, a placeholder title, and the sealed
-  message. A new transport beside `webpush` and `fcm` (`src/sender.js`); Firebase
-  is not needed on iOS.
-- **A Notification Service Extension** in the app decrypts it with the device's
-  key (kept in a Keychain group shared with the app), and shows the real
-  source, title and text. If it cannot, iOS shows the placeholder.
-- Notifications pop up by default on iOS (banners); there is no channel to
-  manage. The self-test in Settings checks authorization and banner style.
+## The iPhone shell (`shell/ios`)
 
-## Signing in
+| Contract | Android | iPhone |
+|---|---|---|
+| `notificationStatus`, `requestPermission`, `openNotificationSettings` | channel importance, POST_NOTIFICATIONS | `UNUserNotificationCenter`: authorization, and whether banners show; the app's notification settings |
+| `pushRegistration`, event `pushToken` | Firebase token | APNs token (`transport: "apns"`, with `environment`: sandbox for development builds, production for TestFlight and the App Store); a changed token is noticed at launch |
+| a message arriving | `PushService` opens the sealed message and shows it | `NotificationService` (a Notification Service Extension) opens it before iOS shows it, with the device's key from a Keychain group shared with the app |
+| `takeOpened`, event `opened` | notification intent | `UNUserNotificationCenterDelegate` |
+| `googleIdToken`, `forgetGoogle`, `authorizeDrive` | Credential Manager, AuthorizationClient | Google's iOS SDK (GoogleSignIn 8) with the app's iOS OAuth client; the Drive code is for the server's web client, as on Android |
+| `sharedFiles`, `discardShared`, `shareOn`, event `shared` | share intents | `ShareExtension`: audio and video (and WhatsApp's Opus voice notes) into an App Group folder; the app takes them when it is next open |
+| `enqueueTranscription`, `uploadToTranscribe`, events `transcription`, `fileUpload` | WorkManager | a background `URLSession`, which iOS carries on with the app closed; transcripts are awaited while the app runs, then in background refreshes |
+| `configure` | SharedPreferences | the App Group, which the notification extension reads |
 
-- **Google, natively:** GoogleSignIn-iOS, with an iOS OAuth client (bundle id
-  `ai.ivrit.app`) in the same Google Cloud project. It returns an ID token for the
-  server's client, which `/auth/google` exchanges for the app's session, as on
-  Android.
-- **Drive:** the same SDK adds the `drive.file` scope and returns a server auth
-  code for `/auth/drive`.
-- **Sign in with Apple (App Store rule 4.8):** an app offering a third-party sign-in
-  must also offer an equivalent private one, unless the account exists to reach the
-  user's content on that service. Transcripts live in the user's Google Drive,
-  which is the case for the exception. Whether to rely on it is a decision (below).
+How it differs from Android, because iOS works differently:
+- **A share cannot open the app.** The share extension saves the recording,
+  says so, and leaves a notification that opens the app on it.
+- **Background time is short.** Android follows a clip's transcript for about
+  20 minutes after the upload; iOS gives moments, then background refreshes
+  when it chooses. The page catches up whenever the app opens.
+- **WhatsApp is recognised by its file names** (`PTT-…`, `…-WA0001…`, `.opus`):
+  iOS does not tell a share extension which app shared.
 
-## Shares
+### The project
 
-A Share Extension (audio and video types) copies the file into the App Group
-container with its name and a guess at its origin (WhatsApp voice notes are named
-`PTT-*.opus`; iOS does not tell an extension which app shared). It opens nothing.
-The next time the app is active, it takes the file as on Android: a clip goes to
-Eliezer, a longer recording to My files.
+`shell/ios/App/project.yml` describes the Xcode project (XcodeGen), so the
+generated `App.xcodeproj` is not kept in git: three targets (`App`,
+`NotificationService`, `ShareExtension`), `Shared/` compiled into all three,
+Capacitor's packages (`CapApp-SPM`, which `npx cap sync ios` manages) and
+GoogleSignIn. `Config.xcconfig` holds the settings that are not secrets: the
+Apple team and the iOS OAuth client.
 
-## Building and shipping
+`scripts/build-ios.sh simulator` builds it unsigned (does it compile);
+`scripts/build-ios.sh testflight` archives, signs with an App Store Connect API
+key, and uploads. Both need a Mac; GitHub Actions provides one
+(`.github/workflows/ios.yml`): every change to `shell/` is built for the
+simulator, and "Run workflow" with *testflight* uploads a build.
 
-- **Needs a Mac:** Xcode builds and signs iOS apps; this repo is developed on
-  Linux. Either a Mac (local builds, Xcode signing), or CI on macOS (GitHub
-  Actions' macOS runners, or Xcode Cloud) with fastlane and an App Store Connect
-  API key, building on each tag and uploading to TestFlight.
-- **Accounts:** an Apple Developer Program membership ($99 a year): as an
-  organization (needs a D-U-N-S number for ivrit.ai, a few days to weeks), or
-  as an individual (faster; the store shows the person's name).
-- **TestFlight first:** internal testers (up to 100, no review), then external
-  ones (a light review), then the App Store.
-- **The store:** screenshots (6.9" and 6.5" iPhone, plus iPad only if iPad is
-  supported - suggested: iPhone only at first), the privacy "nutrition" labels
-  (the same data as Google Play's safety form), the privacy policy
-  (app.ivrit.ai/privacy), and in-app account deletion (Settings, already there).
-- **App Review:** reviewers must sign in, so the review notes give a Google test
-  account. Rule 4.2 (more than a website) is met by native notifications,
-  sharing into the app, background uploads and native sign-in.
-- **Universal Links:** app.ivrit.ai serves `/.well-known/apple-app-site-association`,
-  so transcript and message links open in the app.
+## What has to be set up (once)
 
-## Order of work
+| What | Where it goes |
+|---|---|
+| Apple Developer Program membership (organization: needs ivrit.ai's D-U-N-S number) | — |
+| The team id (Membership page) | `IVRIT_TEAM_ID` in `Config.xcconfig`, GitHub secret `IVRIT_TEAM_ID`, `APPLE_TEAM_ID` on the app server (xhost), `APNS_TEAM_ID` on Communicator |
+| App Store Connect: the app (bundle id `ai.ivrit.app`, plus `ai.ivrit.app.NotificationService` and `ai.ivrit.app.ShareExtension`; App Group `group.ai.ivrit.app`) | Automatic signing registers the identifiers on the first signed build; the app record is made by hand |
+| App Store Connect API key, App Manager role (.p8, key id, issuer id) | GitHub secrets `ASC_KEY` (the file's contents), `ASC_KEY_ID`, `ASC_ISSUER_ID` |
+| APNs key (.p8, key id) | Communicator secrets `APNS_KEY`, `APNS_KEY_ID` (and `APNS_TEAM_ID`) |
+| Google Cloud: an iOS OAuth client for `ai.ivrit.app`, in the same project as the web client | `GOOGLE_IOS_CLIENT_ID` and `GOOGLE_REVERSED_CLIENT_ID` in `Config.xcconfig`; `GOOGLE_IOS_CLIENT_ID` on the app server |
 
-1. **Prerequisites (you):** Apple Developer account, App Store Connect record
-   (`ai.ivrit.app`), APNs key (.p8), iOS OAuth client in Google Cloud, and the
-   Mac or CI decision.
-2. **The shell:** `shell/ios` (Capacitor 8), the `IvritNative` plugin in Swift
-   (status, permissions, Google sign-in and Drive, opened notifications), app-bound
-   domains for app.ivrit.ai, microphone permission text.
-3. **Push:** Communicator's APNs transport (with tests against a fake APNs), the
-   Notification Service Extension, device registration as `apns`.
-4. **Shares and background uploads:** the Share Extension and the App Group;
-   `URLSession` background uploads for clips and files.
-5. **Web app:** the few platform checks (iOS settings wording, no Android
-   channel help), and Universal Links.
-6. **Release:** CI to TestFlight, internal testing, store listing, review.
+Nothing secret is committed: the .p8 files go to secrets straight from their
+files.
 
-Later: on-device transcription on iPhone (WebGPU in WKWebView from iOS 26, or
+## App Store review
+
+- **Sign-in:** reviewers need a Google account with sample transcripts; its
+  details go in the review notes (`store/app-store.md`).
+- **Sign in with Apple (guideline 4.8):** not offered. The account exists to
+  reach the user's transcripts in their Google Drive, which is the exception
+  4.8 makes; added only if review asks.
+- **More than a website (4.2):** native notifications, sharing into the app,
+  background uploads, native sign-in.
+- **Account deletion (5.1.1(v)):** in Settings, in the app.
+- **iPhone only** at first (`TARGETED_DEVICE_FAMILY = 1`).
+- **Encryption:** standard only (`ITSAppUsesNonExemptEncryption = NO`).
+
+The listing, the privacy answers and the review notes are drafted in
+`store/app-store.md`.
+
+## Later
+
+On-device transcription on iPhone (WebGPU in WKWebView from iOS 26, or
 WhisperKit on the Neural Engine), from what the Android lab shows.
