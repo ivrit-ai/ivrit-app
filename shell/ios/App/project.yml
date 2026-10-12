@@ -14,7 +14,8 @@ configFiles:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_STYLE: $(IVRIT_SIGN_STYLE)
+    CODE_SIGN_IDENTITY: $(IVRIT_SIGN_IDENTITY)
     TARGETED_DEVICE_FAMILY: "1"
   configs:
     Debug:
@@ -55,6 +56,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit
+        PROVISIONING_PROFILE_SPECIFIER: $(IVRIT_PROFILE_APP)
         PRODUCT_NAME: App
         INFOPLIST_FILE: App/Info.plist
         CODE_SIGN_ENTITLEMENTS: App/App.entitlements
@@ -78,6 +80,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.NotificationService
+        PROVISIONING_PROFILE_SPECIFIER: $(IVRIT_PROFILE_NOTIFICATION_SERVICE)
         INFOPLIST_FILE: NotificationService/Info.plist
         CODE_SIGN_ENTITLEMENTS: NotificationService/NotificationService.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -93,6 +96,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.ShareExtension
+        PROVISIONING_PROFILE_SPECIFIER: $(IVRIT_PROFILE_SHARE_EXTENSION)
         INFOPLIST_FILE: ShareExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: ShareExtension/ShareExtension.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES

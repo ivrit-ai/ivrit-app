@@ -11,6 +11,16 @@ DEVELOPMENT_TEAM = $(IVRIT_TEAM_ID)
 GOOGLE_IOS_CLIENT_ID =
 GOOGLE_REVERSED_CLIENT_ID = ai.ivrit.google-unset
 
+// Signing: Xcode's automatic signing for development; scripts/build-ios.sh
+// testflight signs manually for the App Store, with profiles that
+// scripts/ios-signing.py makes (IVRIT_PROFILE_*), and production push.
+IVRIT_SIGN_STYLE = Automatic
+IVRIT_SIGN_IDENTITY = Apple Development
+IVRIT_APS_ENVIRONMENT = development
+IVRIT_PROFILE_APP =
+IVRIT_PROFILE_NOTIFICATION_SERVICE =
+IVRIT_PROFILE_SHARE_EXTENSION =
+
 // shared/app.json's version, and a build number that only grows; CI sets both
 // (scripts/build-ios.sh), as scripts/build-android.sh does for Android.
 MARKETING_VERSION = 0.1.0
