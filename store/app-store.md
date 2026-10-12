@@ -24,7 +24,7 @@ identifying anyone. Google Play's data safety form needs the same correction.
 - **Subtitle** (30 characters):
   - he: תמלול עברית והתראות
   - en: Hebrew transcription & alerts
-- **Bundle id:** ai.ivrit.app
+- **Bundle id:** ai.ivrit
 - **Primary category:** Productivity. **Secondary:** Utilities.
 - **Age rating:** 4+ (no objectionable content; users' own messages only).
 - **Privacy policy URL:** https://app.ivrit.ai/privacy

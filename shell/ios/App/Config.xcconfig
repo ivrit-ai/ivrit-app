@@ -9,7 +9,7 @@ DEVELOPMENT_TEAM = $(IVRIT_TEAM_ID)
 // the same id reversed, which Google's sign-in returns to. Until it is set, the
 // app builds, but signing in with Google answers "no_client_id".
 GOOGLE_IOS_CLIENT_ID =
-GOOGLE_REVERSED_CLIENT_ID = ai.ivrit.app.google-unset
+GOOGLE_REVERSED_CLIENT_ID = ai.ivrit.google-unset
 
 // shared/app.json's version, and a build number that only grows; CI sets both
 // (scripts/build-ios.sh), as scripts/build-android.sh does for Android.

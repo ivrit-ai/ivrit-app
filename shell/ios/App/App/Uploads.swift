@@ -20,7 +20,7 @@ import UserNotifications
 /// app opens.
 final class Uploads: NSObject, URLSessionDataDelegate {
     static let shared = Uploads()
-    static let checkTask = "ai.ivrit.app.jobs"
+    static let checkTask = "ai.ivrit.jobs"
     private static let maxAttempts = 8
     private static let pollSeconds: UInt64 = 3
     /// What a header may carry unescaped: ASCII only (.alphanumerics would let Hebrew through).
@@ -52,7 +52,7 @@ final class Uploads: NSObject, URLSessionDataDelegate {
     private var bodies: [Int: Data] = [:]
 
     private lazy var session: URLSession = {
-        let config = URLSessionConfiguration.background(withIdentifier: "ai.ivrit.app.uploads")
+        let config = URLSessionConfiguration.background(withIdentifier: "ai.ivrit.uploads")
         config.sessionSendsLaunchEvents = true
         config.isDiscretionary = false
         return URLSession(configuration: config, delegate: self, delegateQueue: queue)

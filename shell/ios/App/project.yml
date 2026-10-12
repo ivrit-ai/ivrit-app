@@ -54,7 +54,7 @@ targets:
       - path: Shared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.app
+        PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit
         PRODUCT_NAME: App
         INFOPLIST_FILE: App/Info.plist
         CODE_SIGN_ENTITLEMENTS: App/App.entitlements
@@ -77,7 +77,7 @@ targets:
       - path: Shared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.app.NotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.NotificationService
         INFOPLIST_FILE: NotificationService/Info.plist
         CODE_SIGN_ENTITLEMENTS: NotificationService/NotificationService.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -92,7 +92,7 @@ targets:
       - path: Shared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.app.ShareExtension
+        PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.ShareExtension
         INFOPLIST_FILE: ShareExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: ShareExtension/ShareExtension.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES

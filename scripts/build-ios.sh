@@ -5,7 +5,7 @@
 #   scripts/build-ios.sh simulator    a build for the simulator, unsigned: does it compile
 #   scripts/build-ios.sh testflight   a signed archive, uploaded to App Store Connect
 #
-# testflight signs with an App Store Connect API key (App Manager), so no
+# testflight signs with an App Store Connect API key (Admin), so no
 # certificates live anywhere: ASC_KEY_PATH (the .p8 file), ASC_KEY_ID,
 # ASC_ISSUER_ID, and IVRIT_TEAM_ID (the Apple Developer team).
 # Needs Xcode, Node 22 and xcodegen (brew install xcodegen).

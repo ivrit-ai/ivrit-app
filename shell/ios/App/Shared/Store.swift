@@ -7,7 +7,7 @@ import Security
 /// notification extension can show a message while the app is closed, and the
 /// folder shared recordings wait in. The iPhone side of Android's Store.
 enum Store {
-    static let group = "group.ai.ivrit.app"
+    static let group = "group.ai.ivrit"
     static let defaultCommunicator = "https://communicator.ivrit.ai"
 
     static var defaults: UserDefaults { UserDefaults(suiteName: group) ?? .standard }
@@ -19,15 +19,15 @@ enum Store {
 
     // MARK: the message key
 
-    private static let keyService = "ai.ivrit.app.push"
+    private static let keyService = "ai.ivrit.push"
     private static let keyAccount = "key"
 
     /// The Keychain group the app and its notification extension share, from
-    /// Info.plist ($(AppIdentifierPrefix)ai.ivrit.app.shared). Unsigned builds
+    /// Info.plist ($(AppIdentifierPrefix)ai.ivrit.shared). Unsigned builds
     /// (the simulator in CI) have none, and keep the key to themselves.
     private static var keychainGroup: String? {
         guard let group = Bundle.main.object(forInfoDictionaryKey: "IvritKeychainGroup") as? String,
-              !group.hasPrefix("ai.ivrit.app") else { return nil }
+              !group.hasPrefix("ai.ivrit") else { return nil }
         return group
     }
 

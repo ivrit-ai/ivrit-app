@@ -20,7 +20,7 @@ enum Shares {
     /// Set by the share extension, taken by the app: files are waiting.
     static let pendingKey = "shared_pending"
     /// Posted (Darwin) by the share extension, for an app that is running.
-    static let darwinName = "ai.ivrit.app.shared"
+    static let darwinName = "ai.ivrit.shared"
 
     static var dir: URL {
         let dir = Store.container.appendingPathComponent("shared", isDirectory: true)

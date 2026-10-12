@@ -37,7 +37,7 @@
 	<key>GIDClientID</key>
 	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
 	<key>IvritKeychainGroup</key>
-	<string>$(AppIdentifierPrefix)ai.ivrit.app.shared</string>
+	<string>$(AppIdentifierPrefix)ai.ivrit.shared</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
@@ -46,7 +46,7 @@
 	<string>To record audio for transcription.</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>ai.ivrit.app.jobs</string>
+		<string>ai.ivrit.jobs</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>

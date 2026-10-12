@@ -4,11 +4,11 @@
 <dict>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.ai.ivrit.app</string>
+		<string>group.ai.ivrit</string>
 	</array>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)ai.ivrit.app.shared</string>
+		<string>$(AppIdentifierPrefix)ai.ivrit.shared</string>
 	</array>
 </dict>
 </plist>

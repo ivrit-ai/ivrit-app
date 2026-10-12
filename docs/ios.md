@@ -62,10 +62,10 @@ simulator, and "Run workflow" with *testflight* uploads a build.
 |---|---|
 | Apple Developer Program membership (organization: needs ivrit.ai's D-U-N-S number) | — |
 | The team id (Membership page) | `IVRIT_TEAM_ID` in `Config.xcconfig`, GitHub secret `IVRIT_TEAM_ID`, `APPLE_TEAM_ID` on the app server (xhost), `APNS_TEAM_ID` on Communicator |
-| App Store Connect: the app (bundle id `ai.ivrit.app`, plus `ai.ivrit.app.NotificationService` and `ai.ivrit.app.ShareExtension`; App Group `group.ai.ivrit.app`) | Automatic signing registers the identifiers on the first signed build; the app record is made by hand |
-| App Store Connect API key, App Manager role (.p8, key id, issuer id) | GitHub secrets `ASC_KEY` (the file's contents), `ASC_KEY_ID`, `ASC_ISSUER_ID` |
+| App Store Connect: the app (bundle id `ai.ivrit`, the iPhone app's own (Android's is `ai.ivrit.app`), plus `ai.ivrit.NotificationService` and `ai.ivrit.ShareExtension`; App Group `group.ai.ivrit`) | Automatic signing registers the identifiers on the first signed build; the app record is made by hand |
+| App Store Connect API key, Admin role (cloud-managed signing needs it) (.p8, key id, issuer id) | GitHub secrets `ASC_KEY` (the file's contents), `ASC_KEY_ID`, `ASC_ISSUER_ID` |
 | APNs key (.p8, key id) | Communicator secrets `APNS_KEY`, `APNS_KEY_ID` (and `APNS_TEAM_ID`) |
-| Google Cloud: an iOS OAuth client for `ai.ivrit.app`, in the same project as the web client | `GOOGLE_IOS_CLIENT_ID` and `GOOGLE_REVERSED_CLIENT_ID` in `Config.xcconfig`; `GOOGLE_IOS_CLIENT_ID` on the app server |
+| Google Cloud: an iOS OAuth client for `ai.ivrit`, in the same project as the web client | `GOOGLE_IOS_CLIENT_ID` and `GOOGLE_REVERSED_CLIENT_ID` in `Config.xcconfig`; `GOOGLE_IOS_CLIENT_ID` on the app server |
 
 Nothing secret is committed: the .p8 files go to secrets straight from their
 files.

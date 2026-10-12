@@ -92,7 +92,7 @@ def install_routes(app: FastAPI, google_client_id: Optional[str]):
         team = os.environ.get("APPLE_TEAM_ID", "").strip()
         if not team:
             return JSONResponse({}, status_code=404)
-        app_id = f"{team}.{app_json['packageId']}"
+        app_id = f"{team}.{app_json['iosBundleId']}"
         return JSONResponse(
             {"applinks": {"details": [{"appIDs": [app_id], "components": [
                 # Downloads, the lab and Google's sign-in stay in the browser.

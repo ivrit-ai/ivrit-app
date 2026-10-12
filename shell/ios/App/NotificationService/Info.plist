@@ -21,7 +21,7 @@
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>IvritKeychainGroup</key>
-	<string>$(AppIdentifierPrefix)ai.ivrit.app.shared</string>
+	<string>$(AppIdentifierPrefix)ai.ivrit.shared</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>

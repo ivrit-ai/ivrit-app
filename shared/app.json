@@ -1,6 +1,7 @@
 {
   "name": "ivrit.ai",
   "packageId": "ai.ivrit.app",
+  "iosBundleId": "ai.ivrit",
   "version": "0.1.0",
   "host": "app.ivrit.ai",
   "startUrl": "/",
