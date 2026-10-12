@@ -56,4 +56,15 @@ jobs:
           export ASC_KEY_PATH="$RUNNER_TEMP/private_keys/AuthKey_$ASC_KEY_ID.p8"
           mkdir -p "$(dirname "$ASC_KEY_PATH")"
           printf '%s\n' "$ASC_KEY" > "$ASC_KEY_PATH"
+          # The key as stored signs in to App Store Connect (else the archive fails vaguely).
+          node -e '
+            const crypto = require("crypto"), fs = require("fs");
+            const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+            const now = Math.floor(Date.now() / 1000);
+            const head = b64({ alg: "ES256", kid: process.env.ASC_KEY_ID, typ: "JWT" });
+            const body = b64({ iss: process.env.ASC_ISSUER_ID, iat: now, exp: now + 600, aud: "appstoreconnect-v1" });
+            const sig = crypto.sign("sha256", Buffer.from(head + "." + body), { key: fs.readFileSync(process.env.ASC_KEY_PATH), dsaEncoding: "ieee-p1363" }).toString("base64url");
+            fetch("https://api.appstoreconnect.apple.com/v1/apps?limit=1", { headers: { authorization: "Bearer " + head + "." + body + "." + sig } })
+              .then((r) => { console.log("App Store Connect API:", r.status); if (!r.ok) process.exit(1); });
+          '
           scripts/build-ios.sh testflight
