@@ -2,7 +2,7 @@
 // Signing keys never go here: CI signs with an App Store Connect API key.
 
 // The Apple Developer team (App Store Connect → Membership).
-IVRIT_TEAM_ID =
+IVRIT_TEAM_ID = WN9KK8S9P8
 DEVELOPMENT_TEAM = $(IVRIT_TEAM_ID)
 
 // Google sign-in: the app's iOS OAuth client (Google Cloud → Credentials), and
