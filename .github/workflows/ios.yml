@@ -52,6 +52,8 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           IVRIT_TEAM_ID: ${{ secrets.IVRIT_TEAM_ID }}
         run: |
-          export ASC_KEY_PATH="$RUNNER_TEMP/asc.p8"
-          printf '%s' "$ASC_KEY" > "$ASC_KEY_PATH"
+          # Under Apple's own name for it, which Xcode looks for.
+          export ASC_KEY_PATH="$RUNNER_TEMP/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          mkdir -p "$(dirname "$ASC_KEY_PATH")"
+          printf '%s\n' "$ASC_KEY" > "$ASC_KEY_PATH"
           scripts/build-ios.sh testflight
