@@ -9,7 +9,17 @@ Three features over My files, which lives in the user's Google Drive:
 3. **Search** across everything (transcripts in every folder, clips, inbox
    messages), fast, on the device, filterable by folder and by source.
 
-## Where things stand
+## Status (2026-10-14)
+
+Built and deployed: folders (server and app), search (server indexes and the
+app's screen), watched folders (server, Android build 203 on internal testing,
+Settings). Tested with Drive replaced by a local folder: server
+`tests/test_hub_mode.py` 54/54, browser `store/test-transcribe.mjs` 42/42,
+search engine `web/search/test/` 23/23. Not yet tried against a real Google
+Drive (the readable Doc's HTML-to-Doc conversion, folder moves) or on a phone
+(the folder picker, background scans and uploads).
+
+## Where things stood before
 
 - My files is one flat Drive folder, `transcribe.ivrit.ai` (the old site's too):
   per transcript `<id>.json.gz` (segments), `<id>.edits.json.gz` (the edit
