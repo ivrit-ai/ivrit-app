@@ -88,8 +88,13 @@ PLIST
   rm -rf "$out/export"
   xcodebuild -exportArchive -archivePath "$out/App.xcarchive" -exportOptionsPlist "$out/export.plist" -exportPath "$out/export"
   # altool finds the key as private_keys/AuthKey_<id>.p8.
+  # altool exits 0 even when Apple rejects the build, so its answer is read.
   API_PRIVATE_KEYS_DIR=$(dirname "$ASC_KEY_PATH") xcrun altool --upload-app --type ios \
-    --file "$out/export/App.ipa" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+    --file "$out/export/App.ipa" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tee "$out/upload.log"
+  if grep -q "ERROR" "$out/upload.log" || ! grep -qi "no errors uploading\|upload succeeded" "$out/upload.log"; then
+    echo "App Store Connect refused the upload (above)" >&2
+    exit 1
+  fi
   echo "uploaded ivrit.ai $version ($build) to App Store Connect: it reaches TestFlight once Apple has processed it"
   ;;
 *)

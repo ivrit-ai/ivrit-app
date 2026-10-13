@@ -57,7 +57,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit
         PROVISIONING_PROFILE_SPECIFIER: $(IVRIT_PROFILE_APP)
-        # Per target: XcodeGen's presets set a development identity here.
+        # Per target: XcodeGen's presets set a development identity, and iPad too, here.
+        TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: $(IVRIT_SIGN_STYLE)
         CODE_SIGN_IDENTITY: $(IVRIT_SIGN_IDENTITY)
         "CODE_SIGN_IDENTITY[sdk=iphoneos*]": $(IVRIT_SIGN_IDENTITY)
@@ -85,7 +86,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.NotificationService
         PROVISIONING_PROFILE_SPECIFIER: $(IVRIT_PROFILE_NOTIFICATION_SERVICE)
-        # Per target: XcodeGen's presets set a development identity here.
+        # Per target: XcodeGen's presets set a development identity, and iPad too, here.
+        TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: $(IVRIT_SIGN_STYLE)
         CODE_SIGN_IDENTITY: $(IVRIT_SIGN_IDENTITY)
         "CODE_SIGN_IDENTITY[sdk=iphoneos*]": $(IVRIT_SIGN_IDENTITY)
@@ -105,7 +107,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.ShareExtension
         PROVISIONING_PROFILE_SPECIFIER: $(IVRIT_PROFILE_SHARE_EXTENSION)
-        # Per target: XcodeGen's presets set a development identity here.
+        # Per target: XcodeGen's presets set a development identity, and iPad too, here.
+        TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: $(IVRIT_SIGN_STYLE)
         CODE_SIGN_IDENTITY: $(IVRIT_SIGN_IDENTITY)
         "CODE_SIGN_IDENTITY[sdk=iphoneos*]": $(IVRIT_SIGN_IDENTITY)
