@@ -138,6 +138,72 @@ try {
   await page.click(".tr-back");
   await page.waitForSelector("#tr-list:not([hidden])");
   check("back returns to the list", !page.url().includes("#t/"));
+
+  // --- folders
+  await page.click("#tr-list .tr-actions button:has-text('תיקייה חדשה')");
+  await page.waitForSelector("#sheet[open] input.tr-input");
+  await page.fill("#sheet input.tr-input", "שיחות");
+  await page.click("#sheet button[type=submit]");
+  await page.waitForSelector("#tr-path .tr-crumb.current", { timeout: 10000 }).catch(() => null);
+  check("a new folder opens, under its path", page.url().includes("#f/")
+    && (await page.locator("#tr-path .tr-crumb").allTextContents()).join("/") === "הקבצים שלי/שיחות"
+    && (await page.locator("#tr-feed .empty").count()) === 1, page.url());
+  await shot("10-folder-empty");
+  const folderId = decodeURIComponent(page.url().split("#f/")[1] ?? "");
+  await page.setInputFiles("#tr-input", SAMPLE);
+  await page.waitForSelector("#sheet[open] .tr-new");
+  const destinations = page.locator("#sheet .tr-new select.tr-select").nth(1);
+  check("uploading offers where to save it, the open folder first", (await destinations.count()) === 1
+    && (await destinations.inputValue()) === folderId, await destinations.inputValue().catch(() => ""));
+  await page.click("#sheet .tr-new button[type=submit]");
+  let inFolder = null;
+  for (let i = 0; i < 60 && !inFolder; i++) {
+    await page.waitForTimeout(1500);
+    const toc = await server(`/appdata/toc?folder=${encodeURIComponent(folderId)}`);
+    inFolder = toc.body?.entries?.find((e) => e.status === "Ready") ?? null;
+  }
+  await page.waitForSelector("#tr-feed .tr-file.openable", { timeout: 15000 }).catch(() => null);
+  check("a file uploaded in a folder is transcribed into it", Boolean(inFolder)
+    && (await page.locator("#tr-feed .tr-file.openable").count()) === 1);
+  await page.click("#tr-path button.tr-crumb");
+  await page.waitForSelector("#tr-feed .tr-folder", { timeout: 10000 }).catch(() => null);
+  check("the path leads back up, where the folder shows first", !page.url().includes("#f/")
+    && (await page.locator("#tr-feed .tr-file").first().getAttribute("class")).includes("tr-folder"));
+  await shot("11-top-with-folder");
+  await page.click("#tr-feed .tr-file.openable:not(.tr-folder) .act[aria-label='העברה לתיקייה']");
+  await page.waitForSelector("#sheet[open] select.tr-select");
+  await page.selectOption("#sheet select.tr-select", folderId);
+  await page.click("#sheet button[type=submit]");
+  await page.waitForTimeout(1500);
+  check("a transcript moves into a folder", (await page.locator("#tr-feed .tr-file.openable:not(.tr-folder)").count()) === 0);
+  await page.click("#tr-feed .tr-folder");
+  await page.waitForTimeout(1500);
+  check("...and is there", (await page.locator("#tr-feed .tr-file.openable").count()) === 2);
+  await page.click("#tr-feed .tr-file.openable .act:has-text('פתיחה')");
+  await page.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 20000 }).catch(() => null);
+  check("a transcript in a folder opens, its link naming the folder", page.url().includes("?f=")
+    && (await page.locator("#tr-reader #tr-text .tr-seg").count()) > 0, page.url());
+  await page.click(".tr-back");
+  await page.waitForSelector("#tr-list:not([hidden])");
+  await page.waitForTimeout(800);
+  check("...and back returns to its folder", page.url().includes("#f/"), page.url());
+  await page.click("#tr-path .icon-btn[aria-label='שינוי שם התיקייה']");
+  await page.waitForSelector("#sheet[open] input.tr-input");
+  await page.fill("#sheet input.tr-input", "פגישות");
+  await page.click("#sheet button[type=submit]");
+  await page.waitForTimeout(1500);
+  check("a folder is renamed", (await page.locator("#tr-path .tr-crumb.current").textContent()) === "פגישות");
+  // The first transcript back to the top (the steps below open it), then the folder goes.
+  const renamedId = decodeURIComponent(page.url().split("#f/")[1] ?? "");
+  const back = await server("/appdata/move", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ results_id: ready?.results_id, from: renamedId, to: null }) });
+  check("...and a transcript moves back out of it", back.status === 200, JSON.stringify(back));
+  await page.click("#tr-path .icon-btn[aria-label='מחיקת התיקייה']");
+  await page.waitForSelector("#confirm[open]");
+  await page.click("#confirm-ok");
+  await page.waitForTimeout(1500);
+  check("...and deleted, back at the top", !page.url().includes("#f/") && (await page.locator("#tr-feed .tr-folder").count()) === 0
+    && (await page.locator("#tr-feed .tr-file.openable").count()) === 1);
   await page.click("#lang-switch button[data-locale='en']");
   await page.waitForTimeout(800);
   check("in English, the tab is too", (await page.locator("#tr-list .title").textContent()) === "Transcribe"

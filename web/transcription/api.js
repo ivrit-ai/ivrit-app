@@ -26,55 +26,68 @@ async function call(path, { method = "GET", body, raw = false } = {}) {
   return raw ? res : res.json();
 }
 
+// A My files folder by its id (null or undefined: the top folder), on a path.
+const inFolder = (path, folder) => (folder ? `${path}${path.includes("?") ? "&" : "?"}folder=${encodeURIComponent(folder)}` : path);
+
 export const boot = () => call("/transcribe/boot");
 export const languages = () => call("/languages");
 export const quota = () => call("/quota");
 export const balance = () => call("/balance");
-export const toc = () => call("/appdata/toc");
-export const rename = (resultsId, name) => call("/appdata/rename", { method: "POST", body: { results_id: resultsId, new_filename: name } });
-export const remove = (resultsId) => call("/appdata/delete", { method: "POST", body: { results_id: resultsId } });
-export const donate = (resultsId) => call("/appdata/donate_data", { method: "POST", body: { results_id: resultsId, checkbox_confirmed: true } });
+export const toc = (folder) => call(inFolder("/appdata/toc", folder));
+export const rename = (resultsId, name, folder) => call(inFolder("/appdata/rename", folder), { method: "POST", body: { results_id: resultsId, new_filename: name } });
+export const remove = (resultsId, folder) => call(inFolder("/appdata/delete", folder), { method: "POST", body: { results_id: resultsId } });
+export const donate = (resultsId, folder) => call(inFolder("/appdata/donate_data", folder), { method: "POST", body: { results_id: resultsId, checkbox_confirmed: true } });
+
+// Folders: {top, folders: [{id, name, parent}]}; made, renamed, and moved to Drive's trash.
+export const folders = () => call("/appdata/folders");
+export const createFolder = (name, parent) => call("/appdata/folders", { method: "POST", body: { name, parent } });
+export const renameFolder = (id, name) => call(`/appdata/folders/${encodeURIComponent(id)}/rename`, { method: "POST", body: { name } });
+export const deleteFolder = (id) => call(`/appdata/folders/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const move = (resultsId, from, to) => call("/appdata/move", { method: "POST", body: { results_id: resultsId, from, to } });
 export const saveRunpodKey = (key) => call("/runpod_key", { method: "POST", body: { runpod_token: key } });
 export const removeRunpodKey = () => call("/runpod_key", { method: "DELETE" });
 export const stats = () => call("/stats");
-export const audioUrl = (resultsId) => `/appdata/audio/stream/${encodeURIComponent(resultsId)}`;
+export const audioUrl = (resultsId, folder) => inFolder(`/appdata/audio/stream/${encodeURIComponent(resultsId)}`, folder);
 
 // The transcript itself: stored gzipped, unpacked here.
-export async function results(resultsId) {
-  const res = await call(`/appdata/results/${encodeURIComponent(resultsId)}`, { raw: true });
+export async function results(resultsId, folder) {
+  const res = await call(inFolder(`/appdata/results/${encodeURIComponent(resultsId)}`, folder), { raw: true });
   const stream = res.body.pipeThrough(new DecompressionStream("gzip"));
   return JSON.parse(await new Response(stream).text());
 }
 
 // Its edits, or null if it has none (404).
-export async function edits(resultsId) {
+export async function edits(resultsId, folder) {
   try {
-    return await call(`/appdata/edits/${encodeURIComponent(resultsId)}`);
+    return await call(inFolder(`/appdata/edits/${encodeURIComponent(resultsId)}`, folder));
   } catch (err) {
     if (err.status === 404) return null;
     throw err;
   }
 }
 
-export const saveEdits = (resultsId, state) => call(`/appdata/edits/${encodeURIComponent(resultsId)}`, { method: "POST", body: state });
+export const saveEdits = (resultsId, state, folder) =>
+  call(inFolder(`/appdata/edits/${encodeURIComponent(resultsId)}`, folder), { method: "POST", body: state });
 
-export async function hasAudio(resultsId) {
-  const res = await fetch(audioUrl(resultsId), { method: "HEAD", credentials: "same-origin" }).catch(() => null);
+export async function hasAudio(resultsId, folder) {
+  const res = await fetch(audioUrl(resultsId, folder), { method: "HEAD", credentials: "same-origin" }).catch(() => null);
   return Boolean(res?.ok);
 }
 
 export const precheck = ({ size, language, saveAudio }) =>
   call("/upload/precheck", { method: "POST", body: { file_size: size, language, save_audio: saveAudio ? "true" : "false" } });
 
-// A file up to the server, which transcodes it and queues it. onProgress({stage:
+// A file up to the server, which transcodes it and queues it (its transcript lands in
+// `folder`, or the top folder). onProgress({stage:
 // "uploading" | "transcoding", percent}). Resolves once it is queued; rejects with
 // an ApiRefusal (its words in .data) if the server says no.
-export function upload(file, { language, saveAudio }, onProgress) {
+export function upload(file, { language, saveAudio, folder }, onProgress) {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("file", file);
     form.append("language", language);
     form.append("save_audio", saveAudio ? "true" : "false");
+    if (folder) form.append("folder", folder);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/upload");
     xhr.setRequestHeader("Accept", "application/x-ndjson, application/json");

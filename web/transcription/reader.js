@@ -21,7 +21,7 @@ const LANGUAGE_NAMES = { he: "עברית", en: "English", fr: "Français", es: "
 
 let host = null;
 let hooks = null;
-let doc = null; // {id, entry, results, language, saved, audio}
+let doc = null; // {id, folder, entry, results, language, saved, audio}
 let working = null; // the edits as they stand in edit mode
 let mode = "new"; // new | original | compared
 let editing = false;
@@ -39,7 +39,17 @@ export function init(hostApi, viewHooks) {
   });
 }
 
-export const navigate = (id) => (location.hash = `#t/${encodeURIComponent(id)}`);
+// A transcript's address: #t/<id>, with ?f=<folder> when it is in one (and &s=<segment>
+// to open at a sentence).
+export function address(id, folder, segment) {
+  const query = new URLSearchParams();
+  if (folder) query.set("f", folder);
+  if (segment != null) query.set("s", String(segment));
+  const rest = query.toString();
+  return `#t/${encodeURIComponent(id)}${rest ? `?${rest}` : ""}`;
+}
+
+export const navigate = (id, folder, segment) => (location.hash = address(id, folder, segment));
 export const busy = () => dirty();
 
 export function relocalize() {
@@ -71,17 +81,18 @@ function keepDraft() {
 
 // ------------------------------------------------------------------ opening
 
-export async function open(id, entry) {
-  if (doc?.id === id && document.getElementById("tr-reader")) return;
+export async function open(id, entry, folder = null) {
+  if (doc?.id === id && doc.folder === folder && document.getElementById("tr-reader")) return;
   const { el } = host;
   editing = false;
   mode = "new";
   doc = null;
   showScreen(el("div", { class: "tr-reader", id: "tr-reader" }, [backButton(), el("p", { class: "muted tr-loading", text: tr("loadingFile") })]));
   try {
-    const [results, edits, audio] = await Promise.all([api.results(id), api.edits(id), api.hasAudio(id)]);
+    const [results, edits, audio] = await Promise.all([api.results(id, folder), api.edits(id, folder), api.hasAudio(id, folder)]);
     doc = {
       id,
+      folder,
       entry: entry || { results_id: id, source_filename: results.source_filename, duration_seconds: results.duration_seconds, completed_at: results.completed_at, language: results.language },
       results: results.results || [],
       language: results.language || entry?.language || "he",
@@ -115,13 +126,14 @@ async function offerDraft() {
 async function leave() {
   if (dirty() && !(await host.ask(tr("unsavedLeave"), { ok: tr("discardEdits"), danger: true }))) {
     // Stay: the hash already moved on; put it back.
-    history.replaceState(null, "", `#t/${encodeURIComponent(doc.id)}`);
+    history.replaceState(null, "", address(doc.id, doc.folder));
     return;
   }
   if (doc) localStorage.removeItem(`editDraft:${doc.id}`);
+  const folder = doc?.folder ?? null;
   editing = false;
   doc = null;
-  hooks.back();
+  hooks.back(folder);
 }
 
 function backButton() {
@@ -143,7 +155,7 @@ function render() {
   ].filter(Boolean).join(" · ");
   const previous = document.getElementById("tr-audio");
   const audio = doc.audio
-    ? previous || el("audio", { id: "tr-audio", controls: true, preload: "metadata", src: api.audioUrl(doc.id) })
+    ? previous || el("audio", { id: "tr-audio", controls: true, preload: "metadata", src: api.audioUrl(doc.id, doc.folder) })
     : null;
   if (audio && !audio.dataset.wired) {
     audio.dataset.wired = "1";
@@ -417,7 +429,7 @@ function donateSheet() {
   send.addEventListener("click", async () => {
     send.disabled = true;
     try {
-      await api.donate(doc.id);
+      await api.donate(doc.id, doc.folder);
       doc.entry.donated = true;
       host.sheet.close();
       host.toast(tr("donateDataSuccess"));
@@ -438,10 +450,11 @@ function donateSheet() {
 async function deleteIt() {
   if (!(await host.ask(tr("deleteConfirm", { filename: doc.entry.source_filename || "" }), { ok: tr("delete"), danger: true }))) return;
   try {
-    await api.remove(doc.id);
+    await api.remove(doc.id, doc.folder);
     localStorage.removeItem(`editDraft:${doc.id}`);
+    const folder = doc.folder;
     doc = null;
-    hooks.back();
+    hooks.back(folder);
   } catch (err) {
     host.toast(serverError(err.data, "deleteError"));
   }
@@ -468,7 +481,7 @@ async function stopEditing() {
 async function saveEditing(button) {
   button.disabled = true;
   try {
-    await api.saveEdits(doc.id, working);
+    await api.saveEdits(doc.id, working, doc.folder);
     doc.saved = normalizeEdits(working);
     editing = false;
     working = null;

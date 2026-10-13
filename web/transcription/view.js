@@ -3,6 +3,10 @@
 // "Upload a file" and "Record" start a new one, in a sheet. A transcript opens as a
 // screen of its own (reader.js). Everything is kept in the user's Google Drive by the
 // server (api.js); this is only how it looks.
+//
+// My files has folders (real Drive folders, each with its own transcripts): the list
+// shows one folder at a time, its subfolders first, under a path back to the top
+// (#f/<folder> in the address; the top folder has none).
 
 import * as api from "./api.js";
 import * as reader from "./reader.js";
@@ -20,6 +24,8 @@ let root = null;
 let boot = null;
 let config = null; // /languages
 let entries = [];
+let folder = null; // the folder shown (null: the top folder)
+let tree = null; // {top, folders: [{id, name, parent}]}
 let drawn = "";
 let pollTimer = null;
 const pending = new Map(); // uploads in progress, by a local id: {name, stage, percent}
@@ -31,14 +37,15 @@ export async function mount(container, hostApi, bootData) {
   boot = bootData;
   setLanguage(host.locale());
   api.whenSignedOut(() => host.signedOut());
-  reader.init(host, { refresh: () => refresh(), back: () => showList() });
+  reader.init(host, { refresh: () => refresh(), back: (from) => showList(from) });
   recorder.init(host, { take: (file) => chooseFiles([file]) });
   root = host.el("div", { class: "tr" });
   container.replaceChildren(root);
   renderShell();
   addEventListener("hashchange", route);
   config = await api.languages().catch(() => null);
-  await Promise.all([refresh(), renderQuota(), recorder.renderRecovered($("tr-recovered"))]);
+  folder = folderInHash();
+  await Promise.all([loadTree(), refresh(), renderQuota(), recorder.renderRecovered($("tr-recovered"))]);
   route();
 }
 
@@ -71,9 +78,11 @@ function renderShell() {
     el("div", { class: "row tr-actions" }, [
       el("button", { class: "btn primary", type: "button", onclick: () => input.click() }, [icon("plus"), el("span", { text: tr("uploadFile") })]),
       recorder.supported() ? el("button", { class: "btn", type: "button", onclick: () => recorder.choose() }, [icon("mic"), el("span", { text: tr("record") })]) : null,
+      el("button", { class: "btn quiet", type: "button", onclick: () => newFolder() }, [icon("folder-plus"), el("span", { text: tr("newFolder") })]),
       input,
     ]),
     el("div", { id: "tr-recovered" }),
+    el("nav", { id: "tr-path", class: "tr-path", "aria-label": tr("foldersPath") }),
     el("div", { id: "tr-feed", class: "feed" }),
   ]);
   const screen = el("section", { id: "tr-screen", class: "tr-screen", hidden: true });
@@ -96,10 +105,14 @@ function renderShell() {
 export async function refresh() {
   if (!host) return;
   clearTimeout(pollTimer);
+  const shown = folder;
   try {
-    const toc = await api.toc();
+    const toc = await api.toc(shown);
+    if (shown !== folder) return; // moved on meanwhile
     entries = toc.entries || [];
   } catch (err) {
+    // A folder deleted or renamed elsewhere: back to the top.
+    if (err.status === 404 && shown) return openFolder(null);
     if (err.status !== 401) host.toast(serverError(err.data, "filesLoadError"));
   }
   draw();
@@ -120,12 +133,210 @@ function draw(force = false) {
   const feed = $("tr-feed");
   if (!feed) return;
   const list = sorted();
-  const signature = JSON.stringify([list, [...pending.values()], language()]);
+  const subfolders = childrenOf(folder);
+  const signature = JSON.stringify([folder, tree, list, [...pending.values()].filter((p) => p.folder === folder), language()]);
   if (!force && signature === drawn) return;
   drawn = signature;
-  const cards = [...[...pending.entries()].map(([id, p]) => pendingCard(id, p)), ...list.map(entryCard)];
-  if (!cards.length) return feed.replaceChildren(empty());
+  drawPath();
+  const cards = [
+    ...[...pending.entries()].filter(([, p]) => p.folder === folder).map(([id, p]) => pendingCard(id, p)),
+    ...subfolders.map(folderCard),
+    ...list.map((entry, i) => entryCard(entry, i + subfolders.length)),
+  ];
+  if (!cards.length) return feed.replaceChildren(folder ? emptyFolder() : empty());
   feed.replaceChildren(...cards);
+}
+
+// ------------------------------------------------------------------ folders
+
+async function loadTree() {
+  try {
+    tree = await api.folders();
+  } catch (err) {
+    if (err.status !== 401) tree = tree || { top: null, folders: [] };
+  }
+  draw(true);
+}
+
+const folderById = (id) => tree?.folders.find((f) => f.id === id) || null;
+const childrenOf = (id) =>
+  (tree?.folders || []).filter((f) => f.parent === (id || tree.top)).sort((a, b) => a.name.localeCompare(b.name, language()));
+
+// The folders from the top down to `id`: [{id, name}], the top first (id null).
+function pathTo(id) {
+  const path = [];
+  for (let f = folderById(id); f; f = folderById(f.parent)) path.unshift({ id: f.id, name: f.name });
+  return [{ id: null, name: tr("back") }, ...path];
+}
+
+// Every folder, as a flat list under its parents, for pickers: [{id, name, depth}].
+function folderChoices() {
+  const out = [{ id: null, name: tr("back"), depth: 0 }];
+  const walk = (parent, depth) => childrenOf(parent).forEach((f) => {
+    out.push({ id: f.id, name: f.name, depth });
+    walk(f.id, depth + 1);
+  });
+  walk(null, 1);
+  return out;
+}
+
+function folderInHash() {
+  const match = location.hash.match(/^#f\/(.+)$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function openFolder(id) {
+  const next = id || null;
+  const hash = next ? `#f/${encodeURIComponent(next)}` : "";
+  if (location.hash !== hash) history.pushState(null, "", hash || location.pathname + location.search);
+  showFolder(next);
+}
+
+function showFolder(id) {
+  $("tr-screen").hidden = true;
+  $("tr-list").hidden = false;
+  if (id !== folder) {
+    folder = id;
+    entries = [];
+    drawn = "";
+    draw(true);
+  }
+  refresh();
+}
+
+function drawPath() {
+  const nav = $("tr-path");
+  if (!nav) return;
+  const { el, icon } = host;
+  if (!folder) return nav.replaceChildren();
+  const path = pathTo(folder);
+  const crumbs = path.flatMap((step, i) => {
+    const last = i === path.length - 1;
+    const node = last
+      ? el("span", { class: "tr-crumb current", dir: "auto", "aria-current": "page", text: step.name })
+      : el("button", { class: "tr-crumb", type: "button", dir: "auto", text: step.name, onclick: () => openFolder(step.id) });
+    return i ? [el("span", { class: "tr-crumb-sep", "aria-hidden": "true", text: "›" }), node] : [node];
+  });
+  nav.replaceChildren(
+    el("div", { class: "tr-crumbs" }, crumbs),
+    el("button", { class: "icon-btn", type: "button", "aria-label": tr("renameFolder"), title: tr("renameFolder"), onclick: () => renameFolder(folder) }, [icon("edit")]),
+    el("button", { class: "icon-btn", type: "button", "aria-label": tr("deleteFolder"), title: tr("deleteFolder"), onclick: () => deleteFolder(folder) }, [icon("trash")])
+  );
+}
+
+function folderCard(f, index) {
+  const { el, icon } = host;
+  const inside = childrenOf(f.id).length;
+  return el("article", { class: "msg tr-file tr-folder openable", style: `--i:${Math.min(index, 12)}`, onclick: () => openFolder(f.id) }, [
+    el("span", { class: "avatar tr-glyph", "aria-hidden": "true" }, [icon("folder")]),
+    el("div", { class: "msg-main" }, [
+      inside ? el("div", { class: "msg-head" }, [el("span", { text: tr("subfoldersCount", { count: inside }) })]) : null,
+      el("h3", { class: "msg-title", dir: "auto", text: f.name }),
+    ]),
+  ]);
+}
+
+function emptyFolder() {
+  const { el } = host;
+  return el("div", { class: "empty" }, [el("h3", { text: tr("folderEmptyTitle") }), el("p", { text: tr("folderEmptyBody") })]);
+}
+
+function nameSheet(title, value, onSave) {
+  const { el } = host;
+  const input = el("input", { class: "tr-input", value, dir: "auto", maxlength: 100, "aria-label": tr("folderName") });
+  const save = el("button", { class: "btn primary", type: "submit", text: tr("save") });
+  const form = el("form", { class: "stack" }, [input, el("div", { class: "row end" }, [save])]);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = input.value.trim();
+    if (!name || name === value) return host.sheet.close();
+    save.disabled = true;
+    try {
+      await onSave(name);
+      host.sheet.close();
+    } catch (err) {
+      host.toast(serverError(err.data, "folderError"));
+      save.disabled = false;
+    }
+  });
+  host.sheet.open(title, form);
+  setTimeout(() => input.select(), 50);
+}
+
+function newFolder(parent = folder, then) {
+  nameSheet(tr("newFolder"), "", async (name) => {
+    const made = await api.createFolder(name, parent);
+    await loadTree();
+    if (then) then(made);
+    else openFolder(made.id);
+  });
+}
+
+function renameFolder(id) {
+  const f = folderById(id);
+  if (!f) return;
+  nameSheet(tr("renameFolder"), f.name, async (name) => {
+    const renamed = await api.renameFolder(id, name);
+    await loadTree();
+    // On a phone's disk a folder's id is its path, and changes with its name.
+    if (renamed.id !== id) openFolder(renamed.id);
+    else draw(true);
+  });
+}
+
+async function deleteFolder(id) {
+  const f = folderById(id);
+  if (!f) return;
+  if (!(await host.ask(tr("deleteFolderConfirm", { name: f.name }), { ok: tr("deleteFolder"), danger: true }))) return;
+  try {
+    await api.deleteFolder(id);
+    await loadTree();
+    openFolder(f.parent === tree?.top ? null : f.parent);
+  } catch (err) {
+    host.toast(serverError(err.data, "folderError"));
+  }
+}
+
+// A picker of every folder, for "Move to…" and an upload's destination.
+function folderPicker(selected, { exclude } = {}) {
+  const { el } = host;
+  const select = el("select", { class: "tr-select", "aria-label": tr("saveTo") },
+    folderChoices()
+      .filter((c) => c.id !== exclude)
+      .map((c) => el("option", { value: c.id || "", text: `${"\u00a0\u00a0".repeat(c.depth > 0 ? c.depth - 1 : 0)}${c.depth > 1 ? "› " : ""}${c.name}` })));
+  select.value = selected || "";
+  return select;
+}
+
+function moveEntry(entry) {
+  const { el, icon } = host;
+  const select = folderPicker(folder);
+  const go = el("button", { class: "btn primary", type: "submit", text: tr("moveHere") });
+  const form = el("form", { class: "stack" }, [
+    el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("moveToLabel") }), select]),
+    el("button", { class: "btn quiet small", type: "button", onclick: () => {
+      host.sheet.close();
+      newFolder(folder, () => moveEntry(entry));
+    } }, [icon("folder-plus"), el("span", { text: tr("newFolder") })]),
+    el("div", { class: "row end" }, [go]),
+  ]);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const to = select.value || null;
+    if (to === folder) return host.sheet.close();
+    go.disabled = true;
+    try {
+      await api.move(entry.results_id, folder, to);
+      host.sheet.close();
+      entries = entries.filter((x) => x !== entry);
+      draw();
+      host.toast(tr("movedTo", { name: to ? folderById(to)?.name || "" : tr("back") }));
+    } catch (err) {
+      host.toast(serverError(err.data, "moveError"));
+      go.disabled = false;
+    }
+  });
+  host.sheet.open(tr("moveTo"), form);
 }
 
 function empty() {
@@ -172,11 +383,12 @@ function entryCard(entry, index) {
     tag = el("span", { class: "tag danger", text: tr("statusFailed") });
     note = [entry.failure_reason ? tr(entry.failure_reason) : tr("statusError"), entry.quota_refunded ? tr("quotaRefunded") : null].filter(Boolean).join(" · ");
   }
-  const open = () => ready && reader.navigate(entry.results_id);
+  const open = () => ready && reader.navigate(entry.results_id, folder);
   const actions = el("div", { class: "msg-actions" }, [
     el("span", { class: "spacer" }),
     ready ? el("button", { class: "act", type: "button", onclick: (e) => { e.stopPropagation(); open(); } }, [icon("chevron"), el("span", { text: tr("open") })]) : null,
     ready ? el("button", { class: "act", type: "button", "aria-label": tr("renameFile"), title: tr("renameFile"), onclick: (e) => { e.stopPropagation(); renameEntry(entry); } }, [icon("edit")]) : null,
+    ready ? el("button", { class: "act", type: "button", "aria-label": tr("moveTo"), title: tr("moveTo"), onclick: (e) => { e.stopPropagation(); moveEntry(entry); } }, [icon("folder")]) : null,
     ready || failed ? el("button", { class: "act", type: "button", "aria-label": tr("delete"), title: tr("delete"), onclick: (e) => { e.stopPropagation(); deleteEntry(entry); } }, [icon("trash")]) : null,
   ]);
   return el("article", { class: `msg tr-file${ready ? " openable" : ""}`, style: `--i:${Math.min(index, 12)}`, onclick: open }, [
@@ -223,7 +435,7 @@ async function renameEntry(entry) {
     if (!name || name === entry.source_filename) return host.sheet.close();
     save.disabled = true;
     try {
-      await api.rename(entry.results_id, name);
+      await api.rename(entry.results_id, name, folder);
       entry.source_filename = name;
       host.sheet.close();
       draw(true);
@@ -239,7 +451,7 @@ async function renameEntry(entry) {
 async function deleteEntry(entry) {
   if (!(await host.ask(tr("deleteConfirm", { filename: entry.source_filename || "" }), { ok: tr("delete"), danger: true }))) return;
   try {
-    await api.remove(entry.results_id);
+    await api.remove(entry.results_id, folder);
     entries = entries.filter((e) => e !== entry);
     draw();
   } catch (err) {
@@ -320,6 +532,7 @@ function openNewSheet() {
     languages.map((key) => el("option", { value: key, text: LANGUAGE_NAMES[key] || key })));
   select.value = languages.includes(preferred) ? preferred : languages.includes("he") ? "he" : languages[0];
   const keep = el("input", { type: "checkbox", checked: localStorage.getItem("tr_save_audio") !== "false" });
+  const destination = folderPicker(folder);
   const list = el("div", { class: "list" });
   const drawFiles = () => list.replaceChildren(...chosen.map((file, i) => el("div", { class: "list-row" }, [
     el("div", { class: "grow" }, [el("div", { dir: "auto", text: file.name }), el("div", { class: "sub", dir: "ltr", text: size(file.size) })]),
@@ -338,6 +551,7 @@ function openNewSheet() {
     list,
     more,
     el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("transcribeLanguage") }), select]),
+    tree?.folders.length ? el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("saveTo") }), destination]) : null,
     el("label", { class: "tr-check" }, [keep, el("span", {}, [
       el("span", { text: tr("saveAudioInDrive") }),
       el("span", { class: "sub", text: tr("saveAudioInfoText") }),
@@ -351,7 +565,7 @@ function openNewSheet() {
     const files = chosen;
     chosen = [];
     host.sheet.close();
-    send(files, { language: select.value, saveAudio: keep.checked });
+    send(files, { language: select.value, saveAudio: keep.checked, folder: destination.value || null });
   });
   host.sheet.open(tr("newTitle"), form, () => (chosen = []));
 }
@@ -359,16 +573,18 @@ function openNewSheet() {
 // One after another, as transcribe.ivrit.ai did: each checked, uploaded and
 // prepared by the server, then queued; the list shows each on its way.
 async function send(files, options) {
-  showList();
+  // The list follows the files to where they are going.
+  if (options.folder !== folder) openFolder(options.folder);
+  else showList(folder);
   let queued = 0;
   for (const file of files) {
     const id = crypto.randomUUID();
-    pending.set(id, { name: file.name, size: file.size, stage: "uploading", percent: 0 });
+    pending.set(id, { name: file.name, size: file.size, stage: "uploading", percent: 0, folder: options.folder });
     draw();
     try {
       await api.precheck({ size: file.size, language: options.language, saveAudio: options.saveAudio });
       await api.upload(file, options, ({ stage, percent }) => {
-        pending.set(id, { name: file.name, size: file.size, stage, percent });
+        pending.set(id, { name: file.name, size: file.size, stage, percent, folder: options.folder });
         draw();
       });
       queued++;
@@ -388,11 +604,12 @@ async function send(files, options) {
 
 // ------------------------------------------------------------------ screens
 
-function showList() {
-  $("tr-screen").hidden = true;
-  $("tr-list").hidden = false;
-  if (location.hash.startsWith("#t/")) history.replaceState(null, "", location.pathname);
-  refresh();
+// Back to a folder's list (the one shown, unless named), as from a transcript.
+function showList(to = folder) {
+  if (location.hash.startsWith("#t/")) {
+    history.replaceState(null, "", to ? `#f/${encodeURIComponent(to)}` : location.pathname);
+  }
+  showFolder(to);
 }
 
 export function showScreen(node) {
@@ -403,17 +620,40 @@ export function showScreen(node) {
   scrollTo({ top: 0 });
 }
 
-// #t/<results id>: a transcript; #t/stats: Stats for Nerds.
-function route() {
-  const match = location.hash.match(/^#t\/(.+)$/);
+// #t/<results id>[?f=<folder>&s=<segment>]: a transcript; #t/stats: Stats for Nerds;
+// #f/<folder>: a folder's list.
+async function route() {
+  const inFolder = folderInHash();
+  if (location.hash.startsWith("#f/")) {
+    host.showTranscribe();
+    if (!$("tr-screen").hidden && reader.busy()) return;
+    return showFolder(inFolder);
+  }
+  const match = location.hash.match(/^#t\/([^?]+)(?:\?(.*))?$/);
   if (!match) {
-    if (!$("tr-screen").hidden && !reader.busy()) showList();
+    if (!$("tr-screen").hidden && !reader.busy()) showList(null);
+    else if ($("tr-screen").hidden && folder && !location.hash) showFolder(null);
     return;
   }
   host.showTranscribe();
   const id = decodeURIComponent(match[1]);
   if (id === "stats") return import("./nerds.js").then((m) => m.open(host, showScreen));
-  reader.open(id, entries.find((e) => e.results_id === id));
+  const query = new URLSearchParams(match[2] || "");
+  let where = query.get("f") || null;
+  const segment = query.has("s") ? Number(query.get("s")) : null;
+  // A link that names no folder (a notification, an older link): find it.
+  if (!query.has("f") && !entries.some((e) => e.results_id === id)) where = await locate(id);
+  const entry = where === folder ? entries.find((e) => e.results_id === id) : undefined;
+  reader.open(id, entry, where, segment);
 }
 
-export const openResults = (id) => reader.navigate(id);
+// The folder a transcript is in: the top folder's list first, then each folder's.
+async function locate(id) {
+  const look = async (f) => ((await api.toc(f).catch(() => ({ entries: [] }))).entries || []).some((e) => e.results_id === id);
+  if (await look(null)) return null;
+  if (!tree) await loadTree();
+  for (const f of tree?.folders || []) if (await look(f.id)) return f.id;
+  return null;
+}
+
+export const openResults = (id, inFolder) => reader.navigate(id, inFolder);

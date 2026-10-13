@@ -93,6 +93,65 @@
   margin-bottom: 14px;
 }
 
+/* ---------- folders ---------- */
+
+.tr-path {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 12px;
+}
+
+.tr-path:empty {
+  display: none;
+}
+
+.tr-crumbs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  font-size: 15px;
+}
+
+.tr-crumb {
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+button.tr-crumb:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.tr-crumb.current {
+  color: var(--ink);
+  font-weight: 700;
+  cursor: default;
+}
+
+.tr-crumb-sep {
+  color: var(--muted);
+}
+
+/* The path reads right to left in Hebrew: its separators turn with it. */
+[dir="rtl"] .tr-crumb-sep {
+  transform: scaleX(-1);
+}
+
+.tr-folder .tr-glyph {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 /* ---------- sheets ---------- */
 
 .tr-field {

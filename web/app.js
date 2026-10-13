@@ -2107,8 +2107,8 @@ async function start() {
   await openFromHash();
   if (shell) await takeShared();
   watchJobs();
-  if (location.hash === "#shared" || location.hash === "#transcribe" || location.hash.startsWith("#t/")) {
-    if (!location.hash.startsWith("#t/")) history.replaceState(null, "", location.pathname + location.search);
+  if (location.hash === "#shared" || location.hash === "#transcribe" || location.hash.startsWith("#t/") || location.hash.startsWith("#f/")) {
+    if (!/^#[tf]\//.test(location.hash)) history.replaceState(null, "", location.pathname + location.search);
     showView("transcribe");
   }
   // A transcript's link (a notification, or a link from transcribe.ivrit.ai).

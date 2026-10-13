@@ -885,6 +885,12 @@ const NATIVE = {
     stop: "עצירה", recorded: "הקלטה מ־{time}", unsavedLeave: "השינויים בתמלול לא נשמרו. לצאת בלי לשמור?",
     untitled: "ללא שם",
     fileLoadError: "לא הצלחנו לפתוח את התמלול", discardEdits: "ביטול השינויים", copyError: "ההעתקה לא הצליחה", subtitles: "כתוביות", jsonWithTimes: "המשפטים עם הזמנים", editsSaved: "השינויים נשמרו", editsSaveError: "לא הצלחנו לשמור את השינויים", textFile: "טקסט", fileQueued: "הקובץ נשלח לתמלול. הוא יופיע כאן כשיהיה מוכן.",
+    newFolder: "תיקייה חדשה", foldersPath: "התיקיות", folderName: "שם התיקייה", renameFolder: "שינוי שם התיקייה", deleteFolder: "מחיקת התיקייה",
+    deleteFolderConfirm: "למחוק את „{name}” ואת כל מה שבה? היא תעבור לפח של Google Drive, ששומר אותה 30 יום.",
+    subfoldersCount: "{count} תיקיות", folderEmptyTitle: "התיקייה ריקה", folderEmptyBody: "מעלים או מקליטים לכאן, או מעבירים לכאן תמלול מתיקייה אחרת.",
+    saveTo: "לשמור ב", moveTo: "העברה לתיקייה", moveToLabel: "לאן להעביר", moveHere: "העברה", movedTo: "הועבר אל „{name}”",
+    folderError: "הפעולה על התיקייה לא הצליחה", moveError: "ההעברה לא הצליחה",
+    errorFolderName: "שם תיקייה לא תקין", errorFolderExists: "כבר יש כאן תיקייה בשם הזה", errorFolderNotFound: "התיקייה לא נמצאה", errorFolderTop: "את התיקייה הראשית אי אפשר לשנות",
   },
   yi: {
     uploadFile: "אַרויפֿלאָדן אַ טעקע", record: "רעקאָרדירן", newTitle: "נײַע טראַנסקריפּציע", filesWord: "טעקעס",
@@ -903,6 +909,12 @@ const NATIVE = {
     stop: "אָפּשטעלן", recorded: "רעקאָרדירונג פֿון {time}", unsavedLeave: "די ענדערונגען זענען ניט אויפֿגעהיט. אַרויסגיין אָן אויפֿהיטן?",
     untitled: "אָן נאָמען",
     fileLoadError: "מיר האָבן ניט געקענט עפֿענען די טראַנסקריפּציע", discardEdits: "אַוועקוואַרפֿן די ענדערונגען", copyError: "קאָפּירן איז ניט געלונגען", subtitles: "סובטיטלען", jsonWithTimes: "די זאַצן מיט די צײַטן", editsSaved: "די ענדערונגען זענען אויפֿגעהיט", editsSaveError: "מיר האָבן ניט געקענט אויפֿהיטן די ענדערונגען", textFile: "טעקסט", fileQueued: "די טעקע איז געשיקט געוואָרן צום טראַנסקריבירן. זי וועט זיך באַווײַזן דאָ.",
+    newFolder: "נײַער טעקע־אָרדנער", foldersPath: "די אָרדנערס", folderName: "נאָמען פֿונעם אָרדנער", renameFolder: "בײַטן דעם אָרדנערס נאָמען", deleteFolder: "אויסמעקן דעם אָרדנער",
+    deleteFolderConfirm: "אויסמעקן „{name}” מיט אַלץ וואָס איז דרינען? ער גייט אַריין אין Google Drive־ס מיסט, וואָס היט אים 30 טעג.",
+    subfoldersCount: "{count} אָרדנערס", folderEmptyTitle: "דער אָרדנער איז ליידיק", folderEmptyBody: "לאָדט אַרויף אָדער רעקאָרדירט אַהער, אָדער פֿירט אַהער איבער אַ טראַנסקריפּציע.",
+    saveTo: "אויפֿהיטן אין", moveTo: "איבערפֿירן צו אַן אָרדנער", moveToLabel: "וווּהין", moveHere: "איבערפֿירן", movedTo: "איבערגעפֿירט צו „{name}”",
+    folderError: "ס'איז ניט געלונגען", moveError: "דאָס איבערפֿירן איז ניט געלונגען",
+    errorFolderName: "אַ ניט־גילטיקער נאָמען", errorFolderExists: "ס'איז שוין דאָ אַן אָרדנער מיט דעם נאָמען", errorFolderNotFound: "דער אָרדנער איז ניט געפֿונען", errorFolderTop: "דעם הויפּט־אָרדנער קען מען ניט בײַטן",
   },
   en: {
     uploadFile: "Upload a file", record: "Record", newTitle: "New transcription", filesWord: "files",
@@ -921,6 +933,12 @@ const NATIVE = {
     stop: "Stop", recorded: "Recording from {time}", unsavedLeave: "The transcript has unsaved changes. Leave without saving?",
     untitled: "Untitled",
     fileLoadError: "Could not open the transcript", discardEdits: "Discard changes", copyError: "Could not copy", subtitles: "Subtitles", jsonWithTimes: "The sentences with their times", editsSaved: "Changes saved", editsSaveError: "Could not save the changes", textFile: "Text", fileQueued: "Sent for transcription. It will appear here when ready.",
+    newFolder: "New folder", foldersPath: "Folders", folderName: "Folder name", renameFolder: "Rename folder", deleteFolder: "Delete folder",
+    deleteFolderConfirm: "Delete “{name}” and everything in it? It goes to Google Drive's trash, which keeps it for 30 days.",
+    subfoldersCount: "{count} folders", folderEmptyTitle: "This folder is empty", folderEmptyBody: "Upload or record into it, or move a transcript here from another folder.",
+    saveTo: "Save to", moveTo: "Move to folder", moveToLabel: "Move to", moveHere: "Move", movedTo: "Moved to “{name}”",
+    folderError: "That didn't work", moveError: "Could not move it",
+    errorFolderName: "Not a valid folder name", errorFolderExists: "There's already a folder with that name here", errorFolderNotFound: "Folder not found", errorFolderTop: "The top folder can't be changed",
   },
 };
 Object.assign(he, NATIVE.he);
