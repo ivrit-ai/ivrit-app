@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "description": "The app's search, as ES modules; this file only tells Node so, for the tests.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
