@@ -3,6 +3,7 @@ import { ApiError, createCommunicator, pushSupported } from "./client/communicat
 import * as transcribeApi from "./transcription/api.js";
 import * as transcription from "./transcription/view.js";
 import * as transcriptionSettings from "./transcription/settings.js";
+import * as watches from "./transcription/watches.js";
 import { createLibrary } from "./search/library.js";
 import * as searchView from "./search/view.js";
 
@@ -1215,6 +1216,7 @@ async function appToken() {
       .then(async (res) => {
         if (res.ok) writeSession({ ...(await res.json()), renewed_at: Date.now() });
         else if (res.status === 401) writeSession(null);
+        configureShell();
       })
       .catch(() => {})
       .finally(() => (renewing = null));
@@ -1759,7 +1761,17 @@ function rerender() {
     renderDiagnostics();
     loadSettings().then(renderClipsSetting);
     transcriptionSettings.render($("transcribe-settings-box"), transcriptionHost, (bootData) => transcription.setBoot(bootData)).catch(() => {});
+    renderWatches();
   }
+}
+
+// Watched folders (Android): only where the shell can watch, and with Drive connected.
+const canWatch = () => Boolean(shell && nativeStatus?.features?.includes("watchFolders"));
+
+async function renderWatches() {
+  const panel = $("watch-panel");
+  panel.hidden = !canWatch() || !(await showTranscribeApp().catch(() => false));
+  if (!panel.hidden) watches.render($("watch-settings-box"), transcriptionHost, shell.ivrit).catch(() => {});
 }
 
 // ---------------------------------------------------------------- wiring
@@ -1958,6 +1970,8 @@ if (shell) {
     }
     if (state.view === "transcribe") transcription.refresh();
   });
+  // Only Android's shell sends these ("watchFolders"); its status is not known yet here.
+  shell.ivrit.addListener("watch", () => canWatch() && watches.changed());
   shell.ivrit.addListener("pushToken", () => {
     localStorage.removeItem("reconciled_at");
     if (state.me) reconcile();
@@ -2081,6 +2095,10 @@ function configureShell() {
       locale: hebrewScript(locale()) ? "he" : locale(),
       communicator: config.communicator,
       sources: state.catalog.sources.map(({ id, name, name_he }) => ({ id, name, name_he: name_he ?? null })),
+      // For watched folders, which upload in the background for months: this site,
+      // and the app's session (renewed here whenever the app opens).
+      site: location.origin,
+      appToken: readSession()?.token ?? "",
     })
     .catch(() => {});
 }

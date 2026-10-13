@@ -52,6 +52,22 @@ final class Store {
         edit.apply();
     }
 
+    /** For watched folders: this app's site and the app's session, as the web app last said. */
+    static void configureUploads(Context context, String site, String appToken) {
+        SharedPreferences.Editor edit = prefs(context).edit();
+        if (site != null && site.startsWith("https://")) edit.putString("site", site);
+        if (appToken != null) edit.putString("app_token", appToken);
+        edit.apply();
+    }
+
+    static String site(Context context) {
+        return prefs(context).getString("site", "https://app.ivrit.ai");
+    }
+
+    static String appToken(Context context) {
+        return prefs(context).getString("app_token", "");
+    }
+
     static String communicator(Context context) {
         return prefs(context).getString("communicator", DEFAULT_COMMUNICATOR);
     }

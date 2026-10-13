@@ -512,3 +512,37 @@ button.tr-who::after,
   text-align: end;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- watched folders (Settings, Android) ---------- */
+
+.watch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.watch-row:first-child {
+  border-top: 0;
+}
+
+.watch-row .sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.watch-row .sub.danger {
+  color: var(--danger);
+}
+
+.notice {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+}

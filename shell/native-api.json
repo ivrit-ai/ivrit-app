@@ -1,5 +1,5 @@
 {
-  "about": "What the web app (web/app.js, as shell.ivrit) may ask of the native shells, and what they answer. Android (shell/android, Java) and iPhone (shell/ios, Swift) both implement all of it, under the plugin name below; scripts/check-native-api.mjs checks the three against this file. A method or event only one platform has says so in \"platforms\". Rejections carry the listed codes (err.code in the page).",
+  "about": "What the web app (web/app.js, as shell.ivrit) may ask of the native shells, and what they answer. Android (shell/android, Java) and iPhone (shell/ios, Swift) both implement all of it, under the plugin name below; scripts/check-native-api.mjs checks the three against this file. A method or event only one platform has says so in \"platforms\". Rejections carry the listed codes (err.code in the page). A method only some shells have names its \"feature\": a shell that has it lists the feature in notificationStatus().features, and the web app calls it only after checking that.",
   "plugin": "IvritNative",
   "methods": {
     "notificationStatus": {
@@ -9,11 +9,18 @@
         "permission": "\"granted\" | \"denied\" | \"default\" (never asked); \"denied\" also when turned off in the phone's settings",
         "popup": "boolean: messages show on screen (Android: the channel's importance; iPhone: banners allowed)",
         "platform": "\"android\" | \"ios\": for wording only (which settings to describe), never for behaviour",
-        "importance": "number, Android only: the channel's importance"
+        "importance": "number, Android only: the channel's importance",
+        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\")"
       }
     },
-    "requestPermission": { "options": {}, "result": "as notificationStatus" },
-    "openNotificationSettings": { "options": {}, "result": {} },
+    "requestPermission": {
+      "options": {},
+      "result": "as notificationStatus"
+    },
+    "openNotificationSettings": {
+      "options": {},
+      "result": {}
+    },
     "pushRegistration": {
       "options": {},
       "result": {
@@ -23,28 +30,61 @@
         "previousToken": "string, optional: the token this one replaced",
         "environment": "\"production\" | \"sandbox\", APNs only: which Apple service the token belongs to"
       },
-      "rejects": ["unavailable", "no_token"]
+      "rejects": [
+        "unavailable",
+        "no_token"
+      ]
     },
     "configure": {
       "options": {
         "locale": "\"he\" | \"yi\" | \"en\"",
         "communicator": "Communicator's base URL, for acks and source logos",
-        "sources": "[{id, name, name_he}]: names for notifications shown while the app is closed"
+        "sources": "[{id, name, name_he}]: names for notifications shown while the app is closed",
+        "site": "this site's origin, where watched folders upload",
+        "appToken": "the app's session token, which watched folders upload with"
       },
       "result": {}
     },
-    "takeOpened": { "options": {}, "result": { "id": "string, optional: the message a notification tap opened, once" } },
+    "takeOpened": {
+      "options": {},
+      "result": {
+        "id": "string, optional: the message a notification tap opened, once"
+      }
+    },
     "googleIdToken": {
-      "options": { "clientId": "the server's (web) OAuth client", "interactive": "boolean: may show Google's account picker" },
-      "result": { "idToken": "Google ID token, for POST /auth/google", "email": "string", "name": "string" },
-      "rejects": ["cancelled", "no_account", "failed", "no_client_id"]
+      "options": {
+        "clientId": "the server's (web) OAuth client",
+        "interactive": "boolean: may show Google's account picker"
+      },
+      "result": {
+        "idToken": "Google ID token, for POST /auth/google",
+        "email": "string",
+        "name": "string"
+      },
+      "rejects": [
+        "cancelled",
+        "no_account",
+        "failed",
+        "no_client_id"
+      ]
     },
     "authorizeDrive": {
-      "options": { "clientId": "the server's (web) OAuth client, which the code is for" },
-      "result": { "code": "server auth code with offline access to drive.file, for POST /auth/drive" },
-      "rejects": ["cancelled", "failed", "no_client_id"]
+      "options": {
+        "clientId": "the server's (web) OAuth client, which the code is for"
+      },
+      "result": {
+        "code": "server auth code with offline access to drive.file, for POST /auth/drive"
+      },
+      "rejects": [
+        "cancelled",
+        "failed",
+        "no_client_id"
+      ]
     },
-    "forgetGoogle": { "options": {}, "result": {} },
+    "forgetGoogle": {
+      "options": {},
+      "result": {}
+    },
     "enqueueTranscription": {
       "options": {
         "id": "a shared file's id",
@@ -55,28 +95,116 @@
         "title": "string"
       },
       "result": {},
-      "rejects": ["bad_request"]
+      "rejects": [
+        "bad_request"
+      ]
     },
     "uploadToTranscribe": {
-      "options": { "id": "a shared file's id", "base": "this site's https origin", "language": "e.g. \"he\"", "saveAudio": "boolean" },
+      "options": {
+        "id": "a shared file's id",
+        "base": "this site's https origin",
+        "language": "e.g. \"he\"",
+        "saveAudio": "boolean"
+      },
       "result": {},
-      "rejects": ["bad_request"]
+      "rejects": [
+        "bad_request"
+      ]
     },
     "uploadShared": {
-      "platforms": ["android"],
+      "platforms": [
+        "android"
+      ],
       "note": "Superseded by enqueueTranscription; kept for older pages. Not called by the web app.",
-      "options": { "id": "string", "url": "string", "token": "string" },
-      "result": { "status": "number", "body": "string" }
+      "options": {
+        "id": "string",
+        "url": "string",
+        "token": "string"
+      },
+      "result": {
+        "status": "number",
+        "body": "string"
+      }
     },
     "sharedFiles": {
       "options": {},
-      "result": { "files": "[{id, name, type, size, durationMs (-1 unknown), origin (\"whatsapp\" | \"\"), uploadId}]" }
+      "result": {
+        "files": "[{id, name, type, size, durationMs (-1 unknown), origin (\"whatsapp\" | \"\"), uploadId}]"
+      }
     },
-    "discardShared": { "options": { "id": "string" }, "result": {} },
+    "discardShared": {
+      "options": {
+        "id": "string"
+      },
+      "result": {}
+    },
     "shareOn": {
-      "options": { "id": "string", "title": "the share sheet's title" },
+      "options": {
+        "id": "string",
+        "title": "the share sheet's title"
+      },
       "result": {},
-      "rejects": ["not_found"]
+      "rejects": [
+        "not_found"
+      ]
+    },
+    "watches": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "watchFolders",
+      "options": {},
+      "result": {
+        "watches": "[{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting}]"
+      }
+    },
+    "addWatch": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "watchFolders",
+      "note": "Opens Android's folder picker; the app keeps access to the chosen folder only.",
+      "options": {
+        "folder": "My files folder id (\"\" the top)",
+        "folderName": "string",
+        "language": "e.g. \"he\"",
+        "minSeconds": "number",
+        "maxSeconds": "number (0: none)",
+        "wifiOnly": "boolean"
+      },
+      "result": {
+        "watch": "{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting}"
+      },
+      "rejects": [
+        "cancelled",
+        "failed"
+      ]
+    },
+    "updateWatch": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "watchFolders",
+      "options": {
+        "id": "string",
+        "...": "any of addWatch's options, and paused"
+      },
+      "result": {
+        "watch": "{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting}"
+      },
+      "rejects": [
+        "not_found"
+      ]
+    },
+    "removeWatch": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "watchFolders",
+      "options": {
+        "id": "string"
+      },
+      "result": {}
     }
   },
   "events": {
@@ -85,6 +213,13 @@
     "shared": "{}: files were shared into the app",
     "transcription": "{uploadId, state: \"queued\" | \"done\" | \"failed\" | \"signin\", error?}",
     "fileUpload": "{id, state: \"queued\" | \"failed\" | \"signin\", error?}",
-    "pushToken": "{}: the push token changed; register again"
+    "pushToken": "{}: the push token changed; register again",
+    "watch": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "watchFolders",
+      "about": "{id}: a watch's state changed (checked, sent, an error)"
+    }
   }
 }

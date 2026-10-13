@@ -2,7 +2,8 @@
 // Checks the native shells and the web app against shell/native-api.json: every
 // method and event there is implemented by each platform it names (both, unless
 // it says otherwise), neither shell offers anything the contract does not list,
-// and the web app asks for nothing that is not in it.
+// and the web app asks for nothing that is not in it (one only some shells have,
+// only where it checks for that shell's feature).
 //
 //   node scripts/check-native-api.mjs
 
@@ -48,7 +49,8 @@ const used = {
 const problems = [];
 for (const kind of ["methods", "events"]) {
   const listed = contract[kind];
-  for (const [name, spec] of Object.entries(listed)) {
+  for (const [name, raw] of Object.entries(listed)) {
+    const spec = typeof raw === "string" ? {} : raw;
     for (const platform of spec.platforms ?? Object.keys(platforms)) {
       if (!platforms[platform][kind].has(name)) problems.push(`${platform} lacks ${kind.slice(0, -1)} ${name}`);
     }
@@ -59,8 +61,12 @@ for (const kind of ["methods", "events"]) {
     }
   }
   for (const name of used[kind]) {
-    if (!listed[name]) problems.push(`the web app uses ${kind.slice(0, -1)} ${name}, which the contract does not list`);
-    else if (listed[name].platforms) problems.push(`the web app uses ${name}, which only ${listed[name].platforms} has`);
+    const spec = listed[name];
+    if (!spec) problems.push(`the web app uses ${kind.slice(0, -1)} ${name}, which the contract does not list`);
+    // Only some shells have it: fine behind its feature check, never otherwise.
+    else if (spec.platforms && !(spec.feature && web.includes(`"${spec.feature}"`))) {
+      problems.push(`the web app uses ${name}, which only ${spec.platforms} has, without checking for "${spec.feature ?? "its feature"}"`);
+    }
   }
 }
 

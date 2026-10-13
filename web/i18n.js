@@ -2,6 +2,7 @@
 // number or a name in it, so word order is the translation's business.
 const STRINGS = {
   en: {
+    watchTitle: "Watched folders",
     searchEverything: "Search everything",
     searchHint: "Search your transcripts, clips and messages",
     searchInboxOnly: "Only messages: connect Google Drive in the Transcribe tab to search your transcripts too",
@@ -348,6 +349,7 @@ const STRINGS = {
   },
 
   he: {
+    watchTitle: "תיקיות במעקב",
     searchEverything: "חיפוש בכל מה שיש לכם",
     searchHint: "חיפוש בתמלולים, בקטעים ובהודעות",
     searchInboxOnly: "רק בהודעות: חברו את Google Drive בלשונית התמלול כדי לחפש גם בתמלולים",

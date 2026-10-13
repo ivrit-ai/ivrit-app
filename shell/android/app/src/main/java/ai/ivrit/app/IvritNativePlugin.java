@@ -5,8 +5,10 @@ import android.app.Activity;
 import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
+import android.provider.DocumentsContract;
 import android.provider.Settings;
 import androidx.activity.result.ActivityResult;
 import androidx.activity.result.ActivityResultLauncher;
@@ -52,6 +54,8 @@ public class IvritNativePlugin extends Plugin {
     private String pendingOpen;
     private ActivityResultLauncher<IntentSenderRequest> driveConsent;
     private PluginCall pendingDrive;
+    private ActivityResultLauncher<Uri> folderPicker;
+    private PluginCall pendingWatch;
 
     @Override
     public void load() {
@@ -59,8 +63,12 @@ public class IvritNativePlugin extends Plugin {
         // Registered now: an activity takes these only before it has started.
         driveConsent = getActivity().registerForActivityResult(
             new ActivityResultContracts.StartIntentSenderForResult(), this::driveConsented);
+        folderPicker = getActivity().registerForActivityResult(new ActivityResultContracts.OpenDocumentTree(), this::folderPicked);
         Notifications.ensureChannel(getContext());
         handleOnNewIntent(getActivity().getIntent());
+        // Watched folders: looked at whenever the app opens, and every 15 minutes.
+        FolderWatchWorker.schedule(getContext());
+        FolderWatchWorker.checkNow(getContext());
     }
 
     @Override
@@ -98,7 +106,8 @@ public class IvritNativePlugin extends Plugin {
             .put("permission", permission)
             .put("popup", importance >= NotificationManager.IMPORTANCE_HIGH)
             .put("importance", importance)
-            .put("platform", "android");
+            .put("platform", "android")
+            .put("features", new JSArray().put("watchFolders"));
     }
 
     @PluginMethod
@@ -166,6 +175,7 @@ public class IvritNativePlugin extends Plugin {
     public void configure(PluginCall call) {
         JSArray sources = call.getArray("sources");
         Store.configure(getContext(), call.getString("locale"), call.getString("communicator"), sources == null ? null : (JSONArray) sources);
+        Store.configureUploads(getContext(), call.getString("site"), call.getString("appToken"));
         call.resolve();
     }
 
@@ -332,6 +342,107 @@ public class IvritNativePlugin extends Plugin {
         JSObject data = new JSObject().put("uploadId", uploadId).put("state", state);
         if (error != null) data.put("error", error);
         plugin.notifyListeners("transcription", data, true);
+    }
+
+    // --- watched folders ---------------------------------------------------
+
+    /** The watched folders and how each is doing (Watches). */
+    @PluginMethod
+    public void watches(PluginCall call) {
+        call.resolve(new JSObject().put("watches", Watches.forPage(getContext())));
+    }
+
+    /**
+     * Watch a folder: Android's folder picker (the app keeps access to that folder
+     * only), then {folder, folderName, language, minSeconds, maxSeconds, wifiOnly}.
+     * Resolves with the watch; rejects "cancelled" if no folder was chosen.
+     */
+    @PluginMethod
+    public void addWatch(PluginCall call) {
+        if (pendingWatch != null) pendingWatch.reject("superseded", "cancelled");
+        pendingWatch = call;
+        folderPicker.launch(null);
+    }
+
+    private void folderPicked(Uri tree) {
+        PluginCall call = pendingWatch;
+        pendingWatch = null;
+        if (call == null) return;
+        if (tree == null) {
+            call.reject("cancelled", "cancelled");
+            return;
+        }
+        try {
+            getContext().getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (SecurityException e) {
+            call.reject("no access", "failed");
+            return;
+        }
+        Watches.Watch watch = new Watches.Watch();
+        watch.tree = tree.toString();
+        watch.label = folderLabel(tree);
+        applyWatchOptions(watch, call);
+        watch = Watches.add(getContext(), watch);
+        FolderWatchWorker.schedule(getContext());
+        FolderWatchWorker.checkNow(getContext());
+        call.resolve(new JSObject().put("watch", watch.forPage(getContext())));
+    }
+
+    private String folderLabel(Uri tree) {
+        Uri doc = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
+        try (Cursor c = getContext().getContentResolver().query(doc, new String[] { DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getString(0);
+        } catch (Exception ignored) {
+            // Fall back to the id's last part.
+        }
+        String id = DocumentsContract.getTreeDocumentId(tree);
+        return id.substring(id.lastIndexOf(':') + 1);
+    }
+
+    private static void applyWatchOptions(Watches.Watch w, PluginCall call) {
+        if (call.hasOption("folder")) w.folder = call.getString("folder", "");
+        if (call.hasOption("folderName")) w.folderName = call.getString("folderName", "");
+        if (call.hasOption("language")) w.language = call.getString("language", "he");
+        if (call.hasOption("minSeconds")) w.minSeconds = Math.max(0, call.getInt("minSeconds", 5));
+        if (call.hasOption("maxSeconds")) w.maxSeconds = Math.max(0, call.getInt("maxSeconds", 0));
+        if (call.hasOption("wifiOnly")) w.wifiOnly = Boolean.TRUE.equals(call.getBoolean("wifiOnly", false));
+        if (call.hasOption("paused")) w.paused = Boolean.TRUE.equals(call.getBoolean("paused", false));
+        if (w.folder == null) w.folder = "";
+        if (w.folderName == null) w.folderName = "";
+    }
+
+    /** Change a watch: {id, and any of the options addWatch takes, and paused}. */
+    @PluginMethod
+    public void updateWatch(PluginCall call) {
+        Watches.Watch watch = Watches.update(getContext(), call.getString("id", ""), w -> applyWatchOptions(w, call));
+        if (watch == null) {
+            call.reject("not found", "not_found");
+            return;
+        }
+        if (!watch.paused) FolderWatchWorker.checkNow(getContext());
+        call.resolve(new JSObject().put("watch", watch.forPage(getContext())));
+    }
+
+    /** Stop watching a folder, giving back the access to it. */
+    @PluginMethod
+    public void removeWatch(PluginCall call) {
+        Watches.Watch watch = Watches.find(getContext(), call.getString("id", ""));
+        if (watch != null) {
+            try {
+                getContext().getContentResolver().releasePersistableUriPermission(Uri.parse(watch.tree), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException ignored) {
+                // Already gone.
+            }
+            Watches.remove(getContext(), watch.id);
+            FolderWatchWorker.schedule(getContext());
+        }
+        call.resolve();
+    }
+
+    /** From the workers: a watch's state changed. */
+    static void watchChanged(String watchId) {
+        IvritNativePlugin plugin = current;
+        if (plugin != null) plugin.notifyListeners("watch", new JSObject().put("id", watchId));
     }
 
     // --- shared files ------------------------------------------------------
