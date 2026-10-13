@@ -136,3 +136,13 @@ class FileStorageBackend(ABC):
     async def trash_item(self, item_id: str, user_identifier: Optional[str] = None) -> bool:
         """Move a file or folder, with everything in it, to the trash (Drive keeps it 30 days)."""
         pass
+
+    @abstractmethod
+    async def list_files(
+        self, user_identifier: Optional[str] = None, folder: Optional[str] = None, name: Optional[str] = None,
+        anywhere: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Files (not folders): [{id, name, parent, version}], version changing whenever
+        the content does. In `folder` (the top folder when None), or in every folder
+        the backend can see when anywhere=True; only those called `name`, if given."""
+        pass

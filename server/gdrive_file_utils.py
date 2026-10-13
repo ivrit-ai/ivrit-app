@@ -624,3 +624,26 @@ class GoogleDriveStorageBackend(FileStorageBackend):
     async def trash_item(self, item_id: str, user_identifier: Optional[str] = None) -> bool:
         await self._drive("PATCH", f"files/{item_id}", user_identifier, params={"fields": "id"}, json_body={"trashed": True})
         return True
+
+    async def list_files(
+        self, user_identifier: Optional[str] = None, folder: Optional[str] = None, name: Optional[str] = None,
+        anywhere: bool = False,
+    ) -> List[Dict[str, Any]]:
+        clauses = ["trashed = false", f"mimeType != '{FOLDER_MIME_TYPE}'"]
+        if not anywhere:
+            clauses.append(f"'{folder or await self.ensure_folder(user_identifier)}' in parents")
+        if name:
+            clauses.append("name = '" + name.replace("'", "\\'") + "'")
+        files: List[Dict[str, Any]] = []
+        page_token = None
+        while True:
+            params = {"q": " and ".join(clauses), "spaces": "drive", "pageSize": 1000,
+                      "fields": "nextPageToken, files(id,name,parents,version)"}
+            if page_token:
+                params["pageToken"] = page_token
+            data = await self._drive("GET", "files", user_identifier, params=params)
+            files += [{"id": f["id"], "name": f["name"], "parent": (f.get("parents") or [None])[0],
+                       "version": str(f.get("version", ""))} for f in data.get("files", [])]
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                return files

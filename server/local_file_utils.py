@@ -307,3 +307,24 @@ class LocalFileStorageBackend(FileStorageBackend):
         trash.mkdir(exist_ok=True)
         shutil.move(item_id, trash / f"{Path(item_id).name}.{int(time.time() * 1000)}")
         return True
+
+    async def list_files(
+        self, user_identifier: Optional[str] = None, folder: Optional[str] = None, name: Optional[str] = None,
+        anywhere: bool = False,
+    ) -> List[Dict[str, Any]]:
+        if anywhere:
+            # Every folder this backend keeps for the user, and its base too (another
+            # backend's, such as the clips one, lives beside it).
+            roots = [self._get_user_dir(user_identifier)]
+            walk = [(Path(d), files) for root in roots for d, dirs, files in os.walk(root) if self.TRASH not in Path(d).parts]
+        else:
+            directory = self._folder(folder, user_identifier)
+            walk = [(directory, [f for f in os.listdir(directory) if (directory / f).is_file()])]
+        out = []
+        for directory, files in walk:
+            for filename in files:
+                if name and filename != name:
+                    continue
+                path = directory / filename
+                out.append({"id": str(path), "name": filename, "parent": str(directory), "version": str(path.stat().st_mtime_ns)})
+        return out

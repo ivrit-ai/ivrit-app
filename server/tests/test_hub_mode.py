@@ -10,6 +10,8 @@ without a second run; a file lost with its server fails cleanly and is refunded.
 Folders in My files: made, nested, renamed, deleted; a file transcribed into one;
 moved between them; a readable copy beside each transcript, refreshed on edits; a
 folder that is not the user's refused; a job surviving a crash lands in its folder.
+Search: each folder's index written on completion, edits, moves and deletes, and
+caught up when lost or edited elsewhere; the manifest lists them by version.
 
     ELIEZER_DIR=~/dev/eliezer ELIEZER_PYTHON=<python with the hub's requirements> \\
         python tests/test_hub_mode.py
@@ -232,6 +234,14 @@ def entry_for(api, email, name, folder=None):
     return None
 
 
+def search_shard(api, email, shard="top"):
+    """(docs, pending) of one search index."""
+    status, body = api.call("GET", f"/appdata/search/index?shard={urllib.parse.quote(shard, safe='')}", email)
+    if status != 200:
+        return None, None
+    return json.loads(gzip.decompress(body))["docs"], None
+
+
 def ready(api, email, name, folder=None):
     e = entry_for(api, email, name, folder)
     return e if e and e.get("status") in ("Ready", "Failed") else None
@@ -379,6 +389,22 @@ def main():
         docs = [n for n in os.listdir(ada) if n.endswith(".html")]
         check("a readable copy is made beside the transcript", done and done.get("doc_id")
               and len(docs) == 1 and "תמלול" in open(os.path.join(ada, docs[0]), encoding="utf-8").read(), (docs, done))
+        indexed = wait_until(lambda: (search_shard(api, "ada@example.com")[0] or {}).get((done or {}).get("results_id")), 10)
+        check("the transcript is in the top folder's search index, with its text",
+              indexed and indexed["segments"] and "תמלול" in indexed["segments"][0][2] and indexed["title"] == "one.ogg", indexed)
+        status, body = api.call("GET", "/appdata/search/manifest", "ada@example.com")
+        manifest = json.loads(body) if status == 200 else {}
+        check("the manifest lists the index by its version", any(sh["shard"] == "top" and sh["version"] for sh in manifest.get("shards", [])),
+              manifest)
+        os.unlink(os.path.join(ada, "search.json.gz"))
+        rebuilt, _ = search_shard(api, "ada@example.com")
+        check("a lost index is made again from the toc", rebuilt and (done or {}).get("results_id") in rebuilt, rebuilt)
+        if done:
+            # An edit made elsewhere (the old site writes no index): caught up on the next look.
+            with open(os.path.join(ada, f"{done['results_id']}.edits.json.gz"), "wb") as f:
+                f.write(gzip.compress(json.dumps({"edits": {"0": "נערך באתר הישן"}, "speakerNames": {}, "speakerSwaps": {}}).encode()))
+            caught = (search_shard(api, "ada@example.com")[0] or {}).get(done["results_id"], {})
+            check("an edit made elsewhere is caught up", caught.get("segments") and caught["segments"][0][2] == "נערך באתר הישן", caught)
         tree = api.folders("ada@example.com")
         check("no folders at first, and the top folder named", tree and tree["top"] and tree["folders"] == [], tree)
         status, body = api.call("POST", "/appdata/folders", "ada@example.com", body={"name": "Calls"})
@@ -413,6 +439,8 @@ def main():
             refreshed = wait_until(lambda: "שורה ערוכה" in open(entry_for(api, "ada@example.com", "call.ogg", calls["id"])["doc_id"],
                                                                  encoding="utf-8").read(), 10)
             check("an edit reaches the readable copy", status == 200 and refreshed, status)
+            in_calls = wait_until(lambda: ((search_shard(api, "ada@example.com", calls["id"])[0] or {}).get(rid) or {}).get("segments", [[0, "", ""]])[0][2] == "שורה ערוכה", 10)
+            check("...and the folder's search index", in_calls)
             status, _ = api.call("POST", "/appdata/move", "ada@example.com",
                                  body={"results_id": rid, "from": calls["id"], "to": year["id"]})
             moved = entry_for(api, "ada@example.com", "call.ogg", year["id"])
@@ -423,6 +451,11 @@ def main():
                   and moved.get("doc_id", "").startswith(year["id"]), (status, moved))
             status, _ = api.call("GET", f"/appdata/edits/{rid}?folder={q(year['id'])}", "ada@example.com")
             check("...and is read from there", status == 200, status)
+            check("...its search entry moving with it", rid in (search_shard(api, "ada@example.com", year["id"])[0] or {})
+                  and rid not in (search_shard(api, "ada@example.com", calls["id"])[0] or {}))
+            status, _ = api.call("POST", f"/appdata/delete?folder={q(year['id'])}", "ada@example.com", body={"results_id": rid})
+            check("a deleted transcript leaves the index", status == 200 and rid not in (search_shard(api, "ada@example.com", year["id"])[0] or {}),
+                  status)
 
         status, body = api.call("POST", "/appdata/folders", "bea@example.com", body={"name": "Bea's"})
         beas = json.loads(body) if status == 201 else {}

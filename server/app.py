@@ -85,6 +85,7 @@ BASE_PATH = get_base_path()
 from local_file_utils import LocalFileStorageBackend
 from file_utils import GOOGLE_DOC, FileStorageBackend
 import readable_doc
+import search_index
 import hub
 import app_site
 
@@ -957,8 +958,8 @@ doc_refreshes: Dict[Tuple[str, Optional[str], str], asyncio.Task] = {}
 
 
 def refresh_readable_doc_soon(refresh_token: Optional[str], user_email: str, folder: Optional[str], results_id: str) -> None:
-    """Re-render a transcript's Doc shortly after a change (an edit, a rename); a run
-    of changes makes one refresh."""
+    """Re-render a transcript's Doc, and its search entry, shortly after a change (an
+    edit, a rename); a run of changes makes one refresh."""
     key = (user_email, folder, results_id)
     pending = doc_refreshes.get(key)
     if pending and not pending.done():
@@ -980,6 +981,7 @@ def refresh_readable_doc_soon(refresh_token: Optional[str], user_email: str, fol
                 if doc_id and doc_id != entry.get("doc_id"):
                     entry["doc_id"] = doc_id
                     await upload_toc(refresh_token, toc_data, user_email=user_email, folder=folder)
+            await index_transcript(refresh_token, user_email, folder, entry, results, edits)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -990,6 +992,127 @@ def refresh_readable_doc_soon(refresh_token: Optional[str], user_email: str, fol
 
     task = asyncio.create_task(run())
     doc_refreshes[key] = task
+
+
+# --- the search index ----------------------------------------------------------
+# Each folder keeps search.json.gz beside its toc (search_index.py), written here
+# wherever a transcript changes, and caught up (reconcile_index) when the app asks
+# for it, for what changed elsewhere. Like the readable copy, it never holds a
+# transcript back: a failure is logged, and the next reconciliation repairs it.
+
+RECONCILE_BATCH = int(os.environ.get("SEARCH_RECONCILE_BATCH", "6"))
+
+
+def search_lock(user_email: str, shard: Optional[str]) -> asyncio.Lock:
+    return get_toc_lock(f"{user_email}:search", shard)
+
+
+async def read_index(backend, user_identifier, folder: Optional[str]) -> Tuple[dict, Optional[str]]:
+    file_id = await backend.find_file_by_name(search_index.INDEX_NAME, user_identifier, folder=folder)
+    raw = await backend.download_file_bytes(file_id, user_identifier) if file_id else None
+    return search_index.load(raw), file_id
+
+
+async def write_index(backend, user_identifier, user_email, folder: Optional[str], index: dict, file_id: Optional[str]) -> None:
+    data = search_index.dump(index)
+    if file_id:
+        await backend.update_file(file_id, data, "application/gzip", user_identifier, user_email)
+    else:
+        await backend.upload_file(search_index.INDEX_NAME, data, "application/gzip", user_identifier, user_email, folder=folder)
+
+
+async def edits_versions(user_identifier, folder: Optional[str]) -> Dict[str, str]:
+    """Each transcript's edits file version in a folder, by results id: what an index
+    entry's stamp is checked against."""
+    suffix = ".edits.json.gz"
+    files = await file_storage_backend.list_files(user_identifier, folder=folder)
+    return {f["name"][: -len(suffix)]: f["version"] for f in files if f["name"].endswith(suffix)}
+
+
+async def change_index(refresh_token, user_email, folder: Optional[str], *, put: Optional[Dict[str, dict]] = None,
+                       remove: Optional[List[str]] = None) -> None:
+    """Add, replace or drop entries in a folder's index."""
+    try:
+        user_identifier = get_user_identifier(refresh_token, user_email)
+        async with search_lock(user_email, folder):
+            index, file_id = await read_index(file_storage_backend, user_identifier, folder)
+            for doc_id in remove or []:
+                index["docs"].pop(doc_id, None)
+            index["docs"].update(put or {})
+            await write_index(file_storage_backend, user_identifier, user_email, folder, index, file_id)
+    except Exception as e:
+        logger.warning("Search index of %s not updated: %r", folder or "the top folder", e)
+
+
+async def index_transcript(refresh_token, user_email, folder: Optional[str], entry: dict, results: list,
+                           edits: Optional[dict]) -> None:
+    user_identifier = get_user_identifier(refresh_token, user_email)
+    stamp = ""
+    if edits is not None:
+        stamp = (await edits_versions(user_identifier, folder)).get(entry["results_id"], "")
+    doc = search_index.transcript_doc(entry, results, edits, stamp)
+    await change_index(refresh_token, user_email, folder, put={entry["results_id"]: doc})
+
+
+async def reconcile_index(refresh_token, user_email, folder: Optional[str]) -> Tuple[bytes, int]:
+    """A folder's index, caught up with its toc: transcripts missing from it, or whose
+    edits changed since, are (re)indexed, a few per call; ones no longer listed are
+    dropped. Returns the index and how many are still to do."""
+    user_identifier = get_user_identifier(refresh_token, user_email)
+    async with search_lock(user_email, folder):
+        index, file_id = await read_index(file_storage_backend, user_identifier, folder)
+        toc = await download_toc(refresh_token, user_email=user_email, folder=folder)
+        listed = {e["results_id"]: e for e in toc.get("entries", []) if e.get("status") == "Ready" and e.get("results_id")}
+        versions = await edits_versions(user_identifier, folder)
+        changed = False
+        for gone in [d for d in index["docs"] if d not in listed]:
+            index["docs"].pop(gone)
+            changed = True
+        todo = [rid for rid in listed if index["docs"].get(rid, {}).get("stamp") != versions.get(rid, "")
+                or rid not in index["docs"]]
+        batch, rest = todo[:RECONCILE_BATCH], len(todo[RECONCILE_BATCH:])
+
+        async def build(rid):
+            results, edits = await load_transcript(user_identifier, folder, rid)
+            if results is not None:
+                index["docs"][rid] = search_index.transcript_doc(listed[rid], results, edits, versions.get(rid, ""))
+
+        if batch:
+            outcomes = await asyncio.gather(*(build(rid) for rid in batch), return_exceptions=True)
+            for rid, outcome in zip(batch, outcomes):
+                if isinstance(outcome, Exception):
+                    logger.warning("Could not index %s: %r", rid, outcome)
+            changed = True
+        if changed:
+            await write_index(file_storage_backend, user_identifier, user_email, folder, index, file_id)
+        return search_index.dump(index), rest
+
+
+async def reconcile_clips_index(refresh_token, user_email) -> Tuple[bytes, int]:
+    """The clips folder's index, caught up with its toc (each clip holds its text)."""
+    identifier = get_user_identifier(refresh_token, user_email)
+    async with search_lock(user_email, "clips"):
+        index, file_id = await read_index(clips_storage_backend, identifier, None)
+        toc_id = await clips_storage_backend.find_file_by_name("toc.json.gz", identifier)
+        raw = await clips_storage_backend.download_file_bytes(toc_id, identifier) if toc_id else None
+        listed = {e["id"]: e for e in (json.loads(gzip.decompress(raw)).get("entries", []) if raw else []) if e.get("id")}
+        changed = False
+        for gone in [d for d in index["docs"] if d not in listed]:
+            index["docs"].pop(gone)
+            changed = True
+        todo = [cid for cid in listed if cid not in index["docs"]]
+        for cid in todo[:RECONCILE_BATCH * 4]:
+            try:
+                clip_file = await clips_storage_backend.find_file_by_name(listed[cid]["file"], identifier)
+                data = await clips_storage_backend.download_file_bytes(clip_file, identifier) if clip_file else None
+                if data:
+                    index["docs"][cid] = search_index.clip_doc(json.loads(gzip.decompress(data)))
+                    changed = True
+            except Exception as e:
+                logger.warning("Could not index clip %s: %r", cid, e)
+        if changed:
+            await write_index(clips_storage_backend, identifier, user_email, None, index, file_id)
+        return search_index.dump(index), len(todo[RECONCILE_BATCH * 4:])
 
 
 
@@ -2103,6 +2226,8 @@ async def delete_file(request: Request, folder: Optional[str] = None):
             if not delete_success:
                 await db.incr_stat("gdrive_error_delete", 1)
         
+        await change_index(refresh_token, user_email, folder, remove=[results_id])
+
         # The readable copy goes to Drive's trash, as a folder's contents do.
         if doc_id:
             try:
@@ -2263,10 +2388,77 @@ async def move_transcript(request: Request):
         source_toc["entries"] = [e for e in source_toc["entries"] if e.get("results_id") != results_id]
         if not await upload_toc(refresh_token, source_toc, user_email=user_email, folder=source):
             return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
+    # Its search entry goes with it.
+    moved, _ = await read_index(file_storage_backend, user_identifier, source)
+    doc = moved["docs"].get(results_id)
+    await change_index(refresh_token, user_email, source, remove=[results_id])
+    if doc:
+        await change_index(refresh_token, user_email, target, put={results_id: doc})
     # Streaming caches the audio's id by folder; the old one is stale now.
     drive_file_id_cache.clear()
     log_message(f"{user_email}: Moved {results_id} between folders")
     return JSONResponse({"success": True})
+
+
+@app.get("/appdata/search/manifest", dependencies=[Depends(require_google_login)])
+async def search_manifest(request: Request):
+    """What there is to search: the folder tree, and each index ("shard": "top", a
+    folder's id, or "clips") with its version, which changes when its content does;
+    the app downloads only those it does not have."""
+    user = library_user(request)
+    if isinstance(user, JSONResponse):
+        return user
+    refresh_token, user_email, user_identifier = user
+    top, folders = await user_folders(user_identifier, fresh=True)
+    versions = {f["parent"]: f["version"] for f in await file_storage_backend.list_files(
+        user_identifier, name=search_index.INDEX_NAME, anywhere=True)}
+    shards = [{"shard": "top", "version": versions.get(top)}]
+    shards += [{"shard": f["id"], "version": versions.get(f["id"])} for f in folders]
+    if clips_storage_backend and await db.get_clips_to_drive(user_email):
+        clips = await clips_storage_backend.list_files(user_identifier, name=search_index.INDEX_NAME)
+        shards.append({"shard": "clips", "version": clips[0]["version"] if clips else None})
+    return JSONResponse({"top": top, "folders": folders, "shards": shards}, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/appdata/search/index", dependencies=[Depends(require_google_login)])
+async def search_index_shard(request: Request, shard: str = "top"):
+    """One index, gzipped, caught up first; X-Pending says how many entries are still
+    being made (ask again for the rest)."""
+    user = library_user(request)
+    if isinstance(user, JSONResponse):
+        return user
+    refresh_token, user_email, user_identifier = user
+    if shard == "clips":
+        if not clips_storage_backend:
+            return JSONResponse({"error": "errorFolderNotFound", "i18n_key": "errorFolderNotFound"}, status_code=404)
+        data, pending = await reconcile_clips_index(refresh_token, user_email)
+    else:
+        try:
+            folder = await resolve_folder(user_identifier, None if shard == "top" else shard)
+        except FolderNotFound:
+            return folder_not_found_response()
+        data, pending = await reconcile_index(refresh_token, user_email, folder)
+    from fastapi.responses import Response
+    return Response(content=data, media_type="application/gzip",
+                    headers={"X-Pending": str(pending), "Cache-Control": "no-store", "Access-Control-Expose-Headers": "X-Pending"})
+
+
+@app.get("/appdata/clips/{clip_id}", dependencies=[Depends(require_google_login)])
+async def read_clip(clip_id: str, request: Request):
+    """A clip from the clips folder ({id, title, text, created_at, origin, ...}), for a
+    search result whose message is not on this device."""
+    user = library_user(request)
+    if isinstance(user, JSONResponse):
+        return user
+    _, _, user_identifier = user
+    if not clips_storage_backend:
+        return JSONResponse({"error": "errorResultsNotFound", "i18n_key": "errorResultsNotFound"}, status_code=404)
+    name = f"{hashlib.sha256(clip_id.encode()).hexdigest()[:32]}.json.gz"
+    file_id = await clips_storage_backend.find_file_by_name(name, user_identifier)
+    raw = await clips_storage_backend.download_file_bytes(file_id, user_identifier) if file_id else None
+    if not raw:
+        return JSONResponse({"error": "errorResultsNotFound", "i18n_key": "errorResultsNotFound"}, status_code=404)
+    return JSONResponse(json.loads(gzip.decompress(raw)), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/appdata/data-dir", dependencies=[Depends(require_google_login)])
@@ -4852,6 +5044,8 @@ async def transcribe_job(job_desc, hub_entry=None):
                     raise Exception("Failed to upload TOC")
 
             log_message(f"{job_desc.user_email}: Uploaded transcription to TOC (results_id: {results_id})")
+            asyncio.create_task(index_transcript(
+                job_desc.refresh_token, job_desc.user_email, folder, toc_entry, job_results[job_id]["results"], None))
             transcript_delivered = True
             await notify_job_finished(job_desc, "completed", results_id)
         except DriveStorageFullError as e:
@@ -5358,6 +5552,13 @@ if APP_SITE:
                   await clips_storage_backend.upload_file("toc.json.gz", toc_data, "application/gzip", identifier, email))
             if not ok:
                 return JSONResponse({"saved": False, "reason": "drive_failed"}, status_code=502)
+        try:
+            async with search_lock(email, "clips"):
+                index, index_id = await read_index(clips_storage_backend, identifier, None)
+                index["docs"][clip_id] = search_index.clip_doc({**entry, "text": text})
+                await write_index(clips_storage_backend, identifier, email, None, index, index_id)
+        except Exception as e:
+            logger.warning("Clip %s not indexed: %r", clip_id, e)
         return JSONResponse({"saved": True})
 
     @app.post("/auth/drive", include_in_schema=False)
