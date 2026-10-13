@@ -1,0 +1,22 @@
+{
+  "about": "One transcript and its edit overlay, and what both effective() implementations (web/transcription/transcript.js, server/readable_doc.py) must make of them.",
+  "results": [
+    {"start": 0.0, "end": 2.5, "text": "שלום לכולם", "speakers": ["SPEAKER_01"]},
+    {"start": 2.5, "end": 5.0, "text": "טעות כתיב", "speakers": ["SPEAKER_01"]},
+    {"start": 5.0, "end": 8.0, "text": "תשובה", "speakers": ["SPEAKER_02"]},
+    {"start": 8.0, "end": 9.0, "text": "בלי דובר"},
+    {"start": 9.0, "end": 12.0, "text": "", "speakers": ["SPEAKER_02"]}
+  ],
+  "edits": {
+    "edits": {"1": "תיקון כתיב", "4": "נוסף בעריכה"},
+    "speakerNames": {"SPEAKER_01": "דנה"},
+    "speakerSwaps": {"2": "SPEAKER_01", "3": "SPEAKER_02"}
+  },
+  "expected": [
+    {"text": "שלום לכולם", "speakers": ["SPEAKER_01"]},
+    {"text": "תיקון כתיב", "speakers": ["SPEAKER_01"]},
+    {"text": "תשובה", "speakers": ["SPEAKER_01"]},
+    {"text": "בלי דובר", "speakers": []},
+    {"text": "נוסף בעריכה", "speakers": ["SPEAKER_02"]}
+  ]
+}

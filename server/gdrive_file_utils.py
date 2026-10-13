@@ -6,7 +6,7 @@ import hashlib
 import logging
 import aiohttp
 import dotenv
-from typing import Optional, Dict, Any, Tuple, NoReturn
+from typing import Optional, Dict, Any, List, Tuple, NoReturn
 from file_utils import FileStorageBackend
 from gdrive_auth import (
     get_access_token_from_refresh,
@@ -181,24 +181,28 @@ class GoogleDriveStorageBackend(FileStorageBackend):
         file_data: bytes,
         mime_type: str,
         user_identifier: Optional[str] = None,
-        user_email: Optional[str] = None
-    ) -> bool:
-        """Upload a file into the application's Drive folder."""
+        user_email: Optional[str] = None,
+        folder: Optional[str] = None,
+        convert_to: Optional[str] = None,
+    ) -> Optional[str]:
+        """Upload a file into the application's Drive folder (or one of its folders);
+        returns the new file's id."""
         access_token = await get_access_token_from_refresh(user_identifier)
         if not access_token:
             logger.warning(f"No Google access token available; skipping Drive upload for {user_email or 'unknown user'}")
-            return False
+            return None
 
-        folder_id = await self.ensure_folder(user_identifier)
+        folder_id = folder or await self.ensure_folder(user_identifier)
         if not folder_id:
             logger.error("Unable to determine Drive folder id for upload")
-            return False
+            return None
 
         try:
             form = aiohttp.FormData()
             metadata = {
                 "name": filename,
-                "mimeType": mime_type,
+                # Drive converts the upload when the file's type differs from the content's.
+                "mimeType": convert_to or mime_type,
                 "parents": [folder_id],
             }
             form.add_field("metadata", json.dumps(metadata), content_type="application/json; charset=UTF-8")
@@ -220,7 +224,7 @@ class GoogleDriveStorageBackend(FileStorageBackend):
                             user_email,
                             filename,
                         )
-                        return True
+                        return (await resp.json()).get("id")
                     err = await resp.text()
                     logger.error(
                         "Failed to upload to Drive for %s: %s %s",
@@ -327,14 +331,16 @@ class GoogleDriveStorageBackend(FileStorageBackend):
     async def find_file_by_name(
         self,
         filename: str,
-        user_identifier: Optional[str] = None
+        user_identifier: Optional[str] = None,
+        folder: Optional[str] = None,
     ) -> Optional[str]:
-        """Find a file by name within the application's Drive folder and return its ID."""
+        """Find a file by name within the application's Drive folder (or one of its
+        folders) and return its ID."""
         access_token = await get_access_token_from_refresh(user_identifier)
         if not access_token:
             return None
 
-        folder_id = await self.ensure_folder(user_identifier)
+        folder_id = folder or await self.ensure_folder(user_identifier)
         if not folder_id:
             return None
 
@@ -448,7 +454,7 @@ class GoogleDriveStorageBackend(FileStorageBackend):
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"https://www.googleapis.com/drive/v3/files/{file_id}",
-                    params={"fields": "id,name,size,mimeType"},
+                    params={"fields": "id,name,size,mimeType,version,modifiedTime"},
                     headers=headers,
                 ) as resp:
                     if 200 <= resp.status < 300:
@@ -541,3 +547,80 @@ class GoogleDriveStorageBackend(FileStorageBackend):
         except Exception as exc:
             logger.exception("Exception streaming Drive file %s", file_id)
             return None
+
+    # --- folders ---------------------------------------------------------------
+
+    async def _drive(self, method: str, path: str, user_identifier: Optional[str], *, params=None, json_body=None) -> Optional[dict]:
+        """One Drive metadata call; the JSON answer (or {} when there is none)."""
+        token = await get_access_token_from_refresh(user_identifier)
+        if not token:
+            raise GoogleDriveError("No Google access token available")
+        async with aiohttp.ClientSession() as session:
+            async with session.request(
+                method,
+                f"https://www.googleapis.com/drive/v3/{path}",
+                params=params,
+                json=json_body,
+                headers={"Authorization": f"Bearer {token}"},
+            ) as resp:
+                if 200 <= resp.status < 300:
+                    return await resp.json() if resp.status != 204 else {}
+                _raise_write_error(f"Drive {method} {path} failed", resp.status, await resp.text())
+
+    async def list_folders(self, user_identifier: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Every folder under the top folder. With drive.file, Drive shows exactly the
+        folders this app made, so one query finds them all (the clips folder too,
+        which is not under the top folder and so is left out)."""
+        top = await self.ensure_folder(user_identifier)
+        folders: List[Dict[str, Any]] = []
+        page_token = None
+        while True:
+            params = {
+                "q": f"mimeType = '{FOLDER_MIME_TYPE}' and trashed = false",
+                "spaces": "drive",
+                "fields": "nextPageToken, files(id,name,parents)",
+                "pageSize": 1000,
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            data = await self._drive("GET", "files", user_identifier, params=params)
+            folders += [{"id": f["id"], "name": f["name"], "parent": (f.get("parents") or [None])[0]} for f in data.get("files", [])]
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        by_id = {f["id"]: f for f in folders}
+
+        def under_top(folder: Dict[str, Any]) -> bool:
+            seen = set()
+            while folder and folder["id"] not in seen:
+                seen.add(folder["id"])
+                if folder["parent"] == top:
+                    return True
+                folder = by_id.get(folder["parent"])
+            return False
+
+        return [f for f in folders if f["id"] != top and under_top(f)]
+
+    async def create_folder(self, name: str, parent: str, user_identifier: Optional[str] = None) -> Optional[str]:
+        data = await self._drive(
+            "POST", "files", user_identifier, params={"fields": "id"},
+            json_body={"name": name, "mimeType": FOLDER_MIME_TYPE, "parents": [parent]},
+        )
+        return data.get("id")
+
+    async def rename_item(self, item_id: str, name: str, user_identifier: Optional[str] = None) -> Optional[str]:
+        await self._drive("PATCH", f"files/{item_id}", user_identifier, params={"fields": "id"}, json_body={"name": name})
+        return item_id
+
+    async def move_item(
+        self, item_id: str, from_folder: str, to_folder: str, user_identifier: Optional[str] = None
+    ) -> Optional[str]:
+        await self._drive(
+            "PATCH", f"files/{item_id}", user_identifier,
+            params={"addParents": to_folder, "removeParents": from_folder, "fields": "id"}, json_body={},
+        )
+        return item_id
+
+    async def trash_item(self, item_id: str, user_identifier: Optional[str] = None) -> bool:
+        await self._drive("PATCH", f"files/{item_id}", user_identifier, params={"fields": "id"}, json_body={"trashed": True})
+        return True

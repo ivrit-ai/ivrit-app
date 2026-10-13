@@ -7,6 +7,9 @@ a file goes upload -> transcode -> hub -> credit -> RunPod (by a signed link) ->
 Drive; the quota is the hub's; a second user's file waits for the one RunPod slot
 and shows its place; a server killed mid-job picks the job up again from RunPod
 without a second run; a file lost with its server fails cleanly and is refunded.
+Folders in My files: made, nested, renamed, deleted; a file transcribed into one;
+moved between them; a readable copy beside each transcript, refreshed on edits; a
+folder that is not the user's refused; a job surviving a crash lands in its folder.
 
     ELIEZER_DIR=~/dev/eliezer ELIEZER_PYTHON=<python with the hub's requirements> \\
         python tests/test_hub_mode.py
@@ -196,12 +199,13 @@ class Api:
         except urllib.error.HTTPError as e:
             return e.code, e.read()
 
-    def upload(self, email, path, name):
+    def upload(self, email, path, name, folder=None):
         boundary = uuid.uuid4().hex
         with open(path, "rb") as f:
             content = f.read()
         parts = []
-        for key, value in (("language", "he"), ("save_audio", "true")):
+        fields = [("language", "he"), ("save_audio", "true")] + ([("folder", folder)] if folder else [])
+        for key, value in fields:
             parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode())
         parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
                      f"Content-Type: audio/ogg\r\n\r\n".encode() + content + b"\r\n")
@@ -211,16 +215,30 @@ class Api:
         events = [json.loads(line) for line in body.decode().splitlines() if line.strip()] if status == 200 else []
         return status, events, body
 
-    def toc(self, email):
-        status, body = self.call("GET", "/appdata/toc", email)
+    def toc(self, email, folder=None):
+        query = "?folder=" + urllib.parse.quote(folder, safe="") if folder else ""
+        status, body = self.call("GET", "/appdata/toc" + query, email)
         return json.loads(body)["entries"] if status == 200 else None
 
+    def folders(self, email):
+        status, body = self.call("GET", "/appdata/folders", email)
+        return json.loads(body) if status == 200 else None
 
-def entry_for(api, email, name):
-    for e in api.toc(email) or []:
+
+def entry_for(api, email, name, folder=None):
+    for e in api.toc(email, folder) or []:
         if e.get("source_filename") == name:
             return e
     return None
+
+
+def ready(api, email, name, folder=None):
+    e = entry_for(api, email, name, folder)
+    return e if e and e.get("status") in ("Ready", "Failed") else None
+
+
+def q(folder):
+    return urllib.parse.quote(folder, safe="")
 
 
 def main():
@@ -260,6 +278,7 @@ def main():
         RUNPOD_API_KEY="rp-key", RUNPOD_ENDPOINT_ID="ep-shared", RUNPOD_KEY_ENCRYPTION_KEY=Fernet.generate_key().decode(),
         HUB_URL=f"http://127.0.0.1:{hub_port}", APP_SERVER_TOKEN=TOKEN, HARNESS_DATA=data,
         HARNESS_RUNPOD_URL=f"http://127.0.0.1:{rp_port}", TMPDIR=tmp, APP_SESSION_KEY=APP_SESSION_KEY,
+        DOC_REFRESH_DELAY_SECONDS="0.3",
     )
     log = open(os.path.join(WORK, "app.log"), "a")
 
@@ -355,6 +374,73 @@ def main():
         hub_job = hubq.execute("SELECT status, lane FROM credit_jobs WHERE job_id = %s", (job_id,)).fetchone()
         check("the hub has the job as done", hub_job == ("done", "file_short"), hub_job)
 
+        # --- folders in My files
+        ada = os.path.join(data, "rt-ada")
+        docs = [n for n in os.listdir(ada) if n.endswith(".html")]
+        check("a readable copy is made beside the transcript", done and done.get("doc_id")
+              and len(docs) == 1 and "תמלול" in open(os.path.join(ada, docs[0]), encoding="utf-8").read(), (docs, done))
+        tree = api.folders("ada@example.com")
+        check("no folders at first, and the top folder named", tree and tree["top"] and tree["folders"] == [], tree)
+        status, body = api.call("POST", "/appdata/folders", "ada@example.com", body={"name": "Calls"})
+        calls = json.loads(body) if status == 201 else {}
+        status, body = api.call("POST", "/appdata/folders", "ada@example.com", body={"name": "2026", "parent": calls.get("id")})
+        year = json.loads(body) if status == 201 else {}
+        check("folders are made, and nest", calls.get("parent") == tree["top"] and year.get("parent") == calls.get("id"),
+              (calls, year))
+        status, _ = api.call("POST", "/appdata/folders", "ada@example.com", body={"name": "Calls"})
+        check("...not twice under one name", status == 409, status)
+        status, _ = api.call("POST", "/appdata/folders", "ada@example.com", body={"name": "a/b"})
+        check("...nor with a path for a name", status == 400, status)
+        names = {f["name"]: f["parent"] for f in api.folders("ada@example.com")["folders"]}
+        check("the folder tree lists them with their parents", names == {"Calls": tree["top"], "2026": calls["id"]}, names)
+
+        rp.delay = 1.0
+        status, events, raw = api.upload("ada@example.com", make_audio("call.ogg", 20), "call.ogg", folder=calls["id"])
+        call = wait_until(lambda: ready(api, "ada@example.com", "call.ogg", calls["id"]), 60)
+        check("a file uploaded into a folder is transcribed there", call and call["status"] == "Ready", (call, raw[:200]))
+        check("...and not in the top folder", entry_for(api, "ada@example.com", "call.ogg") is None)
+        if call:
+            rid = call["results_id"]
+            check("...its files in that folder in Drive", all(os.path.exists(os.path.join(calls["id"], f"{rid}{ext}"))
+                                                             for ext in (".json.gz", ".opus")) and call.get("doc_id", "").startswith(calls["id"]),
+                  os.listdir(calls["id"]))
+            status, _ = api.call("GET", f"/appdata/results/{rid}?folder={q(calls['id'])}", "ada@example.com")
+            status_top, _ = api.call("GET", f"/appdata/results/{rid}", "ada@example.com")
+            check("its transcript is read by its folder (and not found elsewhere)", (status, status_top) == (200, 404),
+                  (status, status_top))
+            status, _ = api.call("POST", f"/appdata/edits/{rid}?folder={q(calls['id'])}", "ada@example.com",
+                                 body={"edits": {"0": "שורה ערוכה"}, "speakerNames": {}, "speakerSwaps": {}})
+            refreshed = wait_until(lambda: "שורה ערוכה" in open(entry_for(api, "ada@example.com", "call.ogg", calls["id"])["doc_id"],
+                                                                 encoding="utf-8").read(), 10)
+            check("an edit reaches the readable copy", status == 200 and refreshed, status)
+            status, _ = api.call("POST", "/appdata/move", "ada@example.com",
+                                 body={"results_id": rid, "from": calls["id"], "to": year["id"]})
+            moved = entry_for(api, "ada@example.com", "call.ogg", year["id"])
+            check("a transcript moves between folders, with its files and its copy",
+                  status == 200 and moved and entry_for(api, "ada@example.com", "call.ogg", calls["id"]) is None
+                  and os.path.exists(os.path.join(year["id"], f"{rid}.json.gz"))
+                  and os.path.exists(os.path.join(year["id"], f"{rid}.edits.json.gz"))
+                  and moved.get("doc_id", "").startswith(year["id"]), (status, moved))
+            status, _ = api.call("GET", f"/appdata/edits/{rid}?folder={q(year['id'])}", "ada@example.com")
+            check("...and is read from there", status == 200, status)
+
+        status, body = api.call("POST", "/appdata/folders", "bea@example.com", body={"name": "Bea's"})
+        beas = json.loads(body) if status == 201 else {}
+        status, _ = api.call("GET", f"/appdata/toc?folder={q(beas.get('id', 'x'))}", "ada@example.com")
+        status_move, _ = api.call("POST", "/appdata/move", "ada@example.com",
+                                  body={"results_id": (done or {}).get("results_id"), "to": beas.get("id")})
+        check("another user's folder is refused", (status, status_move) == (404, 404), (status, status_move))
+
+        status, body = api.call("POST", f"/appdata/folders/{q(calls['id'])}/rename", "ada@example.com", body={"name": "Meetings"})
+        names = {f["name"] for f in api.folders("ada@example.com")["folders"]}
+        check("a folder is renamed", status == 200 and names == {"Meetings", "2026"}, (status, names))
+        meetings = next(f for f in api.folders("ada@example.com")["folders"] if f["name"] == "Meetings")
+        status, _ = api.call("DELETE", f"/appdata/folders/{q(meetings['id'])}", "ada@example.com")
+        check("a folder goes to the trash with what is in it", status == 200 and api.folders("ada@example.com")["folders"] == []
+              and os.listdir(os.path.join(ada, ".trash")), status)
+        status, _ = api.call("DELETE", f"/appdata/folders/{q(tree['top'])}", "ada@example.com")
+        check("...but never the top folder", status == 400, status)
+
         # --- one RunPod slot: a second user's file waits its turn, and says so
         rp.delay = 6.0
         api.upload("bea@example.com", make_audio("first.ogg", 20), "first.ogg")
@@ -371,16 +457,18 @@ def main():
         # --- the server dies mid-job: the job is picked up from RunPod, not run twice
         rp.delay = 12.0
         runs_before = rp.runs
-        api.upload("dov@example.com", make_audio("survivor.ogg", 20), "survivor.ogg")
+        status, body = api.call("POST", "/appdata/folders", "dov@example.com", body={"name": "Kept"})
+        kept = json.loads(body)["id"] if status == 201 else None
+        api.upload("dov@example.com", make_audio("survivor.ogg", 20), "survivor.ogg", folder=kept)
         wait_until(lambda: rp.runs > runs_before, 30)
         # Let the first heartbeat carry the RunPod job id to the hub.
         wait_until(lambda: hubq.execute("SELECT backend_ref FROM queue_messages WHERE backend_ref IS NOT NULL").fetchone(), 30)
         app_process.send_signal(signal.SIGKILL)
         app_process.wait()
         app_process, api = start_app()
-        survived = wait_until(lambda: (lambda e: e if e and e.get("status") in ("Ready", "Failed") else None)(
-            entry_for(api, "dov@example.com", "survivor.ogg")), 90)
-        check("after a crash the job still finishes", survived and survived["status"] == "Ready", survived)
+        survived = wait_until(lambda: ready(api, "dov@example.com", "survivor.ogg", kept), 90)
+        check("after a crash the job still finishes, in the folder it was sent to",
+              survived and survived["status"] == "Ready", survived)
         check("...from the RunPod run already under way (no second run)", rp.runs == runs_before + 1,
               (rp.runs, runs_before))
 

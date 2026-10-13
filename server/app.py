@@ -42,7 +42,7 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from urllib.parse import urljoin, urlencode
 from functools import wraps
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager
 import dataclasses
 from pathlib import Path
@@ -83,7 +83,8 @@ BASE_PATH = get_base_path()
 
 # Import file storage backends (will be conditionally imported after args parsing)
 from local_file_utils import LocalFileStorageBackend
-from file_utils import FileStorageBackend
+from file_utils import GOOGLE_DOC, FileStorageBackend
+import readable_doc
 import hub
 import app_site
 
@@ -486,10 +487,13 @@ def get_user_identifier(refresh_token: Optional[str], user_email: Optional[str])
     return user_email if in_local_mode else refresh_token
 
 
-async def download_toc(refresh_token: Optional[str], user_email: Optional[str]) -> dict:
-    """Download TOC file (gzipped), using cache if available."""
+async def download_toc(refresh_token: Optional[str], user_email: Optional[str], folder: Optional[str] = None) -> dict:
+    """Download a folder's TOC file (gzipped; the top folder's when folder is None),
+    using cache if available."""
     user_identifier = get_user_identifier(refresh_token, user_email)
     cache_key = get_toc_cache_key(refresh_token) if not in_local_mode else user_email
+    if cache_key and folder:
+        cache_key = f"{cache_key}:{folder}"
     
     # Try to get from cache first (currently disabled)
     if TOC_CACHE_ENABLED and cache_key:
@@ -498,7 +502,7 @@ async def download_toc(refresh_token: Optional[str], user_email: Optional[str]) 
             return copy.deepcopy(cached_toc)
     
     # Not in cache, download from storage
-    file_id = await file_storage_backend.find_file_by_name("toc.json.gz", user_identifier)
+    file_id = await file_storage_backend.find_file_by_name("toc.json.gz", user_identifier, folder=folder)
     
     if not file_id:
         toc_data = {"entries": []}
@@ -517,12 +521,12 @@ async def download_toc(refresh_token: Optional[str], user_email: Optional[str]) 
     
     return toc_data
 
-async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: Optional[str]) -> bool:
-    """Upload TOC file (gzipped), updating existing one atomically or creating new one."""
+async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: Optional[str], folder: Optional[str] = None) -> bool:
+    """Upload a folder's TOC file (gzipped), updating existing one atomically or creating new one."""
     user_identifier = get_user_identifier(refresh_token, user_email)
     
     # Find existing toc.json.gz
-    existing_id = await file_storage_backend.find_file_by_name("toc.json.gz", user_identifier)
+    existing_id = await file_storage_backend.find_file_by_name("toc.json.gz", user_identifier, folder=folder)
     
     # Prepare data: compress JSON
     json_data = json.dumps(toc_data).encode('utf-8')
@@ -535,21 +539,25 @@ async def upload_toc(refresh_token: Optional[str], toc_data: dict, user_email: O
         success = await file_storage_backend.update_file(existing_id, file_data, mime_type, user_identifier, user_email)
     else:
         # Create new file (gzipped)
-        success = await file_storage_backend.upload_file("toc.json.gz", file_data, mime_type, user_identifier, user_email)
+        success = await file_storage_backend.upload_file("toc.json.gz", file_data, mime_type, user_identifier, user_email, folder=folder)
     
     # Invalidate cache if upload was successful
     if success:
         cache_key = get_toc_cache_key(refresh_token) if not in_local_mode else user_email
+        if cache_key and folder:
+            cache_key = f"{cache_key}:{folder}"
         if TOC_CACHE_ENABLED and cache_key:
             toc_cache.pop(cache_key, None)
     
     return success
 
-def get_toc_lock(user_email: str) -> asyncio.Lock:
-    """Get or create a lock for a specific user's TOC updates."""
-    if user_email not in toc_locks:
-        toc_locks[user_email] = asyncio.Lock()
-    return toc_locks[user_email]
+def get_toc_lock(user_email: str, folder: Optional[str] = None) -> asyncio.Lock:
+    """Get or create a lock for a user's TOC updates in one folder (the top folder's
+    keeps its old key)."""
+    key = f"{user_email}:folder:{folder}" if folder else user_email
+    if key not in toc_locks:
+        toc_locks[key] = asyncio.Lock()
+    return toc_locks[key]
 
 # PostHog configuration
 ph = None
@@ -787,6 +795,9 @@ user_jobs = {}
 # Per-user locks for TOC updates
 toc_locks = {}
 
+# The My files folder each job's transcript is headed for, when not the top folder.
+job_folders: Dict[str, str] = {}
+
 # LRU cache for persistent TOC data (keyed by refresh_token hash)
 TOC_CACHE_MAX_SIZE = int(os.environ.get("TOC_CACHE_MAX_SIZE", "100"))
 toc_cache = LRUCache(maxsize=TOC_CACHE_MAX_SIZE)
@@ -811,11 +822,13 @@ def get_drive_file_id_cache_key(refresh_token: str, filename: str) -> str:
 
 
 async def find_drive_file_by_name_cached(
-    refresh_token: Optional[str], filename: str, user_email: Optional[str]
+    refresh_token: Optional[str], filename: str, user_email: Optional[str], folder: Optional[str] = None
 ) -> Optional[str]:
     """Find file by name with caching to reduce API calls."""
     user_identifier = get_user_identifier(refresh_token, user_email)
     cache_key = get_drive_file_id_cache_key(refresh_token, filename) if not in_local_mode else f"{user_identifier}:{filename}"
+    if folder:
+        cache_key = f"{cache_key}:{folder}"
     
     # Try cache first
     cached_file_id = drive_file_id_cache.get(cache_key)
@@ -823,7 +836,7 @@ async def find_drive_file_by_name_cached(
         return cached_file_id
     
     # Cache miss - do the lookup
-    file_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
+    file_id = await file_storage_backend.find_file_by_name(filename, user_identifier, folder=folder)
     
     # Cache the result if found
     if file_id:
@@ -832,6 +845,151 @@ async def find_drive_file_by_name_cached(
     return file_id
 
 
+
+
+
+# --- folders in My files -----------------------------------------------------
+# The user's top folder (the one the old site shares) holds transcripts and the
+# folders the app makes, at any depth; each folder is self-contained, with its own
+# toc.json.gz and transcript files (docs/folders-and-search.md). Requests name a
+# folder by its id; None means the top folder.
+
+
+class FolderNotFound(Exception):
+    """A folder id that is not under the user's top folder, or no longer exists."""
+
+
+FOLDER_LIST_TTL_SECONDS = 60
+folder_lists: Dict[str, Tuple[float, Optional[str], List[dict]]] = {}
+
+
+def _folder_list_key(user_identifier: Optional[str]) -> str:
+    return hashlib.sha256((user_identifier or "").encode()).hexdigest()
+
+
+async def user_folders(user_identifier: Optional[str], *, fresh: bool = False) -> Tuple[Optional[str], List[dict]]:
+    """The user's top folder id and every folder under it: [{id, name, parent}].
+    Kept for a minute; folder changes made here drop it at once."""
+    key = _folder_list_key(user_identifier)
+    cached = folder_lists.get(key)
+    if cached and not fresh and time.time() - cached[0] < FOLDER_LIST_TTL_SECONDS:
+        return cached[1], cached[2]
+    top = await file_storage_backend.ensure_folder(user_identifier)
+    folders = await file_storage_backend.list_folders(user_identifier)
+    folder_lists[key] = (time.time(), top, folders)
+    return top, folders
+
+
+def forget_folders(user_identifier: Optional[str]) -> None:
+    folder_lists.pop(_folder_list_key(user_identifier), None)
+
+
+async def resolve_folder(user_identifier: Optional[str], folder: Optional[str]) -> Optional[str]:
+    """None for the top folder (also when named by its id); the id of a folder under
+    it; FolderNotFound for anything else, so no request reaches another folder."""
+    if not folder:
+        return None
+    for fresh in (False, True):
+        top, folders = await user_folders(user_identifier, fresh=fresh)
+        if folder == top:
+            return None
+        if any(f["id"] == folder for f in folders):
+            return folder
+    raise FolderNotFound(folder)
+
+
+def folder_not_found_response() -> JSONResponse:
+    return JSONResponse({"error": "errorFolderNotFound", "i18n_key": "errorFolderNotFound"}, status_code=404)
+
+
+# --- the readable copy -------------------------------------------------------
+# Each transcript the app makes or changes gets a Google Doc beside its JSON
+# (readable_doc.py), named by its title. It is a convenience: failing to write it
+# never fails the transcript.
+
+
+async def write_readable_doc(
+    refresh_token: Optional[str], user_email: str, folder: Optional[str], entry: dict, results: list, edits: Optional[dict] = None
+) -> Optional[str]:
+    """Make or refresh a transcript's readable Doc; its id, or None if it could not be written."""
+    try:
+        user_identifier = get_user_identifier(refresh_token, user_email)
+        overlay = readable_doc.normalize_edits(edits)
+        segments = readable_doc.effective(results or [], overlay)
+        language = entry.get("language") or "he"
+        title = readable_doc.doc_name(entry.get("source_filename") or "")
+        when = (entry.get("completed_at") or "")[:10]
+        meta = " · ".join(x for x in (when, readable_doc.clock(entry.get("duration_seconds"))) if x)
+        body = readable_doc.render_html(title, segments, language, overlay["speakerNames"], meta).encode("utf-8")
+        name = title
+        doc_id = entry.get("doc_id")
+        if doc_id:
+            try:
+                if await file_storage_backend.update_file(doc_id, body, "text/html", user_identifier, user_email):
+                    return await file_storage_backend.rename_item(doc_id, name, user_identifier) or doc_id
+            except Exception as e:
+                logger.info("Readable doc %s could not be updated (%r); making a new one", doc_id, e)
+        return await file_storage_backend.upload_file(
+            name, body, "text/html", user_identifier, user_email, folder=folder, convert_to=GOOGLE_DOC)
+    except Exception as e:
+        logger.warning("Could not write the readable doc for %s: %r", entry.get("results_id"), e)
+        return None
+
+
+async def load_transcript(user_identifier: Optional[str], folder: Optional[str], results_id: str) -> Tuple[Optional[list], Optional[dict]]:
+    """A transcript's segments and its edit overlay (None when there is none)."""
+    results, edits = None, None
+    file_id = await file_storage_backend.find_file_by_name(f"{results_id}.json.gz", user_identifier, folder=folder)
+    if file_id:
+        raw = await file_storage_backend.download_file_bytes(file_id, user_identifier)
+        if raw:
+            results = json.loads(gzip.decompress(raw)).get("results") or []
+    edits_id = await file_storage_backend.find_file_by_name(f"{results_id}.edits.json.gz", user_identifier, folder=folder)
+    if edits_id:
+        raw = await file_storage_backend.download_file_bytes(edits_id, user_identifier)
+        if raw:
+            edits = json.loads(gzip.decompress(raw))
+    return results, edits
+
+
+DOC_REFRESH_DELAY_SECONDS = float(os.environ.get("DOC_REFRESH_DELAY_SECONDS", "8"))
+doc_refreshes: Dict[Tuple[str, Optional[str], str], asyncio.Task] = {}
+
+
+def refresh_readable_doc_soon(refresh_token: Optional[str], user_email: str, folder: Optional[str], results_id: str) -> None:
+    """Re-render a transcript's Doc shortly after a change (an edit, a rename); a run
+    of changes makes one refresh."""
+    key = (user_email, folder, results_id)
+    pending = doc_refreshes.get(key)
+    if pending and not pending.done():
+        pending.cancel()
+
+    async def run():
+        await asyncio.sleep(DOC_REFRESH_DELAY_SECONDS)
+        try:
+            user_identifier = get_user_identifier(refresh_token, user_email)
+            results, edits = await load_transcript(user_identifier, folder, results_id)
+            if results is None:
+                return
+            async with get_toc_lock(user_email, folder):
+                toc_data = await download_toc(refresh_token, user_email=user_email, folder=folder)
+                entry = next((e for e in toc_data.get("entries", []) if e.get("results_id") == results_id), None)
+                if not entry:
+                    return
+                doc_id = await write_readable_doc(refresh_token, user_email, folder, entry, results, edits)
+                if doc_id and doc_id != entry.get("doc_id"):
+                    entry["doc_id"] = doc_id
+                    await upload_toc(refresh_token, toc_data, user_email=user_email, folder=folder)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Readable doc refresh failed for %s: %r", results_id, e)
+        finally:
+            if doc_refreshes.get(key) is task:
+                doc_refreshes.pop(key, None)
+
+    task = asyncio.create_task(run())
+    doc_refreshes[key] = task
 
 
 
@@ -1127,6 +1285,7 @@ async def hub_queue_job(job_id, user_email, filename, duration, runpod_token, la
         "duration": duration,
         "save_audio": bool(save_audio),
         "path": temp_files.get(job_id),
+        "folder": job_folders.get(job_id),
     }
     await remember_drive_grant(user_email, refresh_token)
     try:
@@ -1148,7 +1307,7 @@ async def hub_queue_job(job_id, user_email, filename, duration, runpod_token, la
     hub_jobs[job_id] = box.Box(
         qtime=time.time(), utime=time.time(), id=job_id, filename=filename, user_email=user_email,
         duration=duration, runpod_token=runpod_token, uses_custom_runpod=byok, language=language,
-        refresh_token=refresh_token, save_audio=save_audio, job_type=job_type,
+        refresh_token=refresh_token, save_audio=save_audio, job_type=job_type, folder=job_folders.get(job_id),
     )
     user_jobs.setdefault(user_email, set()).add(job_id)
     queue_depth = max(0, (view.get("position") or 1) - 1)
@@ -1236,6 +1395,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
         job_desc.language = language
         job_desc.refresh_token = refresh_token
         job_desc.save_audio = save_audio
+        job_desc.folder = job_folders.get(job_id)
 
         # Determine queue type based on job characteristics
         if job_desc.uses_custom_runpod or in_local_mode:
@@ -1359,8 +1519,9 @@ async def list_languages():
 
 
 @app.get("/appdata/toc", dependencies=[Depends(require_google_login)])
-async def get_toc(request: Request):
-    """Get TOC (table of contents) with all transcription metadata, augmented with in-memory job states."""
+async def get_toc(request: Request, folder: Optional[str] = None):
+    """Get a folder's TOC (table of contents) with all transcription metadata,
+    augmented with in-memory job states for jobs headed there."""
     refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
     
@@ -1369,9 +1530,14 @@ async def get_toc(request: Request):
     
     if not user_email:
         return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
+
+    try:
+        folder = await resolve_folder(get_user_identifier(refresh_token, user_email), folder)
+    except FolderNotFound:
+        return folder_not_found_response()
     
     # Load persistent TOC (cached in download_toc, only contains completed jobs)
-    toc_data = await download_toc(refresh_token, user_email=user_email)
+    toc_data = await download_toc(refresh_token, user_email=user_email, folder=folder)
     
     if toc_data is None:
         return JSONResponse({"error": "errorTocLoadFailed", "i18n_key": "errorTocLoadFailed"}, status_code=500)
@@ -1385,7 +1551,7 @@ async def get_toc(request: Request):
     # Augment with in-memory jobs for this user
     in_memory_entries = []
     if HUB_MODE:
-        in_memory_entries = await hub_toc_entries(user_email, toc_version)
+        in_memory_entries = await hub_toc_entries(user_email, toc_version, folder)
 
     # Check all queues for jobs from this user
     for queue_type in ([] if HUB_MODE else [SHORT, LONG, PRIVATE]):
@@ -1396,7 +1562,7 @@ async def get_toc(request: Request):
         async with queue_locks[queue_type]:
             # Check queued jobs
             for job_desc in list(queues[queue_type].queue):
-                if job_desc.user_email == user_email:
+                if job_desc.user_email == user_email and job_desc.get("folder") == folder:
                     # Calculate ETA for queued jobs (only for non-private queues)
                     eta_seconds = None
                     if queue_type != PRIVATE:
@@ -1439,7 +1605,7 @@ async def get_toc(request: Request):
             
             # Check running jobs
             for job_id, job_desc in running_jobs[queue_type].items():
-                if job_desc.user_email == user_email:
+                if job_desc.user_email == user_email and job_desc.get("folder") == folder:
                     # Calculate ETA for running jobs (only for non-private queues)
                     eta_seconds = None
                     if queue_type != PRIVATE:
@@ -1480,7 +1646,7 @@ async def get_toc(request: Request):
     return JSONResponse(toc_data)
 
 
-async def hub_toc_entries(user_email: str, toc_version: str) -> list:
+async def hub_toc_entries(user_email: str, toc_version: str, folder: Optional[str] = None) -> list:
     """The user's jobs waiting for or in transcription, as the hub sees them."""
     try:
         jobs = await hub.client.jobs(owner=hub.owner_of(user_email))
@@ -1492,6 +1658,9 @@ async def hub_toc_entries(user_email: str, toc_version: str) -> list:
         if j["status"] not in ("queued", "running"):
             continue
         spec = j.get("spec") or {}
+        # Shown in the folder it will land in.
+        if (spec.get("folder") or None) != folder:
+            continue
         entry = {
             "job_id": j["job_id"],
             "source_filename": spec.get("filename"),
@@ -1515,7 +1684,7 @@ async def hub_toc_entries(user_email: str, toc_version: str) -> list:
 
 
 @app.get("/appdata/results/{results_id}", dependencies=[Depends(require_google_login)])
-async def get_transcription_results(results_id: str, request: Request):
+async def get_transcription_results(results_id: str, request: Request, folder: Optional[str] = None):
     """Download transcription results by UUID (returns gzipped JSON for client-side decompression)."""
     refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
@@ -1524,10 +1693,15 @@ async def get_transcription_results(results_id: str, request: Request):
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
+
+    try:
+        folder = await resolve_folder(user_identifier, folder)
+    except FolderNotFound:
+        return folder_not_found_response()
     
     # Find the results file (gzipped)
     filename = f"{results_id}.json.gz"
-    file_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
+    file_id = await file_storage_backend.find_file_by_name(filename, user_identifier, folder=folder)
     
     if not file_id:
         return JSONResponse({"error": "errorResultsNotFound", "i18n_key": "errorResultsNotFound"}, status_code=404)
@@ -1560,7 +1734,7 @@ async def get_transcription_results(results_id: str, request: Request):
 
 
 @app.get("/appdata/edits/{results_id}", dependencies=[Depends(require_google_login)])
-async def get_edits(results_id: str, request: Request):
+async def get_edits(results_id: str, request: Request, folder: Optional[str] = None):
     """Get edit data for a transcription by UUID."""
     refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
@@ -1569,10 +1743,15 @@ async def get_edits(results_id: str, request: Request):
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
+
+    try:
+        folder = await resolve_folder(user_identifier, folder)
+    except FolderNotFound:
+        return folder_not_found_response()
     
     # Find the edits file
     filename = f"{results_id}.edits.json.gz"
-    file_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
+    file_id = await file_storage_backend.find_file_by_name(filename, user_identifier, folder=folder)
     
     if not file_id:
         return JSONResponse({"error": "errorEditsNotFound", "i18n_key": "errorEditsNotFound"}, status_code=404)
@@ -1602,7 +1781,7 @@ async def get_edits(results_id: str, request: Request):
 
 
 @app.post("/appdata/edits/{results_id}", dependencies=[Depends(require_google_login)])
-async def save_edits(results_id: str, request: Request):
+async def save_edits(results_id: str, request: Request, folder: Optional[str] = None):
     """Save edit data for a transcription by UUID."""
     refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
@@ -1611,6 +1790,11 @@ async def save_edits(results_id: str, request: Request):
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
+
+    try:
+        folder = await resolve_folder(user_identifier, folder)
+    except FolderNotFound:
+        return folder_not_found_response()
     
     # Get the edits data from request body
     try:
@@ -1635,7 +1819,7 @@ async def save_edits(results_id: str, request: Request):
     
     # Find existing edits file
     filename = f"{results_id}.edits.json.gz"
-    existing_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
+    existing_id = await file_storage_backend.find_file_by_name(filename, user_identifier, folder=folder)
     
     success = False
     if existing_id:
@@ -1643,17 +1827,18 @@ async def save_edits(results_id: str, request: Request):
         success = await file_storage_backend.update_file(existing_id, file_data, mime_type, user_identifier, user_email)
     else:
         # Upload new file
-        file_id = await file_storage_backend.upload_file(filename, file_data, mime_type, user_identifier, user_email)
+        file_id = await file_storage_backend.upload_file(filename, file_data, mime_type, user_identifier, user_email, folder=folder)
         success = file_id is not None
     
     if success:
+        refresh_readable_doc_soon(refresh_token, user_email, folder, results_id)
         return JSONResponse({"success": True})
     else:
         return JSONResponse({"error": "errorEditsSaveFailed", "i18n_key": "errorEditsSaveFailed"}, status_code=500)
 
 
 @app.get("/appdata/audio/{results_id}", dependencies=[Depends(require_google_login)])
-async def get_audio_file(results_id: str, request: Request):
+async def get_audio_file(results_id: str, request: Request, folder: Optional[str] = None):
     """Download opus audio file by results_id UUID."""
     refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
@@ -1662,10 +1847,15 @@ async def get_audio_file(results_id: str, request: Request):
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
+
+    try:
+        folder = await resolve_folder(user_identifier, folder)
+    except FolderNotFound:
+        return folder_not_found_response()
     
     # Find the opus file
     filename = f"{results_id}.opus"
-    file_id = await file_storage_backend.find_file_by_name(filename, user_identifier)
+    file_id = await file_storage_backend.find_file_by_name(filename, user_identifier, folder=folder)
     
     if not file_id:
         return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
@@ -1689,7 +1879,7 @@ async def get_audio_file(results_id: str, request: Request):
 
 
 @app.api_route("/appdata/audio/stream/{results_id}", methods=["GET", "HEAD"], dependencies=[Depends(require_google_login)])
-async def stream_audio_file(results_id: str, request: Request):
+async def stream_audio_file(results_id: str, request: Request, folder: Optional[str] = None):
     """Stream opus audio file with range support for seeking."""
     refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
@@ -1698,10 +1888,15 @@ async def stream_audio_file(results_id: str, request: Request):
         return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
     
     user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
+
+    try:
+        folder = await resolve_folder(user_identifier, folder)
+    except FolderNotFound:
+        return folder_not_found_response()
     
     # Find the opus file (using cache to avoid repeated lookups for range requests)
     filename = f"{results_id}.opus"
-    file_id = await find_drive_file_by_name_cached(refresh_token, filename, user_email=user_email)
+    file_id = await find_drive_file_by_name_cached(refresh_token, filename, user_email=user_email, folder=folder)
     
     if not file_id:
         return JSONResponse({"error": "errorAudioNotFound", "i18n_key": "errorAudioNotFound"}, status_code=404)
@@ -1754,7 +1949,7 @@ async def stream_audio_file(results_id: str, request: Request):
 
 
 @app.post("/appdata/rename", dependencies=[Depends(require_google_login)])
-async def rename_file(request: Request):
+async def rename_file(request: Request, folder: Optional[str] = None):
     """Rename a file in the TOC by updating its source_filename."""
     refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
@@ -1764,6 +1959,12 @@ async def rename_file(request: Request):
     
     if not user_email:
         return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
+
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
+    try:
+        folder = await resolve_folder(user_identifier, folder)
+    except FolderNotFound:
+        return folder_not_found_response()
     
     try:
         body = await request.json()
@@ -1779,10 +1980,10 @@ async def rename_file(request: Request):
             return JSONResponse({"error": "errorFilenameEmpty", "i18n_key": "errorFilenameEmpty"}, status_code=400)
         
         # Acquire per-user lock for TOC updates
-        toc_lock = get_toc_lock(user_email)
+        toc_lock = get_toc_lock(user_email, folder)
         async with toc_lock:
             # Download current TOC
-            toc_data = await download_toc(refresh_token, user_email=user_email)
+            toc_data = await download_toc(refresh_token, user_email=user_email, folder=folder)
 
             if not toc_data or "entries" not in toc_data:
                 await db.incr_stat("gdrive_error_toc_download", 1)
@@ -1800,12 +2001,13 @@ async def rename_file(request: Request):
                 return JSONResponse({"error": "errorFileNotInToc", "i18n_key": "errorFileNotInToc"}, status_code=404)
 
             # Upload updated TOC atomically
-            success = await upload_toc(refresh_token, toc_data, user_email=user_email)
+            success = await upload_toc(refresh_token, toc_data, user_email=user_email, folder=folder)
 
             if not success:
                 await db.incr_stat("gdrive_error_toc_upload", 1)
                 return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
         
+        refresh_readable_doc_soon(refresh_token, user_email, folder, results_id)
         logging.info(f"{user_email}: Renamed file {results_id} to {new_filename}")
         return JSONResponse({"success": True, "new_filename": new_filename})
         
@@ -1816,7 +2018,7 @@ async def rename_file(request: Request):
 
 
 @app.post("/appdata/delete", dependencies=[Depends(require_google_login)])
-async def delete_file(request: Request):
+async def delete_file(request: Request, folder: Optional[str] = None):
     """Delete a file by removing it from TOC and deleting associated files (opus, json.gz)."""
     refresh_token = get_refresh_token(request)
     user_email = get_user_email(request)
@@ -1828,6 +2030,11 @@ async def delete_file(request: Request):
         return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
     
     user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
+
+    try:
+        folder = await resolve_folder(user_identifier, folder)
+    except FolderNotFound:
+        return folder_not_found_response()
     
     try:
         body = await request.json()
@@ -1837,10 +2044,10 @@ async def delete_file(request: Request):
             return JSONResponse({"error": "errorMissingResultsId", "i18n_key": "errorMissingResultsId"}, status_code=400)
         
         # Acquire per-user lock for TOC updates
-        toc_lock = get_toc_lock(user_email)
+        toc_lock = get_toc_lock(user_email, folder)
         async with toc_lock:
             # Download current TOC
-            toc_data = await download_toc(refresh_token, user_email=user_email)
+            toc_data = await download_toc(refresh_token, user_email=user_email, folder=folder)
 
             if not toc_data or "entries" not in toc_data:
                 await db.incr_stat("gdrive_error_toc_download", 1)
@@ -1848,6 +2055,7 @@ async def delete_file(request: Request):
 
             # Find and remove the entry with matching results_id
             entry_found = False
+            doc_id = next((e.get("doc_id") for e in toc_data["entries"] if e.get("results_id") == results_id), None)
             original_entries_count = len(toc_data["entries"])
             toc_data["entries"] = [
                 entry for entry in toc_data["entries"]
@@ -1861,7 +2069,7 @@ async def delete_file(request: Request):
                 return JSONResponse({"error": "errorFileNotInToc", "i18n_key": "errorFileNotInToc"}, status_code=404)
 
             # Upload updated TOC atomically (removing from TOC first)
-            success = await upload_toc(refresh_token, toc_data, user_email=user_email)
+            success = await upload_toc(refresh_token, toc_data, user_email=user_email, folder=folder)
 
             if not success:
                 await db.incr_stat("gdrive_error_toc_upload", 1)
@@ -1870,18 +2078,18 @@ async def delete_file(request: Request):
         # After TOC update, delete associated files
         # Delete opus file if it exists
         opus_filename = f"{results_id}.opus"
-        opus_file_id = await file_storage_backend.find_file_by_name(opus_filename, user_identifier)
+        opus_file_id = await file_storage_backend.find_file_by_name(opus_filename, user_identifier, folder=folder)
         if opus_file_id:
             delete_success = await file_storage_backend.delete_file(opus_file_id, user_identifier, user_email)
             if not delete_success:
                 await db.incr_stat("gdrive_error_delete", 1)
             # Invalidate file ID cache for deleted file
             cache_key = get_drive_file_id_cache_key(refresh_token, opus_filename) if not in_local_mode else f"{user_identifier}:{opus_filename}"
-            drive_file_id_cache.pop(cache_key, None)
+            drive_file_id_cache.pop(f"{cache_key}:{folder}" if folder else cache_key, None)
 
         # Delete json.gz results file
         json_filename = f"{results_id}.json.gz"
-        json_file_id = await file_storage_backend.find_file_by_name(json_filename, user_identifier)
+        json_file_id = await file_storage_backend.find_file_by_name(json_filename, user_identifier, folder=folder)
         if json_file_id:
             delete_success = await file_storage_backend.delete_file(json_file_id, user_identifier, user_email)
             if not delete_success:
@@ -1889,12 +2097,19 @@ async def delete_file(request: Request):
         
         # Delete edits file if it exists
         edits_filename = f"{results_id}.edits.json.gz"
-        edits_file_id = await file_storage_backend.find_file_by_name(edits_filename, user_identifier)
+        edits_file_id = await file_storage_backend.find_file_by_name(edits_filename, user_identifier, folder=folder)
         if edits_file_id:
             delete_success = await file_storage_backend.delete_file(edits_file_id, user_identifier, user_email)
             if not delete_success:
                 await db.incr_stat("gdrive_error_delete", 1)
         
+        # The readable copy goes to Drive's trash, as a folder's contents do.
+        if doc_id:
+            try:
+                await file_storage_backend.trash_item(doc_id, user_identifier)
+            except Exception as e:
+                logger.warning("Could not trash the readable doc %s: %r", doc_id, e)
+
         logging.info(f"{user_email}: Deleted file {results_id} from TOC and associated files")
         return JSONResponse({"success": True})
         
@@ -1902,6 +2117,156 @@ async def delete_file(request: Request):
         logging.error(f"Error deleting file: {e}")
         await db.incr_stat("gdrive_error_delete", 1)
         return JSONResponse({"error": "errorInternalServer", "i18n_key": "errorInternalServer"}, status_code=500)
+
+
+def library_user(request: Request):
+    """(refresh_token, user_email, user_identifier) for My files routes, or the 401 to answer."""
+    refresh_token = get_refresh_token(request)
+    user_email = get_user_email(request)
+    if not in_local_mode and not refresh_token:
+        return JSONResponse({"error": "errorNotAuthenticated", "i18n_key": "errorNotAuthenticated"}, status_code=401)
+    if not user_email:
+        return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
+    return refresh_token, user_email, get_user_identifier(refresh_token, user_email)
+
+
+FOLDER_NAME_MAX = 100
+
+
+def clean_folder_name(name) -> Optional[str]:
+    """A folder's name as given, trimmed; None when empty, too long, or a path."""
+    name = (name or "").strip() if isinstance(name, str) else ""
+    if not name or len(name) > FOLDER_NAME_MAX or "/" in name or "\\" in name or name in (".", ".."):
+        return None
+    return name
+
+
+@app.get("/appdata/folders", dependencies=[Depends(require_google_login)])
+async def list_library_folders(request: Request):
+    """My files' folders: {top, folders: [{id, name, parent}]}, parent being the top
+    folder's id for those directly in it."""
+    user = library_user(request)
+    if isinstance(user, JSONResponse):
+        return user
+    _, _, user_identifier = user
+    top, folders = await user_folders(user_identifier, fresh=True)
+    return JSONResponse({"top": top, "folders": folders})
+
+
+@app.post("/appdata/folders", dependencies=[Depends(require_google_login)])
+async def create_library_folder(request: Request):
+    """A new folder: {name, parent} (the top folder when parent is absent)."""
+    user = library_user(request)
+    if isinstance(user, JSONResponse):
+        return user
+    _, user_email, user_identifier = user
+    body = await request.json()
+    name = clean_folder_name(body.get("name"))
+    if not name:
+        return JSONResponse({"error": "errorFolderName", "i18n_key": "errorFolderName"}, status_code=400)
+    try:
+        parent = await resolve_folder(user_identifier, body.get("parent"))
+    except FolderNotFound:
+        return folder_not_found_response()
+    top, folders = await user_folders(user_identifier)
+    parent_id = parent or top
+    if any(f["parent"] == parent_id and f["name"] == name for f in folders):
+        return JSONResponse({"error": "errorFolderExists", "i18n_key": "errorFolderExists"}, status_code=409)
+    folder_id = await file_storage_backend.create_folder(name, parent_id, user_identifier)
+    forget_folders(user_identifier)
+    log_message(f"{user_email}: Made folder {name!r}")
+    return JSONResponse({"id": folder_id, "name": name, "parent": parent_id}, status_code=201)
+
+
+@app.post("/appdata/folders/{folder_id:path}/rename", dependencies=[Depends(require_google_login)])
+async def rename_library_folder(folder_id: str, request: Request):
+    user = library_user(request)
+    if isinstance(user, JSONResponse):
+        return user
+    _, _, user_identifier = user
+    name = clean_folder_name((await request.json()).get("name"))
+    if not name:
+        return JSONResponse({"error": "errorFolderName", "i18n_key": "errorFolderName"}, status_code=400)
+    try:
+        folder = await resolve_folder(user_identifier, folder_id)
+    except FolderNotFound:
+        return folder_not_found_response()
+    if not folder:
+        return JSONResponse({"error": "errorFolderTop", "i18n_key": "errorFolderTop"}, status_code=400)
+    new_id = await file_storage_backend.rename_item(folder, name, user_identifier)
+    forget_folders(user_identifier)
+    return JSONResponse({"id": new_id, "name": name})
+
+
+@app.delete("/appdata/folders/{folder_id:path}", dependencies=[Depends(require_google_login)])
+async def delete_library_folder(folder_id: str, request: Request):
+    """A folder and everything in it, to Drive's trash (kept there 30 days)."""
+    user = library_user(request)
+    if isinstance(user, JSONResponse):
+        return user
+    _, user_email, user_identifier = user
+    try:
+        folder = await resolve_folder(user_identifier, folder_id)
+    except FolderNotFound:
+        return folder_not_found_response()
+    if not folder:
+        return JSONResponse({"error": "errorFolderTop", "i18n_key": "errorFolderTop"}, status_code=400)
+    await file_storage_backend.trash_item(folder, user_identifier)
+    forget_folders(user_identifier)
+    log_message(f"{user_email}: Moved a folder to the trash")
+    return JSONResponse({"success": True})
+
+
+@app.post("/appdata/move", dependencies=[Depends(require_google_login)])
+async def move_transcript(request: Request):
+    """A transcript from one folder to another: {results_id, from, to} (absent means
+    the top folder). Its files move in Drive, then its entry between the tocs."""
+    user = library_user(request)
+    if isinstance(user, JSONResponse):
+        return user
+    refresh_token, user_email, user_identifier = user
+    body = await request.json()
+    results_id = body.get("results_id")
+    if not results_id:
+        return JSONResponse({"error": "errorMissingResultsId", "i18n_key": "errorMissingResultsId"}, status_code=400)
+    try:
+        source = await resolve_folder(user_identifier, body.get("from"))
+        target = await resolve_folder(user_identifier, body.get("to"))
+    except FolderNotFound:
+        return folder_not_found_response()
+    if source == target:
+        return JSONResponse({"success": True, "unchanged": True})
+    top, _ = await user_folders(user_identifier)
+    source_id, target_id = source or top, target or top
+
+    # Both folders' locks, always in the same order, so two moves cannot deadlock.
+    first, second = sorted([source or "", target or ""])
+    async with get_toc_lock(user_email, first or None), get_toc_lock(user_email, second or None):
+        source_toc = await download_toc(refresh_token, user_email=user_email, folder=source)
+        entry = next((e for e in source_toc.get("entries", []) if e.get("results_id") == results_id), None)
+        if not entry:
+            return JSONResponse({"error": "errorFileNotInToc", "i18n_key": "errorFileNotInToc"}, status_code=404)
+        for name in (f"{results_id}.json.gz", f"{results_id}.edits.json.gz", f"{results_id}.opus"):
+            file_id = await file_storage_backend.find_file_by_name(name, user_identifier, folder=source)
+            if file_id:
+                await file_storage_backend.move_item(file_id, source_id, target_id, user_identifier)
+        if entry.get("doc_id"):
+            try:
+                entry["doc_id"] = await file_storage_backend.move_item(entry["doc_id"], source_id, target_id, user_identifier)
+            except Exception as e:
+                logger.warning("Could not move the readable doc of %s: %r", results_id, e)
+                entry.pop("doc_id", None)
+        target_toc = await download_toc(refresh_token, user_email=user_email, folder=target)
+        target_toc.setdefault("entries", []).append(entry)
+        if not await upload_toc(refresh_token, target_toc, user_email=user_email, folder=target):
+            return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
+        source_toc["entries"] = [e for e in source_toc["entries"] if e.get("results_id") != results_id]
+        if not await upload_toc(refresh_token, source_toc, user_email=user_email, folder=source):
+            return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
+    # Streaming caches the audio's id by folder; the old one is stale now.
+    drive_file_id_cache.clear()
+    log_message(f"{user_email}: Moved {results_id} between folders")
+    return JSONResponse({"success": True})
 
 
 @app.get("/appdata/data-dir", dependencies=[Depends(require_google_login)])
@@ -1932,7 +2297,7 @@ async def get_data_dir(request: Request):
 
 
 @app.post("/appdata/donate_data", dependencies=[Depends(require_google_login)])
-async def donate_data(request: Request):
+async def donate_data(request: Request, folder: Optional[str] = None):
     """Donate transcription data (audio + transcript + edits) for the ivrit.ai v2 dataset."""
     import tarfile
     
@@ -1946,6 +2311,11 @@ async def donate_data(request: Request):
         return JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
     
     user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
+
+    try:
+        folder = await resolve_folder(user_identifier, folder)
+    except FolderNotFound:
+        return folder_not_found_response()
     
     try:
         body = await request.json()
@@ -1959,10 +2329,10 @@ async def donate_data(request: Request):
             return JSONResponse({"error": "errorDonateCheckboxRequired", "i18n_key": "errorDonateCheckboxRequired"}, status_code=400)
         
         # Acquire per-user lock for TOC updates
-        toc_lock = get_toc_lock(user_email)
+        toc_lock = get_toc_lock(user_email, folder)
         async with toc_lock:
             # Download current TOC
-            toc_data = await download_toc(refresh_token, user_email=user_email)
+            toc_data = await download_toc(refresh_token, user_email=user_email, folder=folder)
 
             if not toc_data or "entries" not in toc_data:
                 return JSONResponse({"error": "errorTocLoadFailed", "i18n_key": "errorTocLoadFailed"}, status_code=500)
@@ -1985,7 +2355,7 @@ async def donate_data(request: Request):
             
             # Download opus audio file
             opus_filename = f"{results_id}.opus"
-            opus_file_id = await file_storage_backend.find_file_by_name(opus_filename, user_identifier)
+            opus_file_id = await file_storage_backend.find_file_by_name(opus_filename, user_identifier, folder=folder)
             opus_content = None
             if opus_file_id:
                 opus_content = await file_storage_backend.download_file_bytes(opus_file_id, user_identifier)
@@ -1995,7 +2365,7 @@ async def donate_data(request: Request):
             
             # Download transcript json.gz
             json_filename = f"{results_id}.json.gz"
-            json_file_id = await file_storage_backend.find_file_by_name(json_filename, user_identifier)
+            json_file_id = await file_storage_backend.find_file_by_name(json_filename, user_identifier, folder=folder)
             transcript_content = None
             if json_file_id:
                 transcript_content = await file_storage_backend.download_file_bytes(json_file_id, user_identifier)
@@ -2005,7 +2375,7 @@ async def donate_data(request: Request):
             
             # Download edits if they exist (optional)
             edits_filename = f"{results_id}.edits.json.gz"
-            edits_file_id = await file_storage_backend.find_file_by_name(edits_filename, user_identifier)
+            edits_file_id = await file_storage_backend.find_file_by_name(edits_filename, user_identifier, folder=folder)
             edits_content = None
             if edits_file_id:
                 edits_content = await file_storage_backend.download_file_bytes(edits_file_id, user_identifier)
@@ -2059,7 +2429,7 @@ async def donate_data(request: Request):
             toc_data["entries"][entry_index]["donated"] = True
             
             # Upload updated TOC
-            success = await upload_toc(refresh_token, toc_data, user_email=user_email)
+            success = await upload_toc(refresh_token, toc_data, user_email=user_email, folder=folder)
             
             if not success:
                 return JSONResponse({"error": "errorTocUpdateFailed", "i18n_key": "errorTocUpdateFailed"}, status_code=500)
@@ -3205,6 +3575,7 @@ async def upload_file(
     file: UploadFile = File(...),
     language: Optional[str] = Form(None),
     save_audio: Optional[str] = Form(None),
+    folder: Optional[str] = Form(None),
 ):
     job_id = str(uuid.uuid4())
     user_email = get_user_email(request)
@@ -3251,6 +3622,14 @@ async def upload_file(
     if error_response:
         log_message(f"{user_email}: Upload validation failed (job_id={job_id})")
         return error_response
+
+    # Where the finished transcript goes: a My files folder, or the top folder.
+    try:
+        destination = await resolve_folder(get_user_identifier(refresh_token, user_email), folder)
+    except FolderNotFound:
+        return folder_not_found_response()
+    if destination:
+        job_folders[job_id] = destination
     
     log_message(f"{user_email}: Upload metadata validated successfully (job_id={job_id})")
 
@@ -3763,6 +4142,8 @@ async def handle_transcoding(job_id: str):
 
 
 def cleanup_temp_file(job_id):
+    # The job carries its folder by now (job_desc.folder, the hub's spec).
+    job_folders.pop(job_id, None)
     if job_id in temp_files:
         temp_file_path = temp_files[job_id]
         try:
@@ -4076,13 +4457,14 @@ async def handle_failed_job(job_desc, consumed_seconds, failure_reason):
     }
 
     try:
-        toc_lock = get_toc_lock(job_desc.user_email)
+        folder = job_desc.get("folder")
+        toc_lock = get_toc_lock(job_desc.user_email, folder)
         async with toc_lock:
-            toc_data = await download_toc(job_desc.refresh_token, user_email=job_desc.user_email)
+            toc_data = await download_toc(job_desc.refresh_token, user_email=job_desc.user_email, folder=folder)
             if "entries" not in toc_data:
                 toc_data["entries"] = []
             toc_data["entries"].append(toc_entry)
-            success = await upload_toc(job_desc.refresh_token, toc_data, user_email=job_desc.user_email)
+            success = await upload_toc(job_desc.refresh_token, toc_data, user_email=job_desc.user_email, folder=folder)
             if not success:
                 await db.incr_stat("gdrive_error_toc_upload", 1)
                 logger.error(f"Failed to record failed job {job_desc.id} in TOC")
@@ -4388,12 +4770,14 @@ async def transcribe_job(job_desc, hub_entry=None):
             file_data = gzip.compress(json_data)
             mime_type = "application/gzip"
             user_identifier = get_user_identifier(refresh_token=job_desc.refresh_token, user_email=job_desc.user_email)
+            folder = job_desc.get("folder")
             upload_success = await file_storage_backend.upload_file(
                 results_filename,
                 file_data,
                 mime_type,
                 user_identifier,
-                job_desc.user_email
+                job_desc.user_email,
+                folder=folder,
             )
 
             if not upload_success:
@@ -4419,7 +4803,8 @@ async def transcribe_job(job_desc, hub_entry=None):
                             opus_data,
                             opus_mime_type,
                             user_identifier,
-                            job_desc.user_email
+                            job_desc.user_email,
+                            folder=folder,
                         )
                         
                         if opus_upload_success:
@@ -4443,12 +4828,17 @@ async def transcribe_job(job_desc, hub_entry=None):
                 "status": "Ready",
                 "toc_version": toc_version,
             }
+            # The readable copy, beside the JSON (never holding the transcript back).
+            doc_id = await write_readable_doc(
+                job_desc.refresh_token, job_desc.user_email, folder, toc_entry, job_results[job_id]["results"])
+            if doc_id:
+                toc_entry["doc_id"] = doc_id
             
             # Acquire per-user lock for TOC updates
-            toc_lock = get_toc_lock(job_desc.user_email)
+            toc_lock = get_toc_lock(job_desc.user_email, folder)
             async with toc_lock:
                 # Download current TOC
-                toc_data = await download_toc(job_desc.refresh_token, user_email=job_desc.user_email)
+                toc_data = await download_toc(job_desc.refresh_token, user_email=job_desc.user_email, folder=folder)
 
                 # Append new entry
                 if "entries" not in toc_data:
@@ -4456,7 +4846,7 @@ async def transcribe_job(job_desc, hub_entry=None):
                 toc_data["entries"].append(toc_entry)
 
                 # Upload updated TOC atomically
-                success = await upload_toc(job_desc.refresh_token, toc_data, user_email=job_desc.user_email)
+                success = await upload_toc(job_desc.refresh_token, toc_data, user_email=job_desc.user_email, folder=folder)
                 if not success:
                     await db.incr_stat("gdrive_error_toc_upload", 1)
                     raise Exception("Failed to upload TOC")
@@ -4705,6 +5095,7 @@ async def rebuild_job_desc(grant: dict):
         language=spec.get("language") or "he", refresh_token=refresh_token,
         save_audio=bool(spec.get("save_audio")),
         job_type=PRIVATE if byok else (SHORT if duration <= SHORT_JOB_THRESHOLD else LONG),
+        folder=spec.get("folder"),
     )
 
 

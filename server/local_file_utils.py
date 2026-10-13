@@ -3,9 +3,11 @@
 import os
 import json
 import logging
-from typing import Optional, Dict, Any, Tuple
+import shutil
+import time
+from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
-from file_utils import FileStorageBackend
+from file_utils import GOOGLE_DOC, FileStorageBackend
 
 logger = logging.getLogger("transcribe_service.local_file_utils")
 
@@ -14,7 +16,10 @@ LOCAL_DATA_DIR = os.environ.get("LOCAL_DATA_DIR", "local_data")
 
 
 class LocalFileStorageBackend(FileStorageBackend):
-    """Local filesystem implementation of file storage backend."""
+    """Local filesystem implementation of file storage backend.
+
+    Folders are directories under the user's directory, and their ids are their
+    paths, as file ids are; a Google Doc stays the HTML it was uploaded as."""
     
     def __init__(self, base_dir: str = LOCAL_DATA_DIR):
         self.base_dir = Path(base_dir)
@@ -28,6 +33,11 @@ class LocalFileStorageBackend(FileStorageBackend):
             return user_dir
         return self.base_dir
     
+    def _folder(self, folder: Optional[str], user_identifier: Optional[str]) -> Path:
+        """A folder's directory: the user's own when None. The app checks a folder
+        id belongs to the user before it gets here."""
+        return Path(folder) if folder else self._get_user_dir(user_identifier)
+
     async def ensure_folder(self, user_identifier: Optional[str] = None) -> Optional[str]:
         """Ensure the storage folder exists and return its identifier."""
         user_dir = self._get_user_dir(user_identifier)
@@ -43,12 +53,16 @@ class LocalFileStorageBackend(FileStorageBackend):
         file_data: bytes,
         mime_type: str,
         user_identifier: Optional[str] = None,
-        user_email: Optional[str] = None
-    ) -> bool:
-        """Upload a file to local storage."""
+        user_email: Optional[str] = None,
+        folder: Optional[str] = None,
+        convert_to: Optional[str] = None,
+    ) -> Optional[str]:
+        """Upload a file to local storage; returns its path. A would-be Google Doc stays
+        HTML, under a name of its own (Drive allows two alike; a directory does not)."""
         try:
-            user_dir = self._get_user_dir(user_identifier)
-            file_path = user_dir / filename
+            file_path = self._folder(folder, user_identifier) / filename
+            if convert_to == GOOGLE_DOC:
+                file_path = self._unique(file_path.with_name(filename + ".html"))
             
             # Write file
             with open(file_path, 'wb') as f:
@@ -59,10 +73,10 @@ class LocalFileStorageBackend(FileStorageBackend):
                 user_email or "unknown user",
                 filename,
             )
-            return True
+            return str(file_path)
         except Exception as exc:
             logger.exception("Exception uploading to local storage for %s", user_email)
-            return False
+            return None
     
     async def update_file(
         self,
@@ -118,12 +132,12 @@ class LocalFileStorageBackend(FileStorageBackend):
     async def find_file_by_name(
         self,
         filename: str,
-        user_identifier: Optional[str] = None
+        user_identifier: Optional[str] = None,
+        folder: Optional[str] = None,
     ) -> Optional[str]:
         """Find a file by name and return its full path."""
         try:
-            user_dir = self._get_user_dir(user_identifier)
-            file_path = user_dir / filename
+            file_path = self._folder(folder, user_identifier) / filename
             
             if file_path.exists():
                 return str(file_path)
@@ -241,3 +255,55 @@ class LocalFileStorageBackend(FileStorageBackend):
             logger.exception("Exception streaming local file %s", file_id)
             return None
 
+    # --- folders ---------------------------------------------------------------
+
+    TRASH = ".trash"
+
+    async def list_folders(self, user_identifier: Optional[str] = None) -> List[Dict[str, Any]]:
+        top = self._get_user_dir(user_identifier)
+        folders = []
+        for dirpath, dirnames, _ in os.walk(top):
+            dirnames[:] = sorted(d for d in dirnames if d != self.TRASH)
+            for name in dirnames:
+                folders.append({"id": str(Path(dirpath) / name), "name": name, "parent": str(Path(dirpath))})
+        return folders
+
+    async def create_folder(self, name: str, parent: str, user_identifier: Optional[str] = None) -> Optional[str]:
+        path = Path(parent) / name
+        path.mkdir(parents=False, exist_ok=False)
+        return str(path)
+
+    @staticmethod
+    def _unique(path: Path) -> Path:
+        stem, suffix, n = path.stem, path.suffix, 2
+        while path.exists():
+            path = path.with_name(f"{stem} ({n}){suffix}")
+            n += 1
+        return path
+
+    async def rename_item(self, item_id: str, name: str, user_identifier: Optional[str] = None) -> Optional[str]:
+        source = Path(item_id)
+        if source.is_file() and source.suffix == ".html":
+            # A readable copy keeps its extension, and a name of its own.
+            if source.stem == name:
+                return item_id
+            target = self._unique(source.with_name(name + ".html"))
+        else:
+            target = source.with_name(name)
+            if target.exists():
+                raise FileExistsError(name)
+        source.rename(target)
+        return str(target)
+
+    async def move_item(
+        self, item_id: str, from_folder: str, to_folder: str, user_identifier: Optional[str] = None
+    ) -> Optional[str]:
+        target = Path(to_folder) / Path(item_id).name
+        shutil.move(item_id, target)
+        return str(target)
+
+    async def trash_item(self, item_id: str, user_identifier: Optional[str] = None) -> bool:
+        trash = self._get_user_dir(user_identifier) / self.TRASH
+        trash.mkdir(exist_ok=True)
+        shutil.move(item_id, trash / f"{Path(item_id).name}.{int(time.time() * 1000)}")
+        return True

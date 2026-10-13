@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "Marks web/transcription as ES modules for its Node tests; browsers ignore it.",
+  "scripts": { "test": "node --test test/" }
+}
