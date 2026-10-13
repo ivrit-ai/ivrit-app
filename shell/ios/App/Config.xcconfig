@@ -6,10 +6,9 @@ IVRIT_TEAM_ID = WN9KK8S9P8
 DEVELOPMENT_TEAM = $(IVRIT_TEAM_ID)
 
 // Google sign-in: the app's iOS OAuth client (Google Cloud → Credentials), and
-// the same id reversed, which Google's sign-in returns to. Until it is set, the
-// app builds, but signing in with Google answers "no_client_id".
-GOOGLE_IOS_CLIENT_ID =
-GOOGLE_REVERSED_CLIENT_ID = ai.ivrit.google-unset
+// the same id reversed, which Google's sign-in returns to (no plist needed).
+GOOGLE_IOS_CLIENT_ID = 1075237904697-p6i8c54g4l5mcea9k6c8pu32f5fkn8g4.apps.googleusercontent.com
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.1075237904697-p6i8c54g4l5mcea9k6c8pu32f5fkn8g4
 
 // Signing: Xcode's automatic signing for development; scripts/build-ios.sh
 // testflight signs manually for the App Store, with profiles that
