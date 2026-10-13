@@ -51,8 +51,14 @@ GoogleSignIn. `Config.xcconfig` holds the settings that are not secrets: the
 Apple team and the iOS OAuth client.
 
 `scripts/build-ios.sh simulator` builds it unsigned (does it compile);
-`scripts/build-ios.sh testflight` archives, signs with an App Store Connect API
-key, and uploads. Both need a Mac; GitHub Actions provides one
+`scripts/build-ios.sh testflight` archives, signs for the App Store, and uploads.
+Signing is done through the App Store Connect API rather than Xcode's automatic
+signing (which, in CI, failed to authenticate with the same key, and needs a
+registered device besides): one Apple Distribution certificate, made once by
+`scripts/ios-signing.py certificate` (its private key only in `~/keys` and CI's
+secrets), and App Store profiles for the app and both extensions, made fresh by
+`scripts/ios-signing.py profiles` on each build. The build number counts commits,
+as Android's does. Both need a Mac; GitHub Actions provides one
 (`.github/workflows/ios.yml`): every change to `shell/` is built for the
 simulator, and "Run workflow" with *testflight* uploads a build.
 
@@ -62,8 +68,9 @@ simulator, and "Run workflow" with *testflight* uploads a build.
 |---|---|
 | Apple Developer Program membership (organization: needs ivrit.ai's D-U-N-S number) | — |
 | The team id (Membership page) | `IVRIT_TEAM_ID` in `Config.xcconfig`, GitHub secret `IVRIT_TEAM_ID`, `APPLE_TEAM_ID` on the app server (xhost), `APNS_TEAM_ID` on Communicator |
-| App Store Connect: the app (bundle id `ai.ivrit`, the iPhone app's own (Android's is `ai.ivrit.app`), plus `ai.ivrit.NotificationService` and `ai.ivrit.ShareExtension`; App Group `group.ai.ivrit`) | Automatic signing registers the identifiers on the first signed build; the app record is made by hand |
-| App Store Connect API key, Admin role (cloud-managed signing needs it) (.p8, key id, issuer id) | GitHub secrets `ASC_KEY` (the file's contents), `ASC_KEY_ID`, `ASC_ISSUER_ID` |
+| App Store Connect: the app (bundle id `ai.ivrit`, the iPhone app's own; Android's is `ai.ivrit.app`), the extensions `ai.ivrit.NotificationService` and `ai.ivrit.ShareExtension` (registered by `ios-signing.py`), App Group `group.ai.ivrit` | The app record and the App Group are made by hand; the group must be assigned to all three identifiers by hand too (the API cannot) |
+| App Store Connect API key (.p8, key id, issuer id) | GitHub secrets `ASC_KEY` (the file's contents), `ASC_KEY_ID`, `ASC_ISSUER_ID` |
+| The distribution certificate (`ios-signing.py certificate`; expires 2027-10-12) | `~/keys/ios-distribution.p12` and its `.password`; GitHub secrets `IOS_DIST_P12` (base64), `IOS_DIST_P12_PASSWORD`, `IOS_CERT_ID` |
 | APNs key (.p8, key id) | Communicator secrets `APNS_KEY`, `APNS_KEY_ID` (and `APNS_TEAM_ID`) |
 | Google Cloud: an iOS OAuth client for `ai.ivrit`, in the same project as the web client | `GOOGLE_IOS_CLIENT_ID` and `GOOGLE_REVERSED_CLIENT_ID` in `Config.xcconfig`; `GOOGLE_IOS_CLIENT_ID` on the app server |
 
