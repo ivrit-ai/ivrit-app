@@ -57,6 +57,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit
         PROVISIONING_PROFILE_SPECIFIER: $(IVRIT_PROFILE_APP)
+        # Per target: XcodeGen's presets set a development identity here.
+        CODE_SIGN_STYLE: $(IVRIT_SIGN_STYLE)
+        CODE_SIGN_IDENTITY: $(IVRIT_SIGN_IDENTITY)
+        "CODE_SIGN_IDENTITY[sdk=iphoneos*]": $(IVRIT_SIGN_IDENTITY)
         PRODUCT_NAME: App
         INFOPLIST_FILE: App/Info.plist
         CODE_SIGN_ENTITLEMENTS: App/App.entitlements
@@ -81,6 +85,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.NotificationService
         PROVISIONING_PROFILE_SPECIFIER: $(IVRIT_PROFILE_NOTIFICATION_SERVICE)
+        # Per target: XcodeGen's presets set a development identity here.
+        CODE_SIGN_STYLE: $(IVRIT_SIGN_STYLE)
+        CODE_SIGN_IDENTITY: $(IVRIT_SIGN_IDENTITY)
+        "CODE_SIGN_IDENTITY[sdk=iphoneos*]": $(IVRIT_SIGN_IDENTITY)
         INFOPLIST_FILE: NotificationService/Info.plist
         CODE_SIGN_ENTITLEMENTS: NotificationService/NotificationService.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -97,6 +105,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.ivrit.ShareExtension
         PROVISIONING_PROFILE_SPECIFIER: $(IVRIT_PROFILE_SHARE_EXTENSION)
+        # Per target: XcodeGen's presets set a development identity here.
+        CODE_SIGN_STYLE: $(IVRIT_SIGN_STYLE)
+        CODE_SIGN_IDENTITY: $(IVRIT_SIGN_IDENTITY)
+        "CODE_SIGN_IDENTITY[sdk=iphoneos*]": $(IVRIT_SIGN_IDENTITY)
         INFOPLIST_FILE: ShareExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: ShareExtension/ShareExtension.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
