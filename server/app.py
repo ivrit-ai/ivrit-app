@@ -394,8 +394,36 @@ backend_version = None
 
 
 def get_session(request: Request) -> Optional[dict]:
-    """Return the session carried by the request's cookie, or None (always None in local mode)."""
-    return auth_cookies.read_session(request) if auth_cookies else None
+    """Return the session carried by the request's cookie, or the one its app session
+    token stands for (bearer_session, set by require_google_login); None otherwise
+    (always None in local mode)."""
+    session = auth_cookies.read_session(request) if auth_cookies else None
+    return session or getattr(request.state, "session", None)
+
+
+async def bearer_session(request: Request) -> Optional[dict]:
+    """A session for a request with the app's own session token instead of the
+    cookie: the Android app's background uploads (a watched folder), which run for
+    months, past the cookie's 30 days. The Drive access and RunPod key are those the
+    server keeps for the account; None without them."""
+    header = request.headers.get("authorization", "")
+    sessions = getattr(app.state, "app_sessions", None)
+    if not sessions or not header.startswith("Bearer "):
+        return None
+    try:
+        email = sessions.verify(header[7:])["email"]
+    except Exception:
+        return None
+    refresh_token = await stored_refresh_token(email)
+    if not refresh_token:
+        return None
+    runpod_token, failed = "", False
+    try:
+        runpod_token = await runpod_key_store.load(refresh_token) or ""
+    except Exception as e:
+        logger.warning("Could not load %s's RunPod key: %r", email, e)
+        failed = True
+    return {"user_email": email, "refresh_token": refresh_token, "runpod_token": runpod_token, "runpod_key_load_failed": failed}
 
 
 def get_user_email(request: Request) -> Optional[str]:
@@ -440,7 +468,10 @@ async def require_google_login(request: Request):
         return
 
     if get_session(request) is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+        session = await bearer_session(request)
+        if session is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+        request.state.session = session
 
 # Import Google OAuth constants only if not in local mode
 # (gdrive_auth will be imported conditionally to avoid requiring env vars in local mode)
@@ -798,6 +829,32 @@ toc_locks = {}
 
 # The My files folder each job's transcript is headed for, when not the top folder.
 job_folders: Dict[str, str] = {}
+# Where a job's file came from, when the client says (search's "source" filter).
+UPLOAD_ORIGINS = {"upload", "record", "share", "watch"}
+job_origins: Dict[str, str] = {}
+# A client's own id for an upload, so a retry never makes a second job.
+UPLOAD_ID = re.compile(r"^[A-Za-z0-9_.:-]{8,100}$")
+UPLOAD_ID_TTL_SECONDS = 24 * 3600
+recent_uploads: Dict[Tuple[str, str], Tuple[str, float]] = {}
+job_upload_ids: Dict[str, str] = {}
+
+
+async def earlier_upload(user_email: str, upload_id: str) -> Optional[str]:
+    """The job an upload id already made, here or (after a restart) at the hub."""
+    now = time.time()
+    for key in [k for k, (_, at) in recent_uploads.items() if now - at > UPLOAD_ID_TTL_SECONDS]:
+        recent_uploads.pop(key, None)
+    known = recent_uploads.get((user_email, upload_id))
+    if known:
+        return known[0]
+    if HUB_MODE:
+        try:
+            for j in await hub.client.jobs(owner=hub.owner_of(user_email)):
+                if (j.get("spec") or {}).get("upload_id") == upload_id:
+                    return j["job_id"]
+        except Exception as e:
+            logger.warning("Could not ask the hub about upload %s: %r", upload_id, e)
+    return None
 
 # LRU cache for persistent TOC data (keyed by refresh_token hash)
 TOC_CACHE_MAX_SIZE = int(os.environ.get("TOC_CACHE_MAX_SIZE", "100"))
@@ -1409,6 +1466,8 @@ async def hub_queue_job(job_id, user_email, filename, duration, runpod_token, la
         "save_audio": bool(save_audio),
         "path": temp_files.get(job_id),
         "folder": job_folders.get(job_id),
+        "origin": job_origins.get(job_id),
+        "upload_id": job_upload_ids.get(job_id),
     }
     await remember_drive_grant(user_email, refresh_token)
     try:
@@ -1431,6 +1490,7 @@ async def hub_queue_job(job_id, user_email, filename, duration, runpod_token, la
         qtime=time.time(), utime=time.time(), id=job_id, filename=filename, user_email=user_email,
         duration=duration, runpod_token=runpod_token, uses_custom_runpod=byok, language=language,
         refresh_token=refresh_token, save_audio=save_audio, job_type=job_type, folder=job_folders.get(job_id),
+        origin=job_origins.get(job_id),
     )
     user_jobs.setdefault(user_email, set()).add(job_id)
     queue_depth = max(0, (view.get("position") or 1) - 1)
@@ -1519,6 +1579,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
         job_desc.refresh_token = refresh_token
         job_desc.save_audio = save_audio
         job_desc.folder = job_folders.get(job_id)
+        job_desc.origin = job_origins.get(job_id)
 
         # Determine queue type based on job characteristics
         if job_desc.uses_custom_runpod or in_local_mode:
@@ -3768,6 +3829,8 @@ async def upload_file(
     language: Optional[str] = Form(None),
     save_audio: Optional[str] = Form(None),
     folder: Optional[str] = Form(None),
+    origin: Optional[str] = Form(None),
+    upload_id: Optional[str] = Form(None),
 ):
     job_id = str(uuid.uuid4())
     user_email = get_user_email(request)
@@ -3802,6 +3865,16 @@ async def upload_file(
 
     refresh_token = get_refresh_token(request)
 
+    # The same upload again (a retry after a lost answer): the job it made already,
+    # before anything else, so the first one's own limits do not refuse it.
+    if upload_id and UPLOAD_ID.match(upload_id):
+        earlier = await earlier_upload(user_email, upload_id)
+        if earlier:
+            log_message(f"{user_email}: Upload {upload_id} already made job {earlier}; not again")
+            return Response(
+                json.dumps({"type": "transcoding_complete", "job_id": earlier, "duplicate": True}) + "\n",
+                media_type="application/x-ndjson")
+
     log_message(f"{user_email}: Validating upload metadata (job_id={job_id}, content_length={content_length})")
     metadata, error_response = await validate_upload_request_metadata(
         request,
@@ -3822,6 +3895,12 @@ async def upload_file(
         return folder_not_found_response()
     if destination:
         job_folders[job_id] = destination
+    if origin in UPLOAD_ORIGINS:
+        job_origins[job_id] = origin
+    if upload_id and UPLOAD_ID.match(upload_id):
+        recent_uploads[(user_email, upload_id)] = (job_id, time.time())
+        job_upload_ids[job_id] = upload_id
+
     
     log_message(f"{user_email}: Upload metadata validated successfully (job_id={job_id})")
 
@@ -4334,8 +4413,10 @@ async def handle_transcoding(job_id: str):
 
 
 def cleanup_temp_file(job_id):
-    # The job carries its folder by now (job_desc.folder, the hub's spec).
+    # The job carries its folder and origin by now (job_desc, the hub's spec).
     job_folders.pop(job_id, None)
+    job_origins.pop(job_id, None)
+    job_upload_ids.pop(job_id, None)
     if job_id in temp_files:
         temp_file_path = temp_files[job_id]
         try:
@@ -5020,6 +5101,8 @@ async def transcribe_job(job_desc, hub_entry=None):
                 "status": "Ready",
                 "toc_version": toc_version,
             }
+            if job_desc.get("origin"):
+                toc_entry["origin"] = job_desc.origin
             # The readable copy, beside the JSON (never holding the transcript back).
             doc_id = await write_readable_doc(
                 job_desc.refresh_token, job_desc.user_email, folder, toc_entry, job_results[job_id]["results"])
@@ -5290,6 +5373,7 @@ async def rebuild_job_desc(grant: dict):
         save_audio=bool(spec.get("save_audio")),
         job_type=PRIVATE if byok else (SHORT if duration <= SHORT_JOB_THRESHOLD else LONG),
         folder=spec.get("folder"),
+        origin=spec.get("origin"),
     )
 
 

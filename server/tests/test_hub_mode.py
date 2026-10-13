@@ -201,19 +201,22 @@ class Api:
         except urllib.error.HTTPError as e:
             return e.code, e.read()
 
-    def upload(self, email, path, name, folder=None):
+    def upload(self, email, path, name, folder=None, token=None, extra=()):
         boundary = uuid.uuid4().hex
         with open(path, "rb") as f:
             content = f.read()
         parts = []
-        fields = [("language", "he"), ("save_audio", "true")] + ([("folder", folder)] if folder else [])
+        fields = [("language", "he"), ("save_audio", "true")] + ([("folder", folder)] if folder else []) + list(extra)
         for key, value in fields:
             parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode())
         parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
                      f"Content-Type: audio/ogg\r\n\r\n".encode() + content + b"\r\n")
         parts.append(f"--{boundary}--\r\n".encode())
-        status, body = self.call("POST", "/upload", email, raw=b"".join(parts),
-                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, timeout=120)
+        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        if token:
+            headers["Authorization"] = "Bearer " + token
+        status, body = self.call("POST", "/upload", None if token else email, raw=b"".join(parts),
+                                 headers=headers, timeout=120)
         events = [json.loads(line) for line in body.decode().splitlines() if line.strip()] if status == 200 else []
         return status, events, body
 
@@ -473,6 +476,28 @@ def main():
               and os.listdir(os.path.join(ada, ".trash")), status)
         status, _ = api.call("DELETE", f"/appdata/folders/{q(tree['top'])}", "ada@example.com")
         check("...but never the top folder", status == 400, status)
+
+        # --- the Android app's watched folders: uploads with the app's own session, once each
+        from app_sessions import Sessions
+        ada_token = Sessions("https://app.ivrit.ai", "test-client", APP_SESSION_KEY).issue("ada-sub", "ada@example.com")["token"]
+        upload_id = "watch-" + uuid.uuid4().hex
+        watched = make_audio("watched.ogg", 15)
+        status, events, raw = api.upload(None, watched, "watched.ogg", token=ada_token,
+                                         extra=(("origin", "watch"), ("upload_id", upload_id)))
+        check("an upload with the app's session token, no cookie, is taken",
+              status == 200 and any(e.get("type") == "transcoding_complete" for e in events), (status, raw[:200]))
+        status, events, raw = api.upload(None, watched, "watched.ogg", token=ada_token,
+                                         extra=(("origin", "watch"), ("upload_id", upload_id)))
+        check("...and the same upload again makes no second job",
+              status == 200 and events and events[0].get("duplicate"), (status, raw[:200]))
+        status, _, _ = api.upload(None, watched, "watched.ogg", token=ada_token[:-4] + "AAAA")
+        check("...while a forged token is refused", status == 401, status)
+        w = wait_until(lambda: ready(api, "ada@example.com", "watched.ogg"), 60)
+        check("it is transcribed once, marked as from a watched folder",
+              w and w.get("origin") == "watch" and sum(1 for e in api.toc("ada@example.com") if e.get("source_filename") == "watched.ogg") == 1, w)
+        if w:
+            doc = wait_until(lambda: (search_shard(api, "ada@example.com")[0] or {}).get(w["results_id"]), 10)
+            check("...in search too", doc and doc.get("origin") == "watch", doc)
 
         # --- one RunPod slot: a second user's file waits its turn, and says so
         rp.delay = 6.0
