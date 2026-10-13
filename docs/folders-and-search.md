@@ -6,8 +6,8 @@ Three features over My files, which lives in the user's Google Drive:
    browsable in the app.
 2. **Watched folders** on Android: each chosen phone folder is transcribed
    automatically into a My files folder of the user's choosing.
-3. **Search** across every transcript in the app's Drive folder, fast and on the
-   device.
+3. **Search** across everything (transcripts in every folder, clips, inbox
+   messages), fast, on the device, filterable by folder and by source.
 
 ## Where things stand
 
@@ -30,7 +30,7 @@ Three features over My files, which lives in the user's Google Drive:
 |---|---|
 | Where destination folders live | Under the app's Drive folder, made by the app (any depth) |
 | What a folder holds | Self-contained: its own `toc.json.gz`, the transcripts' `.json.gz`/`.edits.json.gz`/`.opus`, a readable Google Doc per transcript, and its own search index |
-| Search scope | Transcripts in the app's Drive folder (all its folders). Clips and the inbox are not searched. The index carries the text; a result opens the transcript, and its audio loads only when played |
+| Search scope | Everything: transcripts in every folder, clips, and inbox messages, filterable by where (folder, clips, inbox) and by source |
 | Where the search index lives | The user's Drive, one file per folder; searched on the device |
 
 The old site reads only the top folder's `toc.json.gz`, so it never sees
@@ -106,40 +106,122 @@ after a server restart too.
 - The reader's address becomes `#t/<id>?f=<folder>`; links without a folder
   (notifications, old links) search the folders for the id.
 
-## 2. Search
+## 2. Search across everything
 
-### The index
+### What is searched
 
-- One `search.json.gz` per folder, beside its `toc.json.gz`:
-  `{version: 1, entries: {<id>: {title, created, duration, language, stamp,
-  segments: [[start, speaker, text], …]}}}`, the text as edited, speakers by
-  their given names. About 30–40 KB compressed per hour of audio.
-- `stamp` names what the entry was made from (the JSON's and the edits file's
-  Drive versions), so a stale entry is recognised.
-- The server writes it wherever it writes the toc: completion, edit save,
-  rename, move, delete.
-- **Reconciliation**, when the app asks for a folder's index: entries for
-  transcripts the old site made or edited (no index update there) are filled in
-  or refreshed from their files, a few at a time, so the first search of an
-  existing account works too.
+| Collection | Where its text is | Its search index | Kept up to date by |
+|---|---|---|---|
+| **Transcripts**, every My files folder | Drive: `<id>.json.gz` + `<id>.edits.json.gz` per folder | `search.json.gz` in each folder | the server, wherever it writes that folder's toc |
+| **Clips** (Eliezer and shared recordings saved to Drive) | Drive: "ivrit.ai clips" | `search.json.gz` in the clips folder | the server, in `/clips/save` |
+| **Inbox messages** (all sources) | the device (IndexedDB `notifier`) | none needed: read straight from the store | the existing sync |
 
-### On the device
+A clip and its inbox message share an id; when both exist, search shows one
+result (the inbox message, which opens in place) and keeps the clip's Drive
+location as where it is also saved. Clips are what keep Eliezer transcripts
+searchable on a new phone or after a reinstall, since the server keeps messages
+for 3 days and the device's inbox starts empty.
 
-- `GET /appdata/folders` reports each folder's index version; the app downloads
-  only indexes that changed (`GET /appdata/search-index?folder=`) and keeps them
-  in IndexedDB.
-- Searching is in memory: each segment's text normalised once at load, then
-  plain substring matching, which is milliseconds over hundreds of hours.
-- Hebrew normalisation: niqqud and cantillation dropped, final letters (ך ם ן ף
-  ץ) folded to their regular forms, geresh and gershayim variants unified; a word
-  also matches after a one- or two-letter prefix (ו ה ב ל מ ש כ), so "בית"
-  finds "ובבית".
-- Results grouped by transcript, newest first: the title, the folder path, and
-  each hit as a snippet with its time and speaker. Opening one opens the reader at
-  that segment, highlighted; the transcript and audio load then, as they do
-  today.
-- A search box in My files, over all folders, with "this folder only" as a
-  filter.
+### The index file (per folder, and one for clips)
+
+```json
+{ "version": 1,
+  "updated": 1765400000,
+  "docs": {
+    "<id>": { "title": "...", "created": 1765390000, "duration": 1834,
+              "language": "he", "origin": "upload|record|watch|whatsapp|app|eliezer",
+              "stamp": "<json file version>.<edits file version>",
+              "segments": [[12.4, "דנה", "the segment's text, as edited"], ...] } } }
+```
+
+- Text as the user sees it: edits applied, speakers by their given names.
+  Clips have one segment (start 0, no speaker).
+- About 30–40 KB compressed per hour of audio. A folder's file is rewritten
+  whole (under that folder's lock) when one of its transcripts changes.
+- **Reconciliation:** when the app asks for a folder's index, the server
+  compares the toc with the index: transcripts missing from it (old ones, or
+  made by the old site in the top folder) or whose `stamp` changed (edited on
+  the old site) are filled in from their files, a few at a time, and the app is
+  told how many are still being added. Clips likewise, from the clips toc.
+
+### How a search runs, step by step
+
+```
+ app opens My files / search
+   │  GET /appdata/search/manifest  → [{shard: folder id | "clips", path, version}]
+   ▼
+ shard cache (IndexedDB "ivrit-search")      inbox store (IndexedDB "notifier")
+   │  download only shards whose version changed    │  store.all(), and every new message
+   ▼                                                ▼
+ in-memory corpus: one record per segment
+   { doc, collection, folder path | source, title, time, speaker,
+     original text, normalised text }
+   │
+   │  user types (debounced 150 ms)  → normalise query → tokens
+   ▼
+ match → rank → group by document → snippets with highlights → facet counts
+```
+
+1. **Loading.** On first search (or opening My files), the app fetches the
+   manifest (one cheap call: Drive's folder listing plus each index file's
+   version), downloads the indexes whose version changed, and keeps them in
+   IndexedDB. Inbox messages come from the existing store, and new ones are added
+   as they arrive. On a typical account this is a few hundred KB, once.
+2. **Normalising**, done once per segment at load and to every query, so both
+   sides compare the same way:
+   - Hebrew: niqqud and cantillation removed; final letters (ך ם ן ף ץ) folded to
+     their regular forms; geresh/gershayim and quote variants unified; maqaf to
+     a space.
+   - Other scripts: lower case, accents removed.
+   - Punctuation becomes spaces; runs of spaces collapse.
+3. **Matching.** The query splits into words; a segment (or message) matches
+   when every word is found in it:
+   - a word matches at the start of a word in the text, or after one or two
+     Hebrew prefix letters (ו ה ב ל מ ש כ) at the start of that word, so "בית"
+     finds "ובבית" and "שבית", but not "תבית";
+   - it may run on to the end of the word, so "ספר" finds "ספרים";
+   - "quoted words" must appear together, in that order;
+   - a word may also match the title, the speaker's name, or the source's name
+     (so "דנה" finds what Dana said).
+   This is plain string scanning over the normalised text: a few milliseconds
+   over hundreds of hours on a phone. If it ever gets slow, it moves into a Web
+   Worker unchanged.
+4. **Ranking.** Documents, best first: a quoted phrase found > all words in one
+   segment > all words across nearby segments > title only; then more matching
+   segments; then newer.
+5. **Results.** Grouped by document: the title, where it is (folder path, Clips,
+   or the inbox source with its icon), the date, and up to three hits, each a
+   snippet with the matched words highlighted, its time (for transcripts) and
+   speaker. "+N more" expands.
+6. **Filters**, combinable, each with counts that follow the query:
+   - **Where:** All · My files (any folder, with the folder tree to narrow to one
+     folder and its subfolders) · Clips · Inbox.
+   - **Source:** Eliezer (WhatsApp/Telegram) · shared from WhatsApp · shared
+     recordings · uploads and recordings · watched folders · and each other inbox
+     source from the catalog (`/api/sources`).
+   - **Date** (any, past week, month, year) and **language**.
+7. **Opening a result.**
+   - A transcript: the reader at that segment, highlighted and scrolled to
+     (`#t/<id>?f=<folder>&s=<segment>`); its JSON and audio load then, as now.
+   - A clip: its inbox message if it is on this device; otherwise its text is
+     loaded from Drive (`GET /clips/<id>`, new) and shown in the message view.
+   - An inbox message: the message, as `#m/<id>` does now.
+
+### Where it appears
+
+- One search screen, opened from a search field at the top of the inbox and of
+  My files (with "Where" preset to where it was opened from). It replaces the
+  inbox's current text box (`visibleMessages`), which becomes this search with
+  Where = Inbox.
+- Settings shows the index's state: documents indexed, still being added, and a
+  "rebuild" action.
+- Signing out clears the shard cache.
+
+### Privacy
+
+Indexes live in the user's own Drive folders and in the device's storage, never
+on our server; the server only computes them as it already handles the
+transcripts. Deleting a transcript, folder or clip removes it from its index.
 
 ## 3. Watched folders (Android)
 
@@ -175,7 +257,7 @@ after a server restart too.
 | Phase | Work | Estimate |
 |---|---|---|
 | 1 | Folders: storage by folder, routes with `folder`, folder routes, moves, readable Docs (and the Python `effective`), job spec, My files browsing and moving, upload destination; tests in the hub harness | 3 days |
-| 2 | Search: per-folder index written by the server, reconciliation, the device cache, Hebrew normalisation, the search screen, opening at a hit | 3 days |
+| 2 | Search: index files for folders and clips (server), manifest and reconciliation, `GET /clips/<id>`, the device cache and corpus, normalisation and matching, ranking, the search screen with filters, opening at a hit; replaces the inbox text box | 3–4 days |
 | 3 | Watched folders: the Android watches and worker, `/upload` with the app token and upload id, Settings, the disclosure, real-phone tests (voice recorder, call recorder, WhatsApp), a Play release | 3–4 days + Play review |
 
 Phase 1 helps every platform, and phase 3 needs its folders. The privacy policy
