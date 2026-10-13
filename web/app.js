@@ -3,6 +3,8 @@ import { ApiError, createCommunicator, pushSupported } from "./client/communicat
 import * as transcribeApi from "./transcription/api.js";
 import * as transcription from "./transcription/view.js";
 import * as transcriptionSettings from "./transcription/settings.js";
+import { createLibrary } from "./search/library.js";
+import * as searchView from "./search/view.js";
 
 const $ = (id) => document.getElementById(id);
 const store = self.NotifierStore;
@@ -138,6 +140,43 @@ function sourceName(message) {
   const source = sourceOf(message);
   return source ? localized(source, "name") : message.source;
 }
+
+// ---------------------------------------------------------------- search
+
+// Search across everything: transcripts in My files, clips, and these messages
+// (web/search/). Its own screen, opened from the inbox's search field and from My
+// files; back returns where it was opened from.
+const library = createLibrary({
+  sourceName: (sourceId, source) => sourceName({ source_id: sourceId, source }),
+  onChange: () => searchView.changed(),
+});
+let searchFrom = "inbox";
+
+function openSearch({ query = "", where = [] } = {}) {
+  if (state.view !== "search") searchFrom = state.view;
+  showView("search");
+  searchView.open($("view-search"), { query, where });
+}
+
+searchView.init({
+  el,
+  icon,
+  t,
+  locale: () => locale(),
+  sourceName: (sourceId) => (sourceId ? sourceName({ source_id: sourceId, source: "" }) : ""),
+  back: () => showView(searchFrom),
+  openMessage: (id) => (location.hash = `#m/${encodeURIComponent(id)}`),
+  async openTranscript(id, folder, at) {
+    showView("transcribe");
+    if (await showTranscribeApp()) transcription.openResults(id, folder, at);
+  },
+  async openClip(id, title) {
+    const res = await fetch(`/appdata/clips/${encodeURIComponent(id)}`, { credentials: "same-origin" }).catch(() => null);
+    if (!res?.ok) return toast(t("clipNotFound"));
+    const clip = await res.json();
+    transcriptionHost.sheet.open(clip.title || title || t("untitled"), el("p", { class: "search-clip", dir: "auto", text: clip.text || "" }));
+  },
+}, library);
 
 function avatar({ icon: src, name }, big = false) {
   const cls = `avatar${big ? " big" : ""}`;
@@ -448,6 +487,8 @@ async function refreshCatalog() {
 
 async function loadMessages() {
   state.messages = await store.all();
+  library.setMessages(state.messages);
+  searchView.changed();
   saveClips();
   const unread = state.messages.filter((m) => !m.read).length;
   $("unread-badge").hidden = !unread;
@@ -1063,6 +1104,7 @@ async function renderDiagnostics() {
 async function forgetThisDevice() {
   await communicator.forgetDevice();
   await store.clear();
+  await library.clear();
   await store.updateBadge().catch(() => {});
 }
 
@@ -1511,6 +1553,7 @@ const transcriptionHost = {
   showTranscribe() {
     if (state.view !== "transcribe") showView("transcribe");
   },
+  openSearch: () => openSearch({ where: ["transcript"] }),
 };
 
 async function showTranscribeApp() {
@@ -1682,7 +1725,7 @@ async function saveClips() {
 
 // ---------------------------------------------------------------- views
 
-const VIEWS = ["inbox", "transcribe", "sources", "settings"];
+const VIEWS = ["inbox", "transcribe", "sources", "settings", "search"];
 
 function showView(name) {
   if (!VIEWS.includes(name)) name = "inbox";
@@ -1693,8 +1736,8 @@ function showView(name) {
     else button.removeAttribute("aria-current");
   }
   for (const view of VIEWS) $(`view-${view}`).hidden = view !== name;
-  // Transcribing (files, the editor) wants the width of the screen.
-  $("main").classList.toggle("wide", name === "transcribe");
+  // Transcribing (files, the editor) and search want the width of the screen.
+  $("main").classList.toggle("wide", name === "transcribe" || name === "search");
   window.scrollTo({ top: 0 });
   rerender();
 }
@@ -1729,9 +1772,12 @@ for (const button of document.querySelectorAll("[data-locale]")) {
   button.addEventListener("click", () => changeLocale(button.dataset.locale));
 }
 
+// The inbox's search field opens the search screen, on messages to start with.
 $("search").addEventListener("input", (event) => {
-  state.query = event.target.value;
-  renderInbox();
+  const query = event.target.value;
+  event.target.value = "";
+  state.query = "";
+  if (query.trim()) openSearch({ query, where: ["message"] });
 });
 
 $("mark-all").addEventListener("click", () => read(state.messages.filter((m) => !m.read).map((m) => m.id)));
@@ -1987,7 +2033,10 @@ $("install").addEventListener("click", async () => {
 // messages.
 async function claimStore(sub) {
   const owner = await store.getMeta("owner");
-  if (owner && owner !== sub) await store.clear();
+  if (owner && owner !== sub) {
+    await store.clear();
+    await library.clear();
+  }
   if (owner !== sub) await store.setMeta("owner", sub);
 }
 

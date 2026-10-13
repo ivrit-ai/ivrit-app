@@ -237,7 +237,36 @@ try {
   check("a short transcript is saved to the clips folder, once", clip.first.saved === true && clip.second.already === true, JSON.stringify(clip));
   const { readdirSync } = await import("node:fs");
   const files = (() => { try { return readdirSync(path.join(info.work, "drive", "clips", "rt-dana")); } catch { return []; } })();
-  check("...in a folder apart from the transcriptions", files.includes("toc.json.gz") && files.length === 2, files.join(","));
+  check("...in a folder apart from the transcriptions, with its search index", files.includes("toc.json.gz")
+    && files.includes("search.json.gz") && files.length === 3, files.join(","));
+
+  // --- search across everything
+  await page.goto(`${origin}/#transcribe`);
+  await page.waitForSelector("#tr-list:not([hidden]) .icon-btn[aria-label='חיפוש']", { timeout: 20000 });
+  await page.click("#tr-list .icon-btn[aria-label='חיפוש']");
+  await page.waitForSelector("#search-q");
+  await page.fill("#search-q", "תמלול");
+  const found = await page.waitForSelector("#search-results .search-result .search-hit mark", { timeout: 30000 }).catch(() => null);
+  check("search finds a transcript's words, marked, starting in My files", Boolean(found)
+    && (await page.locator("#search-filters .chip[aria-pressed='true']").first().textContent()).includes("הקבצים שלי"));
+  await shot("12-search");
+  await page.click("#search-filters .chip:has-text('הכול')");
+  await page.fill("#search-q", "קצר");
+  const clipFound = await page.waitForSelector("#search-results .search-result:has-text('קטעים')", { timeout: 20000 }).catch(() => null);
+  check("...and, widened to everything, a clip", Boolean(clipFound));
+  await page.fill("#search-q", "תמלול");
+  await page.waitForSelector("#search-results .search-hit");
+  // A transcript's hit (one with a time); the clip says "תמלול" too.
+  await page.click("#search-results .search-result:has(.search-time) .search-hit >> nth=0");
+  const at = await page.waitForSelector("#tr-reader .tr-seg.found", { timeout: 20000 }).catch(() => null);
+  check("a hit opens the transcript at that sentence", Boolean(at) && page.url().includes("t="), page.url());
+  await page.click("#tabs button[data-view='inbox']");
+  await page.fill("#search", "ש");
+  const fromInbox = await page.waitForSelector("#view-search:not([hidden]) #search-q", { timeout: 5000 }).catch(() => null);
+  check("the inbox's search field opens search, on messages", Boolean(fromInbox)
+    && (await page.inputValue("#search-q")) === "ש"
+    && (await page.locator("#search-filters .chip[aria-pressed='true']").first().textContent()).includes("הודעות"));
+  await page.click(".search-top .icon-btn");
 
   // --- a phone
   await page.setViewportSize({ width: 412, height: 860 });

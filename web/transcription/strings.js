@@ -891,6 +891,7 @@ const NATIVE = {
     saveTo: "לשמור ב", moveTo: "העברה לתיקייה", moveToLabel: "לאן להעביר", moveHere: "העברה", movedTo: "הועבר אל „{name}”",
     folderError: "הפעולה על התיקייה לא הצליחה", moveError: "ההעברה לא הצליחה",
     errorFolderName: "שם תיקייה לא תקין", errorFolderExists: "כבר יש כאן תיקייה בשם הזה", errorFolderNotFound: "התיקייה לא נמצאה", errorFolderTop: "את התיקייה הראשית אי אפשר לשנות",
+    searchFiles: "חיפוש",
   },
   yi: {
     uploadFile: "אַרויפֿלאָדן אַ טעקע", record: "רעקאָרדירן", newTitle: "נײַע טראַנסקריפּציע", filesWord: "טעקעס",
@@ -915,6 +916,7 @@ const NATIVE = {
     saveTo: "אויפֿהיטן אין", moveTo: "איבערפֿירן צו אַן אָרדנער", moveToLabel: "וווּהין", moveHere: "איבערפֿירן", movedTo: "איבערגעפֿירט צו „{name}”",
     folderError: "ס'איז ניט געלונגען", moveError: "דאָס איבערפֿירן איז ניט געלונגען",
     errorFolderName: "אַ ניט־גילטיקער נאָמען", errorFolderExists: "ס'איז שוין דאָ אַן אָרדנער מיט דעם נאָמען", errorFolderNotFound: "דער אָרדנער איז ניט געפֿונען", errorFolderTop: "דעם הויפּט־אָרדנער קען מען ניט בײַטן",
+    searchFiles: "זוכן",
   },
   en: {
     uploadFile: "Upload a file", record: "Record", newTitle: "New transcription", filesWord: "files",
@@ -939,6 +941,7 @@ const NATIVE = {
     saveTo: "Save to", moveTo: "Move to folder", moveToLabel: "Move to", moveHere: "Move", movedTo: "Moved to “{name}”",
     folderError: "That didn't work", moveError: "Could not move it",
     errorFolderName: "Not a valid folder name", errorFolderExists: "There's already a folder with that name here", errorFolderNotFound: "Folder not found", errorFolderTop: "The top folder can't be changed",
+    searchFiles: "Search",
   },
 };
 Object.assign(he, NATIVE.he);

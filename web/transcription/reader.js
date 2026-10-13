@@ -39,17 +39,17 @@ export function init(hostApi, viewHooks) {
   });
 }
 
-// A transcript's address: #t/<id>, with ?f=<folder> when it is in one (and &s=<segment>
-// to open at a sentence).
-export function address(id, folder, segment) {
+// A transcript's address: #t/<id>, with ?f=<folder> when it is in one (and &t=<seconds>
+// to open at the sentence then, as a search result does).
+export function address(id, folder, at) {
   const query = new URLSearchParams();
   if (folder) query.set("f", folder);
-  if (segment != null) query.set("s", String(segment));
+  if (at != null) query.set("t", String(at));
   const rest = query.toString();
   return `#t/${encodeURIComponent(id)}${rest ? `?${rest}` : ""}`;
 }
 
-export const navigate = (id, folder, segment) => (location.hash = address(id, folder, segment));
+export const navigate = (id, folder, at) => (location.hash = address(id, folder, at));
 export const busy = () => dirty();
 
 export function relocalize() {
@@ -81,8 +81,8 @@ function keepDraft() {
 
 // ------------------------------------------------------------------ opening
 
-export async function open(id, entry, folder = null) {
-  if (doc?.id === id && doc.folder === folder && document.getElementById("tr-reader")) return;
+export async function open(id, entry, folder = null, at = null) {
+  if (doc?.id === id && doc.folder === folder && document.getElementById("tr-reader")) return showAt(at);
   const { el } = host;
   editing = false;
   mode = "new";
@@ -105,7 +105,23 @@ export async function open(id, entry, folder = null) {
     return leave();
   }
   render();
+  showAt(at);
   offerDraft();
+}
+
+// The sentence at a moment (a search result's), brought into view and marked, with
+// the audio there too.
+function showAt(at) {
+  if (at == null || !doc) return;
+  const index = doc.results.findIndex((s) => Math.abs((s.start || 0) - at) < 0.05);
+  const found = index >= 0 ? index : doc.results.findIndex((s) => s.start <= at && at <= s.end);
+  const node = found >= 0 ? document.querySelector(`#tr-text .tr-seg[data-i="${found}"]`) : null;
+  if (!node) return;
+  document.querySelector("#tr-text .tr-seg.found")?.classList.remove("found");
+  node.classList.add("found");
+  node.scrollIntoView({ block: "center" });
+  const audio = document.getElementById("tr-audio");
+  if (audio) audio.currentTime = doc.results[found].start || 0;
 }
 
 async function offerDraft() {

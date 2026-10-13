@@ -326,6 +326,11 @@ button.tr-who::after,
   background: var(--paper-2);
 }
 
+/* A search result's sentence, until the audio moves on. */
+.tr-seg.found {
+  background: var(--accent-soft);
+}
+
 .tr-seg.playing {
   background: var(--accent-soft);
   box-shadow: 0 0 0 2px var(--accent-soft);

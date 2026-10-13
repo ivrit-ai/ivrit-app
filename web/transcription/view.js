@@ -73,6 +73,7 @@ function renderShell() {
         el("h2", { class: "title", text: tr("viewTitle") }),
         el("p", { id: "tr-quota", class: "lede tr-quota" }),
       ]),
+      el("button", { class: "icon-btn", type: "button", "aria-label": tr("searchFiles"), title: tr("searchFiles"), onclick: () => host.openSearch() }, [icon("search")]),
       el("button", { class: "icon-btn", type: "button", "aria-label": tr("settings"), title: tr("settings"), onclick: () => host.openSettings() }, [icon("settings")]),
     ]),
     el("div", { class: "row tr-actions" }, [
@@ -640,11 +641,11 @@ async function route() {
   if (id === "stats") return import("./nerds.js").then((m) => m.open(host, showScreen));
   const query = new URLSearchParams(match[2] || "");
   let where = query.get("f") || null;
-  const segment = query.has("s") ? Number(query.get("s")) : null;
+  const at = query.has("t") ? Number(query.get("t")) : null;
   // A link that names no folder (a notification, an older link): find it.
   if (!query.has("f") && !entries.some((e) => e.results_id === id)) where = await locate(id);
   const entry = where === folder ? entries.find((e) => e.results_id === id) : undefined;
-  reader.open(id, entry, where, segment);
+  reader.open(id, entry, where, at);
 }
 
 // The folder a transcript is in: the top folder's list first, then each folder's.
@@ -656,4 +657,4 @@ async function locate(id) {
   return null;
 }
 
-export const openResults = (id, inFolder) => reader.navigate(id, inFolder);
+export const openResults = (id, inFolder, at) => reader.navigate(id, inFolder, at);

@@ -814,7 +814,8 @@ main {
   font-size: 11px;
 }
 
-.chip[aria-selected="true"] {
+.chip[aria-selected="true"],
+.chip[aria-pressed="true"] {
   background: var(--ink);
   border-color: var(--ink);
   color: var(--paper);
@@ -1702,3 +1703,86 @@ h4.field {
 .countdown {
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- search (web/search/view.js) ---------- */
+
+.search-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 10px;
+}
+
+/* Back points back: right in Hebrew, left in English. */
+[dir="ltr"] .search-top .icon-btn .i {
+  transform: scaleX(-1);
+}
+
+.search-filters .chips {
+  margin-bottom: 2px;
+}
+
+.chip .count {
+  font-weight: 600;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.search-folder {
+  max-width: 340px;
+  margin: 2px 0 8px;
+}
+
+.search-status {
+  min-height: 1.4em;
+  margin: 4px 0 10px;
+  font-size: 14px;
+}
+
+.search-result .msg-head span {
+  overflow-wrap: anywhere;
+}
+
+.search-hit {
+  display: block;
+  width: 100%;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.6;
+  text-align: start;
+  cursor: pointer;
+}
+
+.search-hit:hover {
+  color: var(--ink);
+}
+
+.search-hit mark {
+  background: var(--accent-soft);
+  color: var(--ink);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.search-time {
+  font: 500 12px/1 var(--font-mono);
+  color: var(--muted);
+  margin-inline-end: 8px;
+}
+
+.search-more {
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.search-clip {
+  white-space: pre-wrap;
+  line-height: 1.7;
+}
+
