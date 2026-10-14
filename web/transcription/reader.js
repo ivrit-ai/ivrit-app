@@ -25,6 +25,9 @@ let doc = null; // {id, folder, entry, results, language, saved, audio}
 let working = null; // the edits as they stand in edit mode
 let mode = "new"; // new | original | compared
 let editing = false;
+// Choosing sentences to give to one speaker, while editing: their indices, and the
+// last one tapped (Shift extends a run from it).
+let picking = null; // {picked: Set, last}
 
 export function init(hostApi, viewHooks) {
   host = hostApi;
@@ -252,6 +255,11 @@ function transcriptNodes() {
 function segmentNode(segments, i) {
   const { el } = host;
   const s = segments[i];
+  if (editing && picking) {
+    const node = el("span", { class: `tr-seg pickable${picking.picked.has(i) ? " picked" : ""}`, "data-i": i, text: s.text.trim() });
+    node.addEventListener("click", (e) => pick(i, e.shiftKey));
+    return node;
+  }
   if (editing) {
     const node = el("span", { class: "tr-seg", "data-i": i, contenteditable: "plaintext-only", spellcheck: "true", text: s.text.trim() });
     node.addEventListener("input", () => {
@@ -481,6 +489,7 @@ async function deleteIt() {
 function startEditing(from) {
   working = normalizeEdits(from);
   editing = true;
+  picking = null;
   mode = "new";
   document.getElementById("tr-audio")?.pause();
   render();
@@ -490,6 +499,7 @@ async function stopEditing() {
   if (dirty() && !(await host.ask(tr("discardEditsConfirm"), { ok: tr("discardEdits"), danger: true }))) return;
   editing = false;
   working = null;
+  picking = null;
   localStorage.removeItem(`editDraft:${doc.id}`);
   render();
 }
@@ -501,6 +511,7 @@ async function saveEditing(button) {
     doc.saved = normalizeEdits(working);
     editing = false;
     working = null;
+    picking = null;
     localStorage.removeItem(`editDraft:${doc.id}`);
     host.toast(tr("editsSaved"));
     render();
@@ -512,11 +523,55 @@ async function saveEditing(button) {
 
 function editBar() {
   const { el } = host;
+  if (picking) {
+    const count = picking.picked.size;
+    return el("div", { class: "banner tr-editbar" }, [
+      el("div", {}, [el("strong", { text: tr("pickedCount", { count }) }), el("span", { text: tr("pickHint") })]),
+      el("div", { class: "row" }, [
+        el("button", { class: "btn quiet small", type: "button", text: tr("done"), onclick: () => stopPicking() }),
+        el("button", {
+          class: "btn primary small",
+          type: "button",
+          text: tr("assignPicked"),
+          disabled: !count,
+          onclick: () => assignSheet([...picking.picked].sort((a, b) => a - b), stopPicking),
+        }),
+      ]),
+    ]);
+  }
   const save = el("button", { class: "btn primary small", type: "button", text: tr("save"), onclick: () => saveEditing(save) });
   return el("div", { class: "banner tr-editbar" }, [
     el("div", {}, [el("strong", { text: tr("editing") }), el("span", { text: tr("editHint") })]),
-    el("div", { class: "row" }, [el("button", { class: "btn quiet small", type: "button", text: tr("cancel"), onclick: () => stopEditing() }), save]),
+    el("div", { class: "row" }, [
+      el("button", { class: "btn quiet small", type: "button", text: tr("pickSentences"), onclick: () => startPicking() }),
+      el("button", { class: "btn quiet small", type: "button", text: tr("cancel"), onclick: () => stopEditing() }),
+      save,
+    ]),
   ]);
+}
+
+function startPicking() {
+  picking = { picked: new Set(), last: null };
+  render();
+}
+
+function stopPicking() {
+  picking = null;
+  render();
+}
+
+// A tap toggles one sentence; Shift-click takes the whole run from the last one.
+function pick(i, run) {
+  const { picked, last } = picking;
+  if (run && last !== null) {
+    for (let n = Math.min(last, i); n <= Math.max(last, i); n++) picked.add(n);
+  } else if (picked.has(i)) {
+    picked.delete(i);
+  } else {
+    picked.add(i);
+  }
+  picking.last = i;
+  render();
 }
 
 // The speakers to choose from: those in the transcript, and one more.
@@ -553,8 +608,11 @@ function speakerSheet(turn) {
   host.sheet.open(speakerLabel(id, doc.language, working.speakerNames), el("div", { class: "stack" }, nodes));
 }
 
-function assignSheet(indices) {
-  host.sheet.open(tr("assignSpeaker"), choices(tr("assignSpeaker"), (to) => assign(indices, to)));
+function assignSheet(indices, then) {
+  host.sheet.open(tr("assignSpeaker"), choices(tr("assignSpeaker"), (to) => {
+    assign(indices, to);
+    then?.();
+  }));
 }
 
 function choices(title, pick) {

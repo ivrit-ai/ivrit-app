@@ -142,6 +142,22 @@ try {
   await shot("6-compare");
   await page.click(".tr-modes button:nth-child(1)");
 
+  // --- choosing sentences and giving them to another speaker together (then dropped)
+  await page.click(".tr-toolbar button:has(use[href='#i-edit'])");
+  await page.click(".tr-editbar button:has-text('בחירת משפטים')");
+  await page.click("#tr-text .tr-seg.pickable");
+  const picked = await page.locator("#tr-text .tr-seg.picked").count();
+  const pickedBar = await page.locator(".tr-editbar strong").textContent();
+  await shot("6b-picking");
+  await page.click(".tr-editbar .btn.primary");
+  await page.locator("#sheet .tr-who").last().click();
+  const after = await page.locator("#tr-text .tr-who").first().textContent();
+  check("sentences chosen together go to another speaker together", picked === 1 && pickedBar === "נבחרו: 1"
+    && after !== "דנה" && (await page.locator(".tr-editbar button:has-text('בחירת משפטים')").count()) === 1, `${picked} ${pickedBar} ${after}`);
+  await page.click(".tr-editbar button:has-text('ביטול')");
+  await page.click("#confirm-ok");
+  await page.waitForSelector(".tr-toolbar", { timeout: 5000 }).catch(() => null);
+
   // --- back to the list, and the language
   await page.click(".tr-back");
   await page.waitForSelector("#tr-list:not([hidden])");
