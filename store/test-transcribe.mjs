@@ -377,6 +377,19 @@ try {
   check("?lang= picks the language and the page's title, then leaves the address", byLink.lang === "en"
     && byLink.title === "ivrit.ai – Hebrew transcription" && byLink.search === "", JSON.stringify(byLink));
 
+  // --- signed out, on a desktop: the landing says what signing in agrees to
+  const guest = await browser.newContext({ viewport: { width: 1920, height: 1080 }, locale: "he-IL" });
+  const landing = await guest.newPage();
+  await landing.goto(`${origin}/`);
+  await landing.waitForSelector("#landing:not([hidden])", { timeout: 15000 }).catch(() => null);
+  const consent = await landing.locator("#landing").textContent();
+  check("signed out, the landing says what signing in agrees to", consent.includes("מדיניות הפרטיות ותנאי השימוש")
+    && consent.includes("רק לקבצים שהיא יצרה") && (await landing.title()) === "ivrit.ai – תמלול בעברית");
+  await landing.screenshot({ path: path.join(OUT, "bt-0-landing-1920.png") });
+  await landing.setViewportSize({ width: 1280, height: 800 });
+  await landing.screenshot({ path: path.join(OUT, "bt-0-landing-1280.png") });
+  await guest.close();
+
   const realErrors = errors.filter((e) => !/favicon|ERR_|Failed to load resource/.test(e));
   check("no script errors", realErrors.length === 0, realErrors.join(" | ").slice(0, 600));
 } finally {
