@@ -15,14 +15,22 @@ const OUT = process.env.OUT ?? (await import("node:os")).tmpdir();
 const SAMPLE = path.join(OUT, "sample.ogg");
 (await import("node:child_process")).execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=40", "-c:a", "libopus", "-b:a", "24k", SAMPLE]);
 const COMMUNICATOR = path.resolve(process.env.COMMUNICATOR_DIR ?? path.join(ROOT, "../notifier"));
-const { freshDatabase, startApp } = await import(path.join(COMMUNICATOR, "test/harness.js"));
+const { ADMIN_EMAIL, createUser, freshDatabase, startApp } = await import(path.join(COMMUNICATOR, "test/harness.js"));
 const CHROME = process.env.CHROME ?? `${process.env.HOME}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`;
 
 const appPort = 33000 + Math.floor(Math.random() * 2000);
 const origin = `http://localhost:${appPort}`;
-await freshDatabase();
+const pool = await freshDatabase();
 const comm = await startApp({ APP_ORIGINS: origin, APP_TOKEN_ISSUER: origin });
-const stack = spawn(PYTHON, ["-u", path.join(ROOT, "server/tests/stack.py"), String(appPort), comm.origin], { stdio: ["ignore", "pipe", "inherit"] });
+// The app's own source at Communicator, which tells the user a transcript is ready.
+const admin = await createUser(pool, { email: ADMIN_EMAIL });
+const created = await comm.call("POST", "/api/admin/sources", { cookie: admin.cookie, body: { id: "ivrit-app-server", name: "ivrit.ai", link_methods: [] } });
+await comm.call("PATCH", "/api/admin/sources/ivrit-app-server", { cookie: admin.cookie, body: { addresses_accounts: true } });
+await pool.end();
+const stack = spawn(PYTHON, ["-u", path.join(ROOT, "server/tests/stack.py"), String(appPort), comm.origin], {
+  stdio: ["ignore", "pipe", "inherit"],
+  env: { ...process.env, COMMUNICATOR_SOURCE_KEY: created.json.key },
+});
 const info = await new Promise((resolve) => createInterface({ input: stack.stdout }).on("line", (l) => l.startsWith("{") && resolve(JSON.parse(l))));
 
 const results = [];
@@ -282,6 +290,24 @@ try {
   await page.click(".tr-back");
   await page.waitForTimeout(800);
   await shot("9-phone-list");
+
+  // --- "transcript ready", in the inbox, opening the transcript in place
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${origin}/`);
+  const readyMessage = await page.waitForSelector(".msg:has(.msg-title:text-is('התמלול מוכן'))", { timeout: 20000 }).catch(() => null);
+  check("a finished transcript arrives in the inbox, by the file's name", Boolean(readyMessage)
+    && (await readyMessage.textContent()).includes("sample.ogg"));
+  await page.click("#tabs button[data-view='sources']");
+  await page.waitForSelector("#sources .source-card, #sources p", { timeout: 10000 }).catch(() => null);
+  await page.waitForTimeout(800);
+  const offered = await page.locator("#sources .source-card h3").allTextContents();
+  check("...from the app itself, which Sources does not offer to link", !offered.some((name) => name.includes("ivrit.ai")), offered.join(", "));
+  await page.click("#tabs button[data-view='inbox']");
+  // The first upload's (still there); the one made in a folder went with the folder.
+  const again = await page.waitForSelector(".msg:has(.msg-title:text-is('התמלול מוכן')) .msg-actions a.act:not([href*='?f='])", { timeout: 10000 }).catch(() => null);
+  if (again) await again.click();
+  const openedHere = await page.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 20000 }).catch(() => null);
+  check("...and opens it here, not in a new tab", Boolean(openedHere) && page.url().includes("#t/") && context.pages().length === 1, page.url());
 
   // --- a link asking for a language (transcribe.ivrit.ai's banner sends ?lang=)
   await page.goto(`${origin}/?lang=en#transcribe`);

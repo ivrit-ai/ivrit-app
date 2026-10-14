@@ -33,6 +33,11 @@ def _app_config() -> dict:
         return json.load(f)
 
 
+def communicator_url() -> str:
+    """Communicator's address, where the app's notifications and inbox live."""
+    return (os.environ.get("COMMUNICATOR_URL") or _app_config()["communicator"]).rstrip("/")
+
+
 class Pages(StaticFiles):
     """web/, revalidated on every use (cheap, by ETag) so a fix reaches the Android
     app on its next open; fonts and icons, which never change in place, are kept
@@ -63,7 +68,7 @@ def install_routes(app: FastAPI, google_client_id: Optional[str]):
     # Where the app's services live. Overridable for staging; the defaults are the
     # public addresses, which are not secrets.
     config = {
-        "communicator": (os.environ.get("COMMUNICATOR_URL") or app_json["communicator"]).rstrip("/"),
+        "communicator": communicator_url(),
         "transcribe": (os.environ.get("TRANSCRIBE_URL") or app_json["transcribe"]).rstrip("/"),
         "eliezer": (os.environ.get("ELIEZER_URL") or app_json["eliezer"]).rstrip("/"),
         # The site's OAuth client: Google issues the app's ID tokens to it.

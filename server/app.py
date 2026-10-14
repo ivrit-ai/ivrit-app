@@ -40,7 +40,7 @@ import asyncio.subprocess
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
-from urllib.parse import urljoin, urlencode
+from urllib.parse import quote, urljoin, urlencode
 from functools import wraps
 from typing import Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager
@@ -138,6 +138,12 @@ VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT")
 PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY and VAPID_SUBJECT)
 PUSH_TTL_SECONDS = 86400
 PUSH_TIMEOUT_SECONDS = 10
+
+# "Transcript ready", as a message in the app's inbox on every device the user has
+# (browser, Android, iPhone), through Communicator: the app's own source there
+# may message an account by its email (sources.addresses_accounts). Off without
+# the source's key.
+COMMUNICATOR_SOURCE_KEY = os.environ.get("COMMUNICATOR_SOURCE_KEY")
 
 # Rate limiting configuration. CLI arg by default; overridable via env under
 # xhost, where there are no CLI args.
@@ -4737,12 +4743,70 @@ async def handle_failed_job(job_desc, consumed_seconds, failure_reason):
 
 
 async def notify_job_finished(job_desc, status, results_id):
-    """Push a completion notification to the user's registered browsers.
+    """Tell the user a job finished ("completed" or "failed"): in the app's inbox,
+    and by web push to browsers registered with this server.
 
     Never raises: the job's outcome must not depend on a notification getting
-    through. The service worker renders the text, so the payload carries only
-    data plus the language the subscription was registered with.
+    through. Both go out together, since transcribe_job only releases the job's
+    queue slot once this returns.
     """
+    await asyncio.gather(
+        notify_inbox(job_desc, status, results_id),
+        push_job_finished(job_desc, status, results_id),
+    )
+
+
+# The inbox message's words, by the transcript's language: whoever transcribes
+# Hebrew or Yiddish reads Hebrew here.
+INBOX_TEXT = {
+    "he": {"completed": "התמלול מוכן", "failed": "התמלול לא הצליח"},
+    "en": {"completed": "Transcript ready", "failed": "Transcription failed"},
+}
+
+
+async def notify_inbox(job_desc, status, results_id):
+    """A message in the user's inbox, through Communicator, that opens the
+    transcript (or, on a failure, the folder it was going to). Deduped by job, so a
+    retry after a restart sends nothing more."""
+    if not COMMUNICATOR_SOURCE_KEY or not APP_SITE:
+        return
+    lang = "he" if (job_desc.get("language") or "he") in ("he", "yi") else "en"
+    folder = job_desc.get("folder")
+    base = os.environ.get("BASE_URL", "").rstrip("/")
+    if not base:
+        url = None
+    elif status == "completed" and results_id:
+        url = f"{base}/#t/{quote(results_id, safe='')}" + (f"?f={quote(folder, safe='')}" if folder else "")
+    else:
+        url = f"{base}/#f/{quote(folder, safe='')}" if folder else f"{base}/#transcribe"
+    message = {
+        "email": job_desc.user_email,
+        "title": INBOX_TEXT[lang].get(status, INBOX_TEXT[lang]["failed"]),
+        "body": job_desc.get("filename") or None,
+        "url": url,
+        "kind": f"transcript-{status}",
+        "lang": lang,
+        "dedupe_key": f"job:{job_desc.id}:{status}",
+    }
+    try:
+        timeout = aiohttp.ClientTimeout(total=PUSH_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{app_site.communicator_url()}/api/source/v1/accounts/messages",
+                json=message,
+                headers={"authorization": f"Bearer {COMMUNICATOR_SOURCE_KEY}"},
+            ) as res:
+                # 404: no inbox account for this address (never opened the app).
+                if res.status not in (202, 404):
+                    logger.error(f"Inbox message for job {job_desc.id} refused: {res.status} {await res.text()}")
+    except Exception as e:
+        logger.error(f"Inbox message for job {job_desc.id} failed: {e!r}")
+
+
+async def push_job_finished(job_desc, status, results_id):
+    """Web push to the browsers registered with this server (transcribe.ivrit.ai's
+    way, unused by the app). The service worker renders the text, so the payload
+    carries only data plus the language the subscription was registered with."""
     if not PUSH_ENABLED:
         return
 
@@ -4797,8 +4861,7 @@ async def notify_job_finished(job_desc, status, results_id):
         except Exception as e:
             logger.error(f"Failed to drop expired push subscription for {job_desc.user_email}: {e}")
 
-    # Sent in parallel because transcribe_job only releases the job's queue slot
-    # once this returns, and the queues allow very little concurrency.
+    # In parallel, for the same reason as notify_job_finished.
     await asyncio.gather(*(push_one(sub) for sub in subscriptions))
 
 

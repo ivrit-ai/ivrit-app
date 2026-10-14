@@ -590,9 +590,19 @@ function renderMessage(m, index) {
   const actions = el("div", { class: "msg-actions" }, [
     more,
     el("span", { class: "spacer" }),
-    m.url
-      ? el("a", { class: "act", href: m.url, target: "_blank", rel: "noopener noreferrer", onclick: () => read([m.id]) }, [icon("external"), el("span", { text: t("openLink") })])
-      : null,
+    m.url && ownLink(m.url)
+      ? el("a", {
+          class: "act",
+          href: m.url,
+          onclick: (event) => {
+            event.preventDefault();
+            read([m.id]);
+            openOwnLink(m.url);
+          },
+        }, [icon("chevron"), el("span", { text: t("openHere") })])
+      : m.url
+        ? el("a", { class: "act", href: m.url, target: "_blank", rel: "noopener noreferrer", onclick: () => read([m.id]) }, [icon("external"), el("span", { text: t("openLink") })])
+        : null,
     el("button", { class: "act", type: "button", "aria-label": t("copy"), onclick: () => copy(m) }, [icon("copy"), el("span", { text: t("copy") })]),
     navigator.share
       ? el("button", { class: "act", type: "button", "aria-label": t("share"), onclick: () => share(m) }, [icon("share")])
@@ -734,7 +744,24 @@ async function remove(m) {
   });
 }
 
-// #m/<id>: opened from a notification.
+// A link to this site (the server's "transcript ready" points at #t/<id>): opened
+// here, in the Transcribe view, rather than in a new tab.
+function ownLink(href) {
+  try {
+    return new URL(href, location.href).origin === location.origin;
+  } catch {
+    return false;
+  }
+}
+
+async function openOwnLink(href) {
+  const target = new URL(href, location.href);
+  location.hash = target.hash || "#transcribe";
+  showView("transcribe");
+}
+
+// #m/<id>: opened from a notification. A message that links to this site opens
+// what it links to.
 async function openFromHash() {
   const match = /^#m\/(.+)$/.exec(location.hash);
   if (!match) return;
@@ -745,6 +772,11 @@ async function openFromHash() {
   state.filter = "all";
   state.query = "";
   $("search").value = "";
+  const message = state.messages.find((m) => m.id === id);
+  if (message?.url && ownLink(message.url)) {
+    read([id]);
+    return openOwnLink(message.url);
+  }
   state.expanded.add(id);
   renderInbox();
   read([id]);
@@ -763,12 +795,14 @@ function subscriptionsOf(sourceId) {
 
 function renderSources() {
   const box = $("sources");
-  if (!state.catalog.sources.length) {
+  // The app's own server messages the account with no link: not one to offer.
+  const linkable = state.catalog.sources.filter((s) => s.linkable !== false);
+  if (!linkable.length) {
     box.replaceChildren(el("p", { class: "muted", text: t("noSources") }));
     return;
   }
   box.replaceChildren(
-    ...state.catalog.sources.map((source) => {
+    ...linkable.map((source) => {
       const subs = subscriptionsOf(source.id);
       const name = localized(source, "name");
       return el("div", { class: "card source-card" }, [
