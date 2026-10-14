@@ -68,6 +68,9 @@ def install_routes(app: FastAPI, google_client_id: Optional[str]):
         "eliezer": (os.environ.get("ELIEZER_URL") or app_json["eliezer"]).rstrip("/"),
         # The site's OAuth client: Google issues the app's ID tokens to it.
         "googleClientId": google_client_id or None,
+        # Google Analytics, for the site in a browser only (web/app.js): the tag
+        # transcribe.ivrit.ai has, so its numbers carry on here.
+        "analytics": os.environ.get("GOOGLE_ANALYTICS_TAG") or None,
     }
     config_js = f"self.IVRIT_CONFIG = {json.dumps(config)};\n"
     sessions = make_sessions(google_client_id)

@@ -283,6 +283,13 @@ try {
   await page.waitForTimeout(800);
   await shot("9-phone-list");
 
+  // --- a link asking for a language (transcribe.ivrit.ai's banner sends ?lang=)
+  await page.goto(`${origin}/?lang=en#transcribe`);
+  await page.waitForSelector("#tr-list .title", { timeout: 20000 }).catch(() => null);
+  const byLink = await page.evaluate(() => ({ lang: document.documentElement.lang, title: document.title, search: location.search }));
+  check("?lang= picks the language and the page's title, then leaves the address", byLink.lang === "en"
+    && byLink.title === "ivrit.ai – Hebrew transcription" && byLink.search === "", JSON.stringify(byLink));
+
   const realErrors = errors.filter((e) => !/favicon|ERR_|Failed to load resource/.test(e));
   check("no script errors", realErrors.length === 0, realErrors.join(" | ").slice(0, 600));
 } finally {

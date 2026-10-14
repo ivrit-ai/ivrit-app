@@ -1,4 +1,4 @@
-import { detectLocale, hebrewScript, localized, locale, setLocale, t } from "./i18n.js";
+import { LOCALES, detectLocale, hebrewScript, localized, locale, setLocale, t } from "./i18n.js";
 import { ApiError, createCommunicator, pushSupported } from "./client/communicator.js";
 import * as transcribeApi from "./transcription/api.js";
 import * as transcription from "./transcription/view.js";
@@ -49,6 +49,21 @@ function nativePlugin(name) {
 const shell = inShell
   ? { ivrit: nativePlugin("IvritNative"), app: nativePlugin("App"), browser: nativePlugin("Browser") }
   : null;
+
+// Google Analytics on the website only: the installed apps send nothing (their
+// store listings say they have no analytics).
+if (config.analytics && !inShell) {
+  self.dataLayer = self.dataLayer || [];
+  self.gtag = function gtag() {
+    self.dataLayer.push(arguments);
+  };
+  self.gtag("js", new Date());
+  self.gtag("config", config.analytics);
+  document.head.append(Object.assign(document.createElement("script"), {
+    async: true,
+    src: `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(config.analytics)}`,
+  }));
+}
 
 // A native call that never answers must not hold up the page.
 const withTimeout = (promise, ms, fallback) =>
@@ -1111,16 +1126,13 @@ async function forgetThisDevice() {
 
 // ---------------------------------------------------------------- transcribe
 
-// Files shared into the app (a WhatsApp voice note, a recording) wait in this
-// cache, put there by the service worker, until sent on or discarded. They go
-// to transcribe.ivrit.ai through its own share target: a top-level form post,
-// which its service worker receives exactly as if the file had been shared to
-// it directly.
+// Files shared to the site (a WhatsApp voice note, a recording) wait in this
+// cache, put there by the service worker, until sent to the Transcribe view or
+// discarded.
 const SHARE_CACHE = "share-inbox";
 
-// In the app, Android hands the files to native code, which keeps them; they
-// go on through Android's share menu, since transcribe.ivrit.ai (with its own
-// Google sign-in) cannot run inside the app.
+// In the app, the phone hands the files to native code, which keeps them until
+// takeShared sends them on (to Eliezer, or into My files).
 async function sharedFiles() {
   if (shell) {
     const { files } = await shell.ivrit.sharedFiles();
@@ -1156,7 +1168,6 @@ function formatSize(bytes) {
 }
 
 async function sendToTranscribe(file) {
-  if (shell) return shell.ivrit.shareOn({ id: file.key, title: t("sharedChooser") });
   if (!(await showTranscribeApp())) return toast(t("connectDriveFirst"));
   transcription.chooseFiles([new File([file.blob], file.name, { type: file.type })]);
   await discardShared(file.key);
@@ -1262,10 +1273,16 @@ async function sessionFromCookie() {
   return true;
 }
 
+// Signed in: start the page again at the same address, so a link that asked for
+// sign-in (a transcript, a shared file, ?lang=) still opens what it pointed at.
+function signedIn() {
+  location.reload();
+}
+
 async function signInWithGoogle() {
   if (!shell) {
     if (!(await googlePopup())) return;
-    if (await sessionFromCookie()) location.replace("/");
+    if (await sessionFromCookie()) signedIn();
     else toast(t("googleFailed"));
     return;
   }
@@ -1283,7 +1300,7 @@ async function signInWithGoogle() {
   }).catch(() => null);
   if (!res?.ok) return toast(t(res ? "googleFailed" : "offline"));
   writeSession({ ...(await res.json()), renewed_at: Date.now() });
-  location.replace("/");
+  signedIn();
 }
 
 async function eliezer(path) {
@@ -1569,8 +1586,7 @@ async function showTranscribeApp() {
       return false;
     }
     $("transcribe-connect").hidden = bootData.signedIn;
-    $("transcribe-soon").hidden = bootData.allowed !== false;
-    if (!bootData.signedIn || bootData.allowed === false) return false;
+    if (!bootData.signedIn) return false;
     $("transcribe-mount").hidden = false;
     await transcription.mount($("transcribe-mount"), transcriptionHost, bootData);
     // A transcript's link (a notification, or one from transcribe.ivrit.ai).
@@ -1610,7 +1626,7 @@ async function renderTranscribe() {
   if (!files.length) return box.replaceChildren();
   box.replaceChildren(
     el("h3", { text: t("sharedTitle") }),
-    el("p", { class: "muted", text: t(eliezerReady() ? "sharedLedeEliezer" : shell ? "sharedLedeApp" : "sharedLede") }),
+    el("p", { class: "muted", text: t("sharedLede") }),
     el(
       "div",
       { class: "list" },
@@ -2103,10 +2119,26 @@ function configureShell() {
     .catch(() => {});
 }
 
+// A language the link asked for (?lang=he, as transcribe.ivrit.ai's banner sends):
+// chosen over the account's, as if picked here.
+function askedLocale() {
+  const asked = new URLSearchParams(location.search).get("lang");
+  return LOCALES.includes(asked) ? asked : null;
+}
+
+// Kept in the address until signed in, so it survives the sign-in's reload.
+function dropAskedLocale() {
+  const params = new URLSearchParams(location.search);
+  params.delete("lang");
+  const query = params.toString();
+  history.replaceState(null, "", location.pathname + (query ? `?${query}` : "") + location.hash);
+}
+
 async function start() {
   signInLink($("signin"));
   await notify.refresh();
-  setLocale(detectLocale());
+  const asked = askedLocale();
+  setLocale(detectLocale(asked));
   renderLocaleSwitches();
   showIosHint();
   // A Google account is the only way in: no account-less use.
@@ -2142,8 +2174,13 @@ async function start() {
     toast(t("offline"));
   }
 
-  setLocale(detectLocale(state.me.locale));
+  setLocale(detectLocale(asked ?? state.me.locale));
   renderLocaleSwitches();
+  if (asked) {
+    dropAskedLocale();
+    const account = hebrewScript(asked) ? "he" : asked;
+    if (!state.me.offline && state.me.locale !== account) patch("/api/me", { locale: account }).catch(() => {});
+  }
   await store.setMeta("locale", locale()).catch(() => {});
   await claimStore(state.me.sub);
   store.pruneTombstones().catch(() => {});

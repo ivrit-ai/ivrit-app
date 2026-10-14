@@ -20,6 +20,13 @@ const taken = new Map(); // File -> recording id, until it is sent
 export function init(hostApi, viewHooks) {
   host = hostApi;
   hooks = viewHooks;
+  // What was recorded is kept, but leaving ends the recording.
+  addEventListener("beforeunload", (e) => {
+    if (session) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
 }
 
 export const supported = () => Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);

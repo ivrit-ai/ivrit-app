@@ -43,6 +43,13 @@ export async function mount(container, hostApi, bootData) {
   container.replaceChildren(root);
   renderShell();
   addEventListener("hashchange", route);
+  // Leaving while a file is on its way loses it: the server never gets the rest.
+  addEventListener("beforeunload", (e) => {
+    if (pending.size) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
   config = await api.languages().catch(() => null);
   folder = folderInHash();
   await Promise.all([loadTree(), refresh(), renderQuota(), recorder.renderRecovered($("tr-recovered"))]);

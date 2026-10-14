@@ -37,6 +37,12 @@ const STRINGS = {
     continueGoogle: "Continue with Google",
     continueAnon: "Continue without an account",
     anonCaveat: "Without an account, your inbox lives only on this device.",
+    driveNote:
+      "Your transcripts are kept in your Google Drive. The app can reach only the files it creates there, nothing else in your Drive.",
+    consentBefore: "By continuing you accept the ",
+    consentLink: "privacy policy and terms of use",
+    consentAfter: ", and agree that ivrit.ai may contact you about the project.",
+    pageTitle: "ivrit.ai – Hebrew transcription",
     iosHintTitle: "Install first, then sign in.",
     iosHintBody:
       "Tap Share → Add to Home Screen, open ivrit.ai from your Home Screen, and continue there. iOS only delivers notifications to the installed app.",
@@ -285,8 +291,6 @@ const STRINGS = {
     aboutBody: "ivrit.ai is a non-profit project making Hebrew speech technology open to everyone.",
     supportUs: "Support us",
     terms: "Privacy and terms",
-    transcribeSoonTitle: "Transcribing here is coming soon",
-    transcribeSoonBody: "Until then, transcribe.ivrit.ai does it, with the same Google account and the same files in your Drive.",
     clipsTitle: "Short recordings in Google Drive",
     clipsBody: "Transcripts of voice messages and shared clips, kept in your Google Drive in a folder of their own (“ivrit.ai clips”), apart from your files.",
     clipsToggle: "Keep them in Google Drive",
@@ -329,11 +333,9 @@ const STRINGS = {
     no: "no",
     signInFailed: "Signing in didn't complete. Try again.",
     sharedChooser: "Send to transcribe",
-    sharedLedeApp: "To transcribe, send it on and pick transcribe.ivrit.ai (or Chrome) in the list that opens.",
     labLink: "Lab: transcription on this device",
     transcribeHere: "Transcribe",
     sendOn: "Send on",
-    sharedLedeEliezer: "These could not be sent for transcription. Check the connection and try again.",
     uploading: "Sending…",
     transcribing: "Sent for transcription. It will appear in your messages.",
     transcribingNow: "Transcribing…",
@@ -384,6 +386,12 @@ const STRINGS = {
     continueGoogle: "המשך עם Google",
     continueAnon: "המשך בלי חשבון",
     anonCaveat: "בלי חשבון, התיבה שלכם קיימת רק במכשיר הזה.",
+    driveNote:
+      "התמלולים נשמרים ב-Google Drive שלכם. האפליקציה יכולה לגשת רק לקבצים שהיא יצרה שם, ולא לשום דבר אחר ב-Drive שלכם.",
+    consentBefore: "בהמשך אתם מאשרים את ",
+    consentLink: "מדיניות הפרטיות ותנאי השימוש",
+    consentAfter: ", ומסכימים שניצור איתכם קשר בנושאים הקשורים לפרויקט.",
+    pageTitle: "ivrit.ai – תמלול בעברית",
     iosHintTitle: "קודם מתקינים, אחר כך נכנסים.",
     iosHintBody:
       "הקישו שיתוף ← הוספה למסך הבית, פתחו את ivrit.ai ממסך הבית והמשיכו משם. ב-iOS התראות מגיעות רק לאפליקציה המותקנת.",
@@ -629,8 +637,6 @@ const STRINGS = {
     aboutBody: "ivrit.ai הוא מיזם ללא מטרות רווח שפותח את טכנולוגיית הדיבור בעברית לכולם.",
     supportUs: "תמכו בנו",
     terms: "פרטיות ותנאי שימוש",
-    transcribeSoonTitle: "תמלול כאן יגיע בקרוב",
-    transcribeSoonBody: "עד אז אפשר לתמלל ב-transcribe.ivrit.ai, עם אותו חשבון Google ואותם קבצים ב-Drive שלכם.",
     clipsTitle: "הקלטות קצרות ב-Google Drive",
     clipsBody: "תמלולים של הודעות קוליות וקטעים ששיתפתם, שנשמרים ב-Google Drive שלכם בתיקייה משלהם („ivrit.ai clips”), בנפרד מהקבצים שלכם.",
     clipsToggle: "לשמור אותם ב-Google Drive",
@@ -673,11 +679,9 @@ const STRINGS = {
     no: "לא",
     signInFailed: "ההתחברות לא הושלמה. נסו שוב.",
     sharedChooser: "שליחה לתמלול",
-    sharedLedeApp: "כדי לתמלל, שלחו הלאה ובחרו ב-transcribe.ivrit.ai (או ב-Chrome) ברשימה שתיפתח.",
     labLink: "מעבדה: תמלול במכשיר",
     transcribeHere: "תמלול",
     sendOn: "שליחה הלאה",
-    sharedLedeEliezer: "את אלה לא הצלחנו לשלוח לתמלול. בדקו את החיבור ונסו שוב.",
     uploading: "שולח…",
     transcribing: "נשלח לתמלול. התמלול יופיע בהודעות.",
     transcribingNow: "מתמלל…",
@@ -720,6 +724,7 @@ export function setLocale(locale) {
   } catch {}
   document.documentElement.lang = current;
   document.documentElement.dir = hebrewScript(current) ? "rtl" : "ltr";
+  document.title = t("pageTitle");
   for (const node of document.querySelectorAll("[data-i18n]")) {
     node.textContent = t(node.dataset.i18n);
   }
