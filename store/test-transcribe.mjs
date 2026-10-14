@@ -39,9 +39,10 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok || !detail ? "" : `  [${detail}]`}`);
 };
 
-const browser = await chromium.launch({ executablePath: CHROME });
+// A fake microphone, allowed without asking, for recording.
+const browser = await chromium.launch({ executablePath: CHROME, args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] });
 try {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "he-IL", acceptDownloads: true });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "he-IL", acceptDownloads: true, permissions: ["microphone"] });
   await context.addInitScript((session) => {
     if (!localStorage.getItem("app_session")) localStorage.setItem("app_session", JSON.stringify({ ...session, renewed_at: Date.now() }));
   }, info.session);
@@ -162,6 +163,50 @@ try {
   await page.click(".tr-back");
   await page.waitForSelector("#tr-list:not([hidden])");
   check("back returns to the list", !page.url().includes("#t/"));
+
+  // --- recording: heard, saved or deleted before it is sent
+  await page.click("#tr-list button:has(use[href='#i-mic'])");
+  await page.click("#sheet .tr-choice:has(use[href='#i-mic'])");
+  await page.waitForSelector("#sheet button:has(use[href='#i-stop'])", { timeout: 10000 }).catch(() => null);
+  await page.waitForTimeout(2500);
+  const leaving = await page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  check("leaving mid-recording asks first", leaving);
+  await page.click("#sheet button:has(use[href='#i-stop'])");
+  const take = await page.waitForSelector("#sheet[open] .tr-new .tr-take audio", { timeout: 15000 }).catch(() => null);
+  const playable = take && await take.evaluate((a) => new Promise((resolve) => {
+    if (a.readyState >= 1) return resolve(true);
+    a.addEventListener("loadedmetadata", () => resolve(true), { once: true });
+    a.addEventListener("error", () => resolve(false), { once: true });
+    setTimeout(() => resolve(false), 5000);
+  }));
+  check("a finished recording can be heard before it is sent", Boolean(take) && playable);
+  await shot("2b-take");
+  const [takeFile] = await Promise.all([
+    page.waitForEvent("download", { timeout: 10000 }).catch(() => null),
+    page.click("#sheet .tr-take button:has(use[href='#i-download'])"),
+  ]);
+  check("...saved as a file", Boolean(takeFile?.suggestedFilename()), takeFile?.suggestedFilename());
+  await page.click("#sheet .tr-take button:has(use[href='#i-trash'])");
+  await page.click("#confirm-ok");
+  await page.waitForTimeout(800);
+  const left = await page.evaluate(() => new Promise((resolve) => {
+    const open = indexedDB.open("ivrit-recordings");
+    open.onsuccess = () => {
+      const db = open.result;
+      const names = [...db.objectStoreNames];
+      if (!names.length) return resolve(0);
+      const tx = db.transaction(names, "readonly");
+      let count = 0;
+      for (const name of names) tx.objectStore(name).count().onsuccess = (e) => (count += e.target.result);
+      tx.oncomplete = () => resolve(count);
+    };
+    open.onerror = () => resolve(-1);
+  }));
+  check("...or deleted, from the device too", !(await page.locator("#sheet[open]").count()) && left === 0, `left ${left}`);
 
   // --- folders
   await page.click("#tr-list .tr-actions button:has-text('תיקייה חדשה')");

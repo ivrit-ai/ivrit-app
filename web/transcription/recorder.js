@@ -264,6 +264,27 @@ function take(blob, meta) {
   hooks.take(file);
 }
 
+// A take recorded here and not yet sent: the send sheet lets it be heard first.
+export function isTake(file) {
+  return taken.has(file);
+}
+
+// Deleted before sending: gone from the device too.
+export async function discard(file) {
+  const id = taken.get(file);
+  taken.delete(file);
+  if (id) await forget(id).catch(() => {});
+}
+
+export function download(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = host.el("a", { href: url, download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // Sent for transcription: the device's copy can go.
 export function sent(file) {
   const id = taken.get(file);
@@ -306,14 +327,7 @@ export async function renderRecovered(box) {
         box.replaceChildren();
         host.toast(tr("recordingDiscarded"));
       } }),
-      el("button", { class: "btn quiet small", type: "button", text: tr("downloadRecording"), onclick: () => {
-        const url = URL.createObjectURL(blob);
-        const a = el("a", { href: url, download: candidate.filename });
-        document.body.append(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      } }),
+      el("button", { class: "btn quiet small", type: "button", text: tr("downloadRecording"), onclick: () => download(blob, candidate.filename) }),
       el("button", { class: "btn primary small", type: "button", text: tr("transcribeRecording"), onclick: () => {
         box.replaceChildren();
         take(blob, candidate);

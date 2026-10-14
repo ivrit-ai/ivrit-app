@@ -542,14 +542,35 @@ function openNewSheet() {
   const keep = el("input", { type: "checkbox", checked: localStorage.getItem("tr_save_audio") !== "false" });
   const destination = folderPicker(folder);
   const list = el("div", { class: "list" });
-  const drawFiles = () => list.replaceChildren(...chosen.map((file, i) => el("div", { class: "list-row" }, [
-    el("div", { class: "grow" }, [el("div", { dir: "auto", text: file.name }), el("div", { class: "sub", dir: "ltr", text: size(file.size) })]),
-    el("button", { class: "icon-btn", type: "button", "aria-label": tr("removeFile"), onclick: () => {
-      chosen.splice(i, 1);
-      if (!chosen.length) return host.sheet.close();
-      drawFiles();
-    } }, [icon("close")]),
-  ])));
+  // A take just recorded can be heard, saved or deleted before it is sent.
+  const previews = new Map(); // File -> object URL
+  const preview = (file) => {
+    if (!previews.has(file)) previews.set(file, URL.createObjectURL(file));
+    return previews.get(file);
+  };
+  const drawFiles = () => list.replaceChildren(...chosen.map((file, i) => {
+    const take = recorder.isTake(file);
+    return el("div", { class: `list-row${take ? " tr-take" : ""}` }, [
+      el("div", { class: "grow" }, [
+        el("div", { dir: "auto", text: file.name }),
+        el("div", { class: "sub", dir: "ltr", text: size(file.size) }),
+        take ? el("audio", { class: "tr-take-audio", controls: true, preload: "metadata", src: preview(file) }) : null,
+      ]),
+      take ? el("button", { class: "icon-btn", type: "button", "aria-label": tr("downloadRecording"), title: tr("downloadRecording"), onclick: () => recorder.download(file, file.name) }, [icon("download")]) : null,
+      take ? el("button", { class: "icon-btn", type: "button", "aria-label": tr("discardRecording"), title: tr("discardRecording"), onclick: async () => {
+        if (!(await host.ask(tr("discardRecordingConfirm"), { ok: tr("discardRecording"), danger: true }))) return;
+        await recorder.discard(file);
+        chosen.splice(chosen.indexOf(file), 1);
+        if (!chosen.length) return host.sheet.close();
+        drawFiles();
+      } }, [icon("trash")]) : null,
+      el("button", { class: "icon-btn", type: "button", "aria-label": tr("removeFile"), onclick: () => {
+        chosen.splice(i, 1);
+        if (!chosen.length) return host.sheet.close();
+        drawFiles();
+      } }, [icon("close")]),
+    ]);
+  }));
   drawFiles();
   const more = batchLimit() > 1
     ? el("button", { class: "btn quiet small", type: "button", onclick: () => $("tr-input").click() }, [icon("plus"), el("span", { text: tr("addFiles") })])
@@ -575,7 +596,10 @@ function openNewSheet() {
     host.sheet.close();
     send(files, { language: select.value, saveAudio: keep.checked, folder: destination.value || null });
   });
-  host.sheet.open(tr("newTitle"), form, () => (chosen = []));
+  host.sheet.open(tr("newTitle"), form, () => {
+    chosen = [];
+    for (const url of previews.values()) URL.revokeObjectURL(url);
+  });
 }
 
 // One after another, as transcribe.ivrit.ai did: each checked, uploaded and

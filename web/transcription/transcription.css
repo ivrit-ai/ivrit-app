@@ -346,6 +346,14 @@ button.tr-who::after,
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
+/* A take just recorded, heard before it is sent. */
+.tr-take-audio {
+  display: block;
+  width: 100%;
+  height: 36px;
+  margin-top: 8px;
+}
+
 /* Choosing sentences to give to one speaker. */
 .tr-text.editing .tr-seg.pickable {
   cursor: pointer;
