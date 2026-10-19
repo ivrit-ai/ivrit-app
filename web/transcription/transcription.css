@@ -565,3 +565,43 @@ button.tr-who::after,
   font-size: 14px;
   line-height: 1.6;
 }
+
+/* The list, until it comes from the server: where its cards will be. */
+.tr-placeholder {
+  display: grid;
+  gap: 10px;
+  min-height: 78px;
+  align-content: center;
+}
+
+.tr-placeholder .tr-bar {
+  display: block;
+  height: 12px;
+  width: 40%;
+  border-radius: 6px;
+  background: var(--line-soft);
+  animation: tr-shimmer 1.2s ease-in-out infinite alternate;
+}
+
+.tr-placeholder .tr-bar.wide {
+  width: 65%;
+}
+
+@keyframes tr-shimmer {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
+
+/* Cards come in once per folder; redrawn, they stay put. */
+.feed.still > .msg {
+  animation: none;
+}
+
+/* The quota line keeps its place before it has words. */
+.tr-quota {
+  min-height: 1.5em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tr-placeholder .tr-bar { animation: none; }
+}

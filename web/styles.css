@@ -482,218 +482,64 @@ main {
 
 /* ---------- landing ---------- */
 
+/* Signing in: one plain column, in the middle of the screen. */
 .landing {
-  display: grid;
-  gap: 40px;
-  padding: 28px 0 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  max-width: 440px;
+  margin: 0 auto;
+  min-height: calc(100dvh - var(--bar-h) - 80px);
+  justify-content: center;
+  padding: 24px 0;
 }
 
-.landing > * {
-  min-width: 0;
-}
-
-@media (min-width: 900px) {
-  main:has(> .landing:not([hidden])) {
-    max-width: 1080px;
-  }
-
-  .landing {
-    grid-template-columns: 1.1fr 1fr;
-    align-items: center;
-    min-height: calc(100dvh - var(--bar-h) - 40px);
-    padding-top: 0;
-  }
-}
-
-.kicker {
-  margin: 0 0 14px;
-  color: var(--accent);
-  font-weight: 600;
-  font-size: 14px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-:lang(he) .kicker {
-  letter-spacing: 0;
+.landing-mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
 }
 
 .landing h1 {
-  font: 700 clamp(36px, 7vw, 58px) / 1.05 var(--font-display);
-  letter-spacing: -0.02em;
-  margin: 0 0 18px;
-  text-wrap: balance;
-}
-
-:lang(he) .landing h1 {
-  letter-spacing: 0;
-  line-height: 1.12;
+  font: 700 28px / 1.2 var(--font-display);
+  margin: 4px 0 0;
 }
 
 .landing .lede {
-  font-size: 18px;
+  margin: 0 0 8px;
   color: var(--ink-2);
-  margin-bottom: 22px;
+  font-size: 16px;
+  line-height: 1.6;
 }
 
-.points {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 30px;
-  display: grid;
-  gap: 10px;
-}
-
-.points li {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  color: var(--ink-2);
-}
-
-.points .i {
-  color: var(--accent);
-  margin-top: 2px;
-}
-
-.cta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.choices {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-  gap: 10px;
+.btn.signin {
   width: 100%;
-  max-width: 560px;
-}
-
-.btn.choice {
-  min-height: 56px;
-  padding: 8px 20px;
-  white-space: normal;
-  text-align: center;
+  min-height: 52px;
   font-size: 16px;
   background: var(--card);
   border-color: var(--line);
-  box-shadow: var(--shadow-sm);
 }
 
-.btn.choice:hover {
+.btn.signin:hover {
   border-color: var(--ink-2);
 }
 
-.btn.choice .i {
-  width: 22px;
-  height: 22px;
-  color: var(--ink-2);
-}
-
-.cta .g {
-  width: 22px;
-  height: 22px;
+.btn.signin .g {
+  width: 20px;
+  height: 20px;
 }
 
 .fine {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 13px;
+  line-height: 1.55;
   color: var(--muted);
 }
 
-/* The art is the product: three real-looking messages, fanned like slips. */
-.landing-art {
-  position: relative;
-  height: 360px;
-  max-width: 460px;
-  width: 100%;
-  justify-self: center;
-}
-
-.slip {
-  position: absolute;
-  inset-inline: 0;
-  display: flex;
-  gap: 12px;
-  padding: 16px 18px;
-  border-radius: 20px;
-  background: var(--card);
-  border: 1px solid var(--line-soft);
-  box-shadow: var(--shadow);
-  font-size: 15px;
-  animation: deal 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-
-.slip p {
-  margin: 2px 0 0;
-  color: var(--ink-2);
-  line-height: 1.5;
-}
-
-.slip-head {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.slip-head b {
-  color: var(--ink);
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.s1 {
-  top: 16px;
-  --r: -2.5deg;
-  transform: rotate(var(--r));
-  animation-delay: 0.35s;
-  z-index: 3;
-}
-
-.s2 {
-  top: 142px;
-  inset-inline-start: 28px;
-  inset-inline-end: -8px;
-  --r: 1.8deg;
-  transform: rotate(var(--r));
-  animation-delay: 0.2s;
-  z-index: 2;
-}
-
-.s3 {
-  top: 252px;
-  inset-inline-start: 6px;
-  inset-inline-end: 34px;
-  --r: -1deg;
-  transform: rotate(var(--r));
-  animation-delay: 0.05s;
-  z-index: 1;
-}
-
-.s1::after {
-  content: "";
-  position: absolute;
-  top: 14px;
-  inset-inline-end: 14px;
-  width: 9px;
-  height: 9px;
-  border-radius: 99px;
-  background: var(--accent);
-}
-
-@keyframes deal {
-  from {
-    opacity: 0;
-    transform: translateY(28px) rotate(0deg);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) rotate(var(--r));
-  }
+.landing-links {
+  margin-top: 6px;
 }
 
 @keyframes rise {

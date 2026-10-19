@@ -40,30 +40,6 @@
   letter-spacing: -0.01em;
 }
 
-/* The landing art: the mark, and a transcript arriving under it. */
-.landing-art {
-  height: 340px;
-}
-
-.landing-mark {
-  position: absolute;
-  inset-inline-start: 50%;
-  translate: -50% 0;
-  top: 0;
-  width: 200px;
-  height: 200px;
-  border-radius: 44px;
-  box-shadow: var(--shadow);
-}
-
-[dir="rtl"] .landing-mark {
-  translate: 50% 0;
-}
-
-.landing-art .s1 {
-  top: 176px;
-}
-
 .quiet-panel {
   background: transparent;
   box-shadow: none;

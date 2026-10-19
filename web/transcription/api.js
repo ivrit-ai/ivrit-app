@@ -29,17 +29,44 @@ async function call(path, { method = "GET", body, raw = false } = {}) {
 // A My files folder by its id (null or undefined: the top folder), on a path.
 const inFolder = (path, folder) => (folder ? `${path}${path.includes("?") ? "&" : "?"}folder=${encodeURIComponent(folder)}` : path);
 
-export const boot = () => call("/transcribe/boot");
-export const languages = () => call("/languages");
-export const quota = () => call("/quota");
+// What the Transcribe view asks for first, asked as soon as the page knows it is
+// signed in (web/app.js), while the rest of the page starts: each answer is
+// taken once, by the view's first call within EARLY_MS, and later calls ask the
+// server again.
+const EARLY_MS = 30000;
+const early = new Map(); // key -> {asked, at}
+function once(key, ask) {
+  const kept = early.get(key);
+  early.delete(key);
+  return kept && Date.now() - kept.at < EARLY_MS ? kept.asked : ask();
+}
+export function prefetch() {
+  const asks = { boot: bootNow, languages: languagesNow, folders: foldersNow, quota: quotaNow, toc: () => tocNow(null) };
+  for (const [key, ask] of Object.entries(asks)) {
+    if (early.has(key)) continue;
+    const asked = ask();
+    asked.catch(() => {}); // a refusal is the view's to handle, when it takes it
+    early.set(key, { asked, at: Date.now() });
+  }
+}
+
+const bootNow = () => call("/transcribe/boot");
+const languagesNow = () => call("/languages");
+const quotaNow = () => call("/quota");
+const tocNow = (folder) => call(inFolder("/appdata/toc", folder));
+const foldersNow = () => call("/appdata/folders");
+
+export const boot = () => once("boot", bootNow);
+export const languages = () => once("languages", languagesNow);
+export const quota = () => once("quota", quotaNow);
 export const balance = () => call("/balance");
-export const toc = (folder) => call(inFolder("/appdata/toc", folder));
+export const toc = (folder) => (folder ? tocNow(folder) : once("toc", () => tocNow(null)));
 export const rename = (resultsId, name, folder) => call(inFolder("/appdata/rename", folder), { method: "POST", body: { results_id: resultsId, new_filename: name } });
 export const remove = (resultsId, folder) => call(inFolder("/appdata/delete", folder), { method: "POST", body: { results_id: resultsId } });
 export const donate = (resultsId, folder) => call(inFolder("/appdata/donate_data", folder), { method: "POST", body: { results_id: resultsId, checkbox_confirmed: true } });
 
 // Folders: {top, folders: [{id, name, parent}]}; made, renamed, and moved to Drive's trash.
-export const folders = () => call("/appdata/folders");
+export const folders = () => once("folders", foldersNow);
 export const createFolder = (name, parent) => call("/appdata/folders", { method: "POST", body: { name, parent } });
 export const renameFolder = (id, name) => call(`/appdata/folders/${encodeURIComponent(id)}/rename`, { method: "POST", body: { name } });
 export const deleteFolder = (id) => call(`/appdata/folders/${encodeURIComponent(id)}`, { method: "DELETE" });

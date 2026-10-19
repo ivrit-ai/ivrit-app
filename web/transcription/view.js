@@ -27,6 +27,8 @@ let entries = [];
 let folder = null; // the folder shown (null: the top folder)
 let tree = null; // {top, folders: [{id, name, parent}]}
 let drawn = "";
+let dealt = undefined; // the folder whose cards have come in (they animate once)
+let loaded = false; // the shown folder's list has come from the server
 let pollTimer = null;
 const pending = new Map(); // uploads in progress, by a local id: {name, stage, percent}
 
@@ -50,10 +52,63 @@ export async function mount(container, hostApi, bootData) {
       e.returnValue = "";
     }
   });
-  config = await api.languages().catch(() => null);
   folder = folderInHash();
+  // What was last seen here, drawn at once while the server is asked again
+  // (Drive takes a moment); placeholders the first time.
+  const seen = remembered();
+  tree = seen?.tree ?? null;
+  entries = seen?.tocs?.[folder ?? ""] ?? [];
+  loaded = false;
+  draw(true);
+  if (seen?.quota) showQuota(seen.quota);
+  // Languages are for the new-file sheet: not waited for.
+  api.languages().then((c) => {
+    config = c;
+    const input = $("tr-input");
+    if (input) input.multiple = batchLimit() > 1;
+  }, () => {});
   await Promise.all([loadTree(), refresh(), renderQuota(), recorder.renderRecovered($("tr-recovered"))]);
   route();
+}
+
+// ------------------------------------------------------------------ last seen
+
+// The list as this browser last saw it, per account: the folder tree, the lists
+// of the folders opened lately, and the quota line. Only a quicker first look:
+// the server's answer always replaces it. Gone at sign-out (forgetSeen).
+const SEEN_KEY = "tr_seen";
+const SEEN_FOLDERS = 8;
+
+function remembered() {
+  try {
+    const seen = JSON.parse(localStorage.getItem(SEEN_KEY) || "null");
+    return seen && seen.email === boot?.email ? seen : null;
+  } catch {
+    return null;
+  }
+}
+
+function remember(change) {
+  if (!boot?.email) return;
+  try {
+    const seen = remembered() || { email: boot.email, tocs: {} };
+    if (change.toc) {
+      const [key, list] = change.toc;
+      delete seen.tocs[key];
+      seen.tocs[key] = list;
+      const keys = Object.keys(seen.tocs);
+      for (const old of keys.slice(0, Math.max(0, keys.length - SEEN_FOLDERS))) delete seen.tocs[old];
+    }
+    if ("tree" in change) seen.tree = change.tree;
+    if ("quota" in change) seen.quota = change.quota;
+    localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
+  } catch {}
+}
+
+export function forgetSeen() {
+  try {
+    localStorage.removeItem(SEEN_KEY);
+  } catch {}
 }
 
 export function relocalize(locale) {
@@ -147,7 +202,10 @@ export async function refresh() {
     const toc = await api.toc(shown);
     if (shown !== folder) return; // moved on meanwhile
     entries = toc.entries || [];
+    loaded = true;
+    remember({ toc: [shown ?? "", entries] });
   } catch (err) {
+    if (shown === folder) loaded = true;
     // A folder deleted or renamed elsewhere: back to the top.
     if (err.status === 404 && shown) return openFolder(null);
     if (err.status !== 401) host.toast(serverError(err.data, "filesLoadError"));
@@ -171,7 +229,7 @@ function draw(force = false) {
   if (!feed) return;
   const list = sorted();
   const subfolders = childrenOf(folder);
-  const signature = JSON.stringify([folder, tree, list, [...pending.values()].filter((p) => p.folder === folder), language()]);
+  const signature = JSON.stringify([folder, loaded, tree, list, [...pending.values()].filter((p) => p.folder === folder), language()]);
   if (!force && signature === drawn) return;
   drawn = signature;
   drawPath();
@@ -180,8 +238,22 @@ function draw(force = false) {
     ...subfolders.map(folderCard),
     ...list.map((entry, i) => entryCard(entry, i + subfolders.length)),
   ];
+  // A folder's cards come in once; redrawn with the server's answer, or as a
+  // job moves on, they stay put.
+  feed.classList.toggle("still", dealt === folder);
+  if (!cards.length && !loaded) return feed.replaceChildren(...placeholders());
+  dealt = folder;
   if (!cards.length) return feed.replaceChildren(folder ? emptyFolder() : empty());
   feed.replaceChildren(...cards);
+}
+
+// Where the list will be, until it comes.
+function placeholders() {
+  const { el } = host;
+  return [0, 1, 2].map((i) => el("div", { class: "msg tr-file tr-placeholder", style: `--i:${i}`, "aria-hidden": "true" }, [
+    el("span", { class: "tr-bar wide" }),
+    el("span", { class: "tr-bar" }),
+  ]));
 }
 
 // ------------------------------------------------------------------ folders
@@ -189,6 +261,7 @@ function draw(force = false) {
 async function loadTree() {
   try {
     tree = await api.folders();
+    remember({ tree });
   } catch (err) {
     if (err.status !== 401) tree = tree || { top: null, folders: [] };
   }
@@ -234,7 +307,8 @@ function showFolder(id) {
   $("tr-list").hidden = false;
   if (id !== folder) {
     folder = id;
-    entries = [];
+    entries = remembered()?.tocs?.[id ?? ""] ?? [];
+    loaded = false;
     drawn = "";
     draw(true);
   }
@@ -508,15 +582,22 @@ async function renderQuota() {
       return;
     }
     const q = await api.quota();
-    const minutes = Math.max(0, Math.floor(q.remainingMinutes));
-    const amount = minutes >= 60 ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")} ${tr("hours")}` : `${minutes} ${tr("minutes")}`;
-    line.replaceChildren(
-      document.createTextNode(`${tr("quotaLine", { amount })} · `),
-      host.el("a", { href: boot?.quotaIncreaseUrl || "https://youtu.be/xr8RQRFERLs", target: "_blank", rel: "noopener", text: tr("howToGetMoreQuota") })
-    );
+    remember({ quota: { remainingMinutes: q.remainingMinutes } });
+    showQuota(q);
   } catch {
     line.textContent = "";
   }
+}
+
+function showQuota(q) {
+  const line = $("tr-quota");
+  if (!line || boot?.runpodKeyStatus?.has_key) return;
+  const minutes = Math.max(0, Math.floor(q.remainingMinutes));
+  const amount = minutes >= 60 ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")} ${tr("hours")}` : `${minutes} ${tr("minutes")}`;
+  line.replaceChildren(
+    document.createTextNode(`${tr("quotaLine", { amount })} · `),
+    host.el("a", { href: boot?.quotaIncreaseUrl || "https://youtu.be/xr8RQRFERLs", target: "_blank", rel: "noopener", text: tr("howToGetMoreQuota") })
+  );
 }
 
 export function setBoot(bootData) {

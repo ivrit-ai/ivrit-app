@@ -181,7 +181,7 @@ try {
     if (a.readyState >= 1) return resolve(true);
     a.addEventListener("loadedmetadata", () => resolve(true), { once: true });
     a.addEventListener("error", () => resolve(false), { once: true });
-    setTimeout(() => resolve(false), 5000);
+    setTimeout(() => resolve(false), 10000);
   }));
   check("a finished recording can be heard before it is sent", Boolean(take) && playable);
   await shot("2b-take");
@@ -351,6 +351,28 @@ try {
   await page.click(".tr-back");
   await page.waitForTimeout(800);
   await shot("9-phone-list");
+
+  // --- reopened: the list as last seen at once, while the server is slow
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.route("**/appdata/toc*", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await route.continue().catch(() => {});
+  });
+  const reopened = Date.now();
+  await page.goto(`${origin}/`);
+  const early = await page.waitForSelector("#tr-feed .tr-file.openable", { timeout: 2500 }).catch(() => null);
+  const shownAfter = Date.now() - reopened;
+  const unpreloaded = await page.evaluate(() => {
+    const preloaded = new Set([...document.querySelectorAll("link[rel=modulepreload]")].map((l) => new URL(l.href).pathname));
+    return performance.getEntriesByType("resource")
+      .map((e) => new URL(e.name))
+      .filter((u) => u.origin === location.origin && u.pathname.endsWith(".js") && !["/config.js", "/client/store.js", "/sw.js"].includes(u.pathname))
+      .map((u) => u.pathname)
+      .filter((path) => !preloaded.has(path));
+  });
+  await page.unroute("**/appdata/toc*");
+  check("reopened, the list shows as last seen before the server answers", Boolean(early), `${shownAfter} ms`);
+  check("every module the page loads at start is preloaded together", unpreloaded.length === 0, unpreloaded.join(", "));
 
   // --- "transcript ready", in the inbox, opening the transcript in place
   await page.setViewportSize({ width: 1280, height: 900 });

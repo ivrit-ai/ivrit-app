@@ -1995,17 +1995,6 @@ $("delete-account").addEventListener("click", async () => {
   return leaveApp();
 });
 
-$("anon").addEventListener("click", async () => {
-  $("anon").disabled = true;
-  try {
-    await post("/auth/anonymous", { locale: locale() });
-    await start();
-  } catch (err) {
-    toast(t("error", err.message));
-    $("anon").disabled = false;
-  }
-});
-
 $("sheet-close").addEventListener("click", closeSheet);
 $("sheet").addEventListener("close", clearSheetTimers);
 $("sheet").addEventListener("click", (event) => {
@@ -2157,6 +2146,7 @@ function signInLink(node) {
 // is no session of Communicator's to end.
 async function leaveApp() {
   writeSession(null);
+  transcription.forgetSeen();
   // The server's own sign-in (Drive, for transcribing) ends with it.
   await fetch("/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
   await shell?.ivrit.forgetGoogle().catch(() => {});
@@ -2196,17 +2186,22 @@ function dropAskedLocale() {
 
 async function start() {
   signInLink($("signin"));
-  await notify.refresh();
+  // The phone's notification settings (up to 3 s in the app) and the session,
+  // together rather than one after the other.
+  const notifyKnown = notify.refresh();
+  const signedIn = (async () => (await appToken()) || (!shell && (await sessionFromCookie())))();
   const asked = askedLocale();
   setLocale(detectLocale(asked));
   renderLocaleSwitches();
   showIosHint();
-  // A Google account is the only way in: no account-less use.
-  $("anon").hidden = true;
-  document.querySelector('[data-i18n="anonCaveat"]').hidden = true;
   // Signed in is having a session: no call to Google, no account sheet. In a
   // browser the server may know this browser already (its cookie).
-  if (!(await appToken()) && (shell || !(await sessionFromCookie()))) {
+  const session = await signedIn;
+  // Transcribing's first answers (the list, the folders, the quota) are asked for
+  // now, while the account and the inbox load.
+  if (session) transcribeApi.prefetch();
+  await notifyKnown;
+  if (!session) {
     if (location.hash === "#shared") return showSharedSignedOut();
     $("landing").hidden = false;
     document.body.dataset.started = "1";
