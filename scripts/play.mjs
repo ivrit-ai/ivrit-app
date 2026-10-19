@@ -10,7 +10,7 @@
 //
 // The key is ~/keys/ivrit-app-play-publisher.json, or PLAY_SERVICE_ACCOUNT.
 import { createSign } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
 const PACKAGE = JSON.parse(readFileSync(new URL("../shared/app.json", import.meta.url))).packageId;
@@ -116,6 +116,14 @@ try {
       body: readFileSync(file),
       type: "application/octet-stream",
     });
+    // R8's mapping beside the bundle (build-android.sh), so Play's crash reports read.
+    const mapping = file.replace(/\.aab$/, "-mapping.txt");
+    if (existsSync(mapping)) {
+      await call("POST", `${UPLOAD}/edits/${edit.id}/apks/${bundle.versionCode}/deobfuscationFiles/proguard?uploadType=media`, {
+        body: readFileSync(mapping),
+        type: "application/octet-stream",
+      });
+    }
     await call("PUT", `${API}/edits/${edit.id}/tracks/${track}`, {
       json: {
         track,

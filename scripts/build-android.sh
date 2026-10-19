@@ -34,4 +34,6 @@ mkdir -p dist
 name="ivrit-app-$IVRIT_VERSION_NAME-$IVRIT_VERSION_CODE"
 cp shell/android/app/build/outputs/bundle/release/app-release.aab "dist/$name.aab"
 cp shell/android/app/build/outputs/apk/release/app-release.apk "dist/$name.apk"
-ls -l dist/"$name".*
+# R8's mapping, for Play to de-obfuscate crash reports (scripts/play.mjs sends it).
+cp shell/android/app/build/outputs/mapping/release/mapping.txt "dist/$name-mapping.txt"
+ls -l dist/"$name".* dist/"$name"-mapping.txt

@@ -2,6 +2,7 @@ package ai.ivrit.app;
 
 import android.os.Bundle;
 import android.webkit.CookieManager;
+import androidx.activity.EdgeToEdge;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -23,6 +24,10 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(IvritNativePlugin.class);
+        // Behind the system bars on every Android version, as Android 15 does by
+        // default: the page keeps clear of them (env(safe-area-inset-*), which
+        // Capacitor's SystemBars passes through).
+        EdgeToEdge.enable(this);
         super.onCreate(savedInstanceState);
         // The app (app.ivrit.ai) calls Communicator (communicator.ivrit.ai) with
         // its session cookie. Same site, so first-party in a browser; allowed

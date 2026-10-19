@@ -19,3 +19,8 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Crash reports with line numbers (Play de-obfuscates them with the mapping),
+# without the original file names.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
