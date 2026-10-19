@@ -1964,6 +1964,14 @@ $("signout").addEventListener("click", async () => {
 
 $("delete-account").addEventListener("click", async () => {
   if (!(await ask(t("deleteConfirm"), { ok: t("deleteAccount"), danger: true }))) return;
+  // This site's server first (quota, settings, its Drive access), while the
+  // session still stands; then the inbox account.
+  const token = await appToken().catch(() => null);
+  await fetch("/account/delete", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  }).catch(() => {});
   await forgetThisDevice();
   await del("/api/me").catch(() => {});
   return leaveApp();

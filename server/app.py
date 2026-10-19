@@ -607,7 +607,8 @@ def capture_event(distinct_id, event, props=None):
     if not ph:
         return
     props = {} if not props else props
-    props["source"] = "transcribe.ivrit.ai"
+    # Which site, while both run on the same PostHog project.
+    props["source"] = "app.ivrit.ai" if APP_SITE else "transcribe.ivrit.ai"
     ph.capture(distinct_id=distinct_id, event=event, properties=props)
 
 # Queue type constants
@@ -3742,6 +3743,42 @@ async def complete_google_sign_in(request: Request, code: str) -> Response:
         response.headers["ETag"] = f'"{backend_version}"'
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
+
+
+@app.post("/account/delete")
+async def delete_account_here(request: Request):
+    """The account is being deleted (the app's Settings, before its inbox account
+    goes): forget what this server keeps for it (quota, settings, the stored Drive
+    access, browser push) and give up its Google access. The transcripts are the
+    user's, in their Drive, and stay. Same-site only: the cookie is SameSite=Lax,
+    and the app's session token is never sent by another site."""
+    if in_local_mode:
+        raise HTTPException(status_code=400, detail="Not available in local mode")
+    session = get_session(request)
+    email = session.get("user_email") if session else None
+    sessions = getattr(app.state, "app_sessions", None)
+    header = request.headers.get("authorization", "")
+    if not email and sessions and header.startswith("Bearer "):
+        try:
+            email = sessions.verify(header[7:])["email"]
+        except Exception:
+            email = None
+    if not email:
+        return JSONResponse({"error": "not_signed_in"}, status_code=401)
+    tokens = {t for t in (session.get("refresh_token") if session else None, await stored_refresh_token(email)) if t}
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as http:
+        for token in tokens:
+            try:
+                async with http.post("https://oauth2.googleapis.com/revoke", data={"token": token}) as res:
+                    if res.status not in (200, 400):  # 400: already revoked or expired
+                        logger.warning("Revoking %s's Google access answered %s", email, res.status)
+            except Exception as e:
+                logger.warning("Could not revoke %s's Google access: %r", email, e)
+    await db.delete_user(email)
+    log_message(f"{email}: account deleted here")
+    response = JSONResponse({"deleted": True})
+    auth_cookies.clear_session(response)
+    return response
 
 
 @app.post("/logout")

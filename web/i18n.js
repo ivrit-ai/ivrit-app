@@ -120,7 +120,7 @@ const STRINGS = {
       "Signing out of an account without Google deletes it for good, with every link. Continue?",
     deleteAccount: "Delete account",
     deleteConfirm:
-      "Delete your account, every link and every registered device? Messages on this device are removed too. This can't be undone.",
+      "Delete your account, every link and every registered device? Messages on this device are removed too. Your transcripts stay in your Google Drive. This can't be undone.",
     languageTitle: "Language",
     notificationsTitle: "Notifications on this device",
     permUnsupported: "This browser doesn't support push notifications.",
@@ -468,7 +468,7 @@ const STRINGS = {
     signOutConfirm: "להתנתק? ההודעות שכבר במכשיר הזה יימחקו ממנו.",
     signOutAnonConfirm: "התנתקות מחשבון בלי Google מוחקת אותו לצמיתות, עם כל הקישורים. להמשיך?",
     deleteAccount: "מחיקת החשבון",
-    deleteConfirm: "למחוק את החשבון, את כל הקישורים ואת כל המכשירים הרשומים? גם ההודעות במכשיר הזה יימחקו. אי אפשר לבטל.",
+    deleteConfirm: "למחוק את החשבון, את כל הקישורים ואת כל המכשירים הרשומים? גם ההודעות במכשיר הזה יימחקו. התמלולים נשארים ב-Google Drive שלכם. אי אפשר לבטל.",
     languageTitle: "שפה",
     notificationsTitle: "התראות במכשיר הזה",
     permUnsupported: "הדפדפן הזה לא תומך בהתראות.",

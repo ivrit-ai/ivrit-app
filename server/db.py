@@ -211,6 +211,11 @@ class Database:
     async def delete_push_subscription(self, endpoint: str, user_email: str):
         await self.execute("DELETE FROM push_subscriptions WHERE endpoint = ? AND user_email = ?", endpoint, user_email)
 
+    async def delete_user(self, user_email: str):
+        """Everything kept here about one account (its account is being deleted)."""
+        for table in ("quota_buckets", "drive_grants", "user_settings", "push_subscriptions"):
+            await self.execute(f"DELETE FROM {table} WHERE user_email = ?", user_email)
+
     # ---- stats counters ----
 
     async def incr_stat(self, key: str, amount: float):

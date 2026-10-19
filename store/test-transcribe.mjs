@@ -390,6 +390,12 @@ try {
   await landing.screenshot({ path: path.join(OUT, "bt-0-landing-1280.png") });
   await guest.close();
 
+  // --- deleting the account: this server forgets it too, and the browser is signed out here
+  const deletedHere = await server("/account/delete", { method: "POST" });
+  const bootAfter = await server("/transcribe/boot");
+  check("deleting the account clears this server's records and its sign-in", deletedHere.body?.deleted === true
+    && bootAfter.body?.signedIn === false, JSON.stringify([deletedHere, bootAfter.body]));
+
   const realErrors = errors.filter((e) => !/favicon|ERR_|Failed to load resource/.test(e));
   check("no script errors", realErrors.length === 0, realErrors.join(" | ").slice(0, 600));
 } finally {
