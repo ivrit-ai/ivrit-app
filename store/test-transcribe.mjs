@@ -355,6 +355,13 @@ try {
   // --- "transcript ready", in the inbox, opening the transcript in place
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`${origin}/`);
+  await page.waitForSelector("#tr-list:not([hidden])", { timeout: 20000 }).catch(() => null);
+  const home = await page.evaluate(() => ({
+    first: document.querySelector("#tabs button")?.dataset.view,
+    active: document.querySelector("#tabs button.active")?.dataset.view,
+  }));
+  check("the app opens on transcribing, its first tab; messages have their own", home.first === "transcribe" && home.active === "transcribe", JSON.stringify(home));
+  await page.click("#tabs button[data-view='inbox']");
   const readyMessage = await page.waitForSelector(".msg:has(.msg-title:text-is('התמלול מוכן'))", { timeout: 20000 }).catch(() => null);
   check("a finished transcript arrives in the inbox, by the file's name", Boolean(readyMessage)
     && (await readyMessage.textContent()).includes("sample.ogg"));

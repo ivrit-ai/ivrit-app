@@ -30,10 +30,10 @@ const STRINGS = {
 
     support: "Support",
     landingKicker: "Hebrew speech, in writing",
-    landingTitle: "Your transcripts, the moment they're ready.",
+    landingTitle: "Transcribe Hebrew recordings, with who said what.",
     landingLede:
-      "Eliezer's transcripts of your WhatsApp voice messages arrive here as notifications, and stay on your phone. Transcribing your own recordings is one tap away.",
-    pointDevice: "Kept on your device. The server forgets after three days.",
+      "Upload or record audio and video, get a transcript with speakers, and search everything you have transcribed, on every device. Eliezer's transcripts of your WhatsApp voice messages arrive here too.",
+    pointSearch: "Search all your transcripts, by word, speaker or folder.",
     continueGoogle: "Continue with Google",
     continueAnon: "Continue without an account",
     anonCaveat: "Without an account, your inbox lives only on this device.",
@@ -51,7 +51,7 @@ const STRINGS = {
     install: "Install",
     installLater: "You can install later from the browser menu.",
 
-    tabInbox: "Inbox",
+    tabInbox: "Messages",
     tabSources: "Sources",
     tabSettings: "Settings",
 
@@ -73,6 +73,7 @@ const STRINGS = {
     undo: "Undo",
     openLink: "Open link",
     openHere: "Open",
+    newMessages: (n) => `${n} new messages`,
     loadingFull: "Fetching the full text…",
     emptyTitle: "Nothing here yet",
     emptyBody: "Link Eliezer, and its transcripts will land here.",
@@ -380,10 +381,10 @@ const STRINGS = {
 
     support: "תמיכה",
     landingKicker: "עברית מדוברת, בכתב",
-    landingTitle: "התמלולים שלכם, ברגע שהם מוכנים.",
+    landingTitle: "תמלול הקלטות בעברית, עם מי אמר מה.",
+    pointSearch: "חיפוש בכל התמלולים שלכם, לפי מילה, דובר או תיקייה.",
     landingLede:
-      "התמלולים של אליעזר להודעות הקוליות שלכם בוואטסאפ מגיעים לכאן כהתראות ונשמרים בטלפון. ותמלול של הקלטות משלכם נמצא במרחק הקשה.",
-    pointDevice: "נשמר במכשיר שלכם. השרת שוכח אחרי שלושה ימים.",
+      "מעלים או מקליטים שמע ווידאו, מקבלים תמלול עם דוברים, ומחפשים בכל מה שתמללתם, בכל מכשיר. גם התמלולים של אליעזר להודעות הקוליות שלכם בוואטסאפ מגיעים לכאן.",
     continueGoogle: "המשך עם Google",
     continueAnon: "המשך בלי חשבון",
     anonCaveat: "בלי חשבון, התיבה שלכם קיימת רק במכשיר הזה.",
@@ -423,6 +424,7 @@ const STRINGS = {
     undo: "ביטול",
     openLink: "פתיחת הקישור",
     openHere: "פתיחה",
+    newMessages: (n) => `${n} הודעות חדשות`,
     loadingFull: "טוען את הטקסט המלא…",
     emptyTitle: "עדיין אין כאן כלום",
     emptyBody: "קשרו את אליעזר, והתמלולים שלו יגיעו לכאן.",

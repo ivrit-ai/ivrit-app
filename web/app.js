@@ -510,6 +510,24 @@ async function loadMessages() {
   $("unread-badge").hidden = !unread;
   $("unread-badge").textContent = unread > 99 ? "99+" : String(unread);
   store.updateBadge().catch(() => {});
+  announceArrivals();
+}
+
+// Messages are not the main screen: one that arrives while the app is open
+// elsewhere (transcribing, searching) pops up, with a way to open it.
+let seenMessages = null;
+function announceArrivals() {
+  const fresh = seenMessages
+    ? state.messages.filter((m) => !seenMessages.has(m.id) && !m.read && m.kind !== "pending")
+    : [];
+  seenMessages = new Set(state.messages.map((m) => m.id));
+  if (!fresh.length || state.view === "inbox" || document.hidden) return;
+  const m = fresh[0];
+  const what = m.title || (m.body ?? "").replace(/\s+/g, " ").slice(0, 80);
+  toast(fresh.length > 1 ? t("newMessages", fresh.length) : `${sourceName(m)}: ${what}`, {
+    label: t("openHere"),
+    run: () => (location.hash = `#m/${encodeURIComponent(m.id)}`),
+  });
 }
 
 async function refreshInbox({ fromServer = true } = {}) {
@@ -2235,7 +2253,8 @@ async function start() {
 
   state.catalog = (await store.getMeta("catalog")) ?? state.catalog;
   await loadMessages();
-  showView("inbox");
+  // Transcribing is the main screen; messages have their own tab.
+  showView("transcribe");
   renderNotifyBanner();
 
   if (location.hash === "#upgraded") {
