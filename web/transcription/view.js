@@ -101,11 +101,40 @@ function renderShell() {
     list.classList.add("dropping");
   });
   list.addEventListener("dragleave", (e) => e.target === list && list.classList.remove("dropping"));
-  list.addEventListener("drop", (e) => {
+  list.addEventListener("drop", async (e) => {
     e.preventDefault();
     list.classList.remove("dropping");
-    chooseFiles([...(e.dataTransfer?.files || [])]);
+    chooseFiles(await droppedFiles(e.dataTransfer));
   });
+}
+
+// What was dropped: files, and the audio and video inside dropped folders (at any
+// depth), as transcribe.ivrit.ai took them. The entries are taken at once: the
+// drop's items are gone once the event is over.
+const MEDIA = /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|wma|amr|webm|mp4|m4v|mov|mkv|avi|3gp)$/i;
+const isMedia = (file) => /^(audio|video)\//.test(file.type) || MEDIA.test(file.name);
+
+async function droppedFiles(transfer) {
+  const entries = [...(transfer?.items || [])].map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.some((entry) => entry.isDirectory)) return [...(transfer?.files || [])];
+  const files = [];
+  const walk = async (entry) => {
+    if (entry.isFile) {
+      const file = await new Promise((resolve) => entry.file(resolve, () => resolve(null)));
+      if (file && isMedia(file)) files.push(file);
+      return;
+    }
+    const reader = entry.createReader();
+    // readEntries answers in batches, until an empty one.
+    for (;;) {
+      const batch = await new Promise((resolve) => reader.readEntries(resolve, () => resolve([])));
+      if (!batch.length) break;
+      for (const child of batch) await walk(child);
+    }
+  };
+  for (const entry of entries) await walk(entry);
+  if (!files.length) host.toast(tr("noMediaInFolder"));
+  return files;
 }
 
 // ------------------------------------------------------------------ the list
