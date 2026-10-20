@@ -96,7 +96,7 @@ export async function open(id, entry, folder = null, at = null) {
     doc = {
       id,
       folder,
-      entry: entry || { results_id: id, source_filename: results.source_filename, duration_seconds: results.duration_seconds, completed_at: results.completed_at, language: results.language },
+      entry: entry || { results_id: id, source_filename: results.source_filename, duration_seconds: results.duration_seconds, completed_at: results.completed_at, language: results.language, engine: results.engine },
       results: results.results || [],
       language: results.language || entry?.language || "he",
       saved: normalizeEdits(edits || emptyEdits()),
@@ -186,6 +186,7 @@ function render() {
     el("p", { class: "lede" }, [
       document.createTextNode(meta),
       hasEdits(doc.saved) ? el("span", { class: "tag tr-edited", text: tr("edited") }) : null,
+      entry.engine ? el("span", { class: "tag tr-edited", text: tr("madeOnDevice") }) : null,
     ]),
     audio ? el("div", { class: "card tr-player" }, [audio]) : null,
     editing ? editBar() : toolbar(),

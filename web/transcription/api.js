@@ -93,6 +93,23 @@ export async function edits(resultsId, folder) {
   }
 }
 
+// A transcript made on this device (local/), into My files: the segments gzipped,
+// and the audio only if the user keeps it (for playback, in their Drive).
+export async function saveLocal(meta, segments, audio) {
+  const form = new FormData();
+  form.append("meta", JSON.stringify(meta));
+  const packed = await new Response(new Blob([JSON.stringify(segments)]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
+  form.append("results", packed, "results.json.gz");
+  if (audio) form.append("audio", audio, audio.name || "audio");
+  const res = await fetch("/appdata/local", { method: "POST", credentials: "same-origin", body: form });
+  if (res.status === 401) onSignedOut();
+  if (!res.ok) throw new ApiRefusal(res.status, await res.json().catch(() => null));
+  return res.json();
+}
+
+// Transcribing on the user's devices only (the server then refuses their audio).
+export const setLocalOnly = (on) => call("/settings", { method: "POST", body: { localOnly: on } });
+
 export const saveEdits = (resultsId, state, folder) =>
   call(inFolder(`/appdata/edits/${encodeURIComponent(resultsId)}`, folder), { method: "POST", body: state });
 

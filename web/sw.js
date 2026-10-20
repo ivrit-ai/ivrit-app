@@ -36,9 +36,10 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const names = await caches.keys();
-      // The lab's model weights (whisper-gpu-weights) are 1.6 GB: never drop them here.
-      const keep = new Set([SHELL, "whisper-gpu-weights"]);
-      await Promise.all(names.filter((n) => !keep.has(n)).map((n) => caches.delete(n)));
+      // Never dropped here: the lab's model weights (whisper-gpu-weights, 1.6 GB) and
+      // the on-device transcription model (zipformer2-he-<revision>, 72 MB).
+      const keep = (n) => n === SHELL || n === "whisper-gpu-weights" || n.startsWith("zipformer2-he-");
+      await Promise.all(names.filter((n) => !keep(n)).map((n) => caches.delete(n)));
       // A browser push subscription left from before: notifications no longer come
       // this way (the page also removes the device at Communicator).
       await (await self.registration.pushManager?.getSubscription())?.unsubscribe().catch(() => {});

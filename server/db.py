@@ -183,6 +183,20 @@ class Database:
             updated_at,
         )
 
+    async def get_local_only(self, user_email: str) -> bool:
+        row = await self.fetchrow("SELECT local_only FROM user_settings WHERE user_email = ?", user_email)
+        return bool(row and row["local_only"])
+
+    async def set_local_only(self, user_email: str, on: bool, updated_at: int):
+        await self.execute(
+            "INSERT INTO user_settings (user_email, local_only, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (user_email) DO UPDATE SET "
+            "local_only = excluded.local_only, updated_at = excluded.updated_at",
+            user_email,
+            on,
+            updated_at,
+        )
+
     # ---- web push subscriptions ----
 
     async def save_push_subscription(

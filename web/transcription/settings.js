@@ -1,8 +1,9 @@
-// Transcribing's settings, in the app's Settings: the user's own RunPod key (no
-// weekly limit, more languages; kept encrypted in their Drive, never shown again),
-// its balance, and Stats for Nerds.
+// Transcribing's settings, in the app's Settings: transcribing on the user's
+// devices only, the user's own RunPod key (no weekly limit, more languages; kept
+// encrypted in their Drive, never shown again), its balance, and Stats for Nerds.
 
 import * as api from "./api.js";
+import * as local from "./local/local.js";
 import { serverError, setLanguage, tr } from "./strings.js";
 
 export async function render(box, host, onChange) {
@@ -18,11 +19,31 @@ export async function render(box, host, onChange) {
     box.replaceChildren(el("p", { class: "muted", text: tr("runpodHelpText") }));
     return;
   }
+  // On the user's devices only: their audio is never transcribed on a server
+  // (and the server refuses it).
+  const onDevice = el("input", { type: "checkbox", checked: Boolean(boot.localOnly), disabled: !local.supported() && !boot.localOnly });
+  onDevice.addEventListener("change", async () => {
+    onDevice.disabled = true;
+    try {
+      const saved = await api.setLocalOnly(onDevice.checked);
+      onChange?.({ ...boot, localOnly: Boolean(saved.localOnly) });
+      render(box, host, onChange);
+    } catch (err) {
+      onDevice.checked = !onDevice.checked;
+      onDevice.disabled = false;
+      host.toast(serverError(err.data, "errorInternalServer"));
+    }
+  });
+  const onDeviceBox = el("label", { class: "tr-check" }, [onDevice, el("span", {}, [
+    el("span", { text: tr("localOnlyTitle") }),
+    el("span", { class: "sub", text: local.supported() ? tr("localOnlyBody") : tr("localOnlyUnsupported") }),
+  ])]);
   const status = boot.runpodKeyStatus || {};
   const balance = el("span", { class: "muted" });
   const input = el("input", { class: "tr-input", type: "password", autocomplete: "off", placeholder: tr("runpodKeyPlaceholder"), dir: "ltr" });
   const save = el("button", { class: "btn primary small", type: "submit", text: tr("save") });
   const form = el("form", { class: "stack" }, [
+    onDeviceBox,
     el("p", { class: "muted", text: tr("runpodHelpText") }),
     status.has_key
       ? el("div", { class: "row spread" }, [

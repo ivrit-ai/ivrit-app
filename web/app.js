@@ -1459,6 +1459,14 @@ async function takeShared() {
   if (!state.me || state.me.offline) return;
   const files = await sharedFiles().catch(() => []);
   if (!files.length) return;
+  // Transcribing on the device only: shared recordings are not sent to Eliezer or
+  // the server. The phone's own transcription comes with the next app update;
+  // until then they wait, kept on the phone.
+  const transcribing = await transcribeApi.boot().catch(() => null);
+  if (transcribing?.localOnly) {
+    toast(t("localSharedWaiting"));
+    return;
+  }
   let sent = 0;
   const longer = [];
   for (const file of files) {

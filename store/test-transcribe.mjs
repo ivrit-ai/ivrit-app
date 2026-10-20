@@ -345,6 +345,50 @@ try {
     && (await page.locator("#search-filters .chip[aria-pressed='true']").first().textContent()).includes("הודעות"));
   await page.click(".search-top .icon-btn");
 
+  // --- transcribing on this device only (the model from Hugging Face, the first time)
+  await page.click("#tabs button[data-view='settings']");
+  const onlyHere = page.locator("#transcribe-settings-box label.tr-check:has-text('תמלול במכשיר בלבד') input");
+  await onlyHere.waitFor({ timeout: 10000 }).catch(() => null);
+  await onlyHere.check().catch(() => null);
+  await page.waitForTimeout(1200);
+  const refused = await page.evaluate(async () => {
+    const form = new FormData();
+    form.append("file", new File([new Uint8Array(2048)], "x.ogg", { type: "audio/ogg" }));
+    form.append("language", "he");
+    const res = await fetch("/upload", { method: "POST", body: form, credentials: "same-origin" });
+    return { status: res.status, body: await res.text() };
+  });
+  check("with transcribing on the device only, the server refuses the audio", refused.status === 403 && refused.body.includes("errorLocalOnly"), JSON.stringify(refused).slice(0, 200));
+  await page.click("#tabs button[data-view='transcribe']");
+  await page.waitForSelector("#tr-list:not([hidden])", { timeout: 10000 }).catch(() => null);
+  await page.setInputFiles("#tr-input", path.join(ROOT, "store/fixtures/hebrew-12s.ogg"));
+  const localSheet = await page.waitForSelector("#sheet[open] .tr-new", { timeout: 5000 }).catch(() => null);
+  check("...the sheet says so, Hebrew only", Boolean(localSheet) && (await page.locator("#sheet .tr-new").textContent()).includes("יתומלל במכשיר הזה")
+    && (await page.locator("#sheet .tr-select option").count()) === 1);
+  await page.click("#sheet .tr-new button[type=submit]");
+  const progressed = await page.waitForSelector("#tr-feed .tr-file .tag.accent:text-matches('במכשיר|מודל|מכין')", { timeout: 15000 }).catch(() => null);
+  check("...its card shows the progress on the device", Boolean(progressed));
+  let madeHere = null;
+  for (let i = 0; i < 90 && !madeHere; i++) {
+    await page.waitForTimeout(2000);
+    const toc = await server("/appdata/toc");
+    madeHere = toc.body?.entries?.find((e) => e.engine === "zipformer2-66m-he") ?? null;
+  }
+  check("...and it lands in My files, made on the device", Boolean(madeHere));
+  await shot("8b-local-list");
+  if (madeHere) {
+    await page.goto(`${origin}/#t/${encodeURIComponent(madeHere.results_id)}`);
+    await page.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 20000 }).catch(() => null);
+    const text = await page.locator("#tr-text").textContent().catch(() => "");
+    check("...the Hebrew is there, labelled, without speakers", text.includes("בפרק של היום")
+      && (await page.locator("#tr-reader .tag:has-text('במכשיר')").count()) === 1 && (await page.locator("#tr-text .tr-who").count()) === 0, text.slice(0, 120));
+    await shot("8c-local-reader");
+  }
+  await page.click("#tabs button[data-view='settings']");
+  await onlyHere.waitFor({ timeout: 10000 }).catch(() => null);
+  await onlyHere.uncheck().catch(() => null);
+  await page.waitForTimeout(1000);
+
   // --- a phone
   await page.setViewportSize({ width: 412, height: 860 });
   await page.goto(`${origin}/#t/${encodeURIComponent(ready?.results_id ?? "")}`);

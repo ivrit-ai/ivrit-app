@@ -120,7 +120,8 @@ export function timeGroups(segments) {
 // "segments", timestampFormat: "none" | "segments", diarizationDisplay: "enabled" |
 // "disabled"}. [{range?, turns: [{speaker?, indices}]}]
 export function layout(segments, settings) {
-  const speakers = settings.diarizationDisplay !== "disabled";
+  // A transcript with no speakers at all (made on the device) shows no labels.
+  const speakers = settings.diarizationDisplay !== "disabled" && speakersIn(segments).length > 0;
   const split = (indices) => (speakers ? turns(segments, indices) : [{ speaker: undefined, indices }]);
   if (settings.timestampFormat === "segments") {
     return timeGroups(segments).map((g) => ({ range: `${clock(g.start)}-${clock(g.end)}`, turns: split(g.indices) }));

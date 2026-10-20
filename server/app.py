@@ -34,6 +34,7 @@ import dotenv
 import random
 import secrets
 import tempfile
+import shutil
 import asyncio
 import queue
 import asyncio.subprocess
@@ -2404,6 +2405,109 @@ async def delete_library_folder(folder_id: str, request: Request):
     return JSONResponse({"success": True})
 
 
+# A transcript the user's own device made (the on-device model,
+# web/transcription/local/), saved to their Drive like any other: multipart with
+# `meta` (JSON: filename, language, duration_seconds, folder, origin, engine),
+# `results` (the segments, gzipped JSON) and, when the user keeps the audio,
+# `audio`. The audio is only converted for playback and stored in their Drive;
+# it is not transcribed here, and no quota is used.
+LOCAL_ENGINES = {"zipformer2-66m-he"}
+LOCAL_MAX_RESULTS = 40 * 1024 * 1024  # unpacked JSON; ~20 hours of speech
+
+
+def checked_local_results(raw: bytes) -> Optional[list]:
+    try:
+        data = json.loads(gzip.decompress(raw)[: LOCAL_MAX_RESULTS + 1])
+    except Exception:
+        return None
+    if not isinstance(data, list) or len(data) > 200_000:
+        return None
+    segments = []
+    for s in data:
+        if not isinstance(s, dict) or not isinstance(s.get("text"), str):
+            return None
+        try:
+            start, end = float(s["start"]), float(s["end"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        words = []
+        for w in s.get("words") or []:
+            if isinstance(w, dict) and isinstance(w.get("word"), str):
+                try:
+                    words.append({"word": w["word"][:200], "start": float(w["start"]), "end": float(w["end"])})
+                except (KeyError, TypeError, ValueError):
+                    continue
+        segments.append({"text": s["text"][:20000], "start": start, "end": max(start, end), "speakers": [], "words": words})
+    return segments
+
+
+@app.post("/appdata/local", dependencies=[Depends(require_google_login)])
+async def save_local_transcript(request: Request):
+    user = library_user(request)
+    if isinstance(user, JSONResponse):
+        return user
+    refresh_token, user_email, user_identifier = user
+    form = await request.form()
+    try:
+        meta = json.loads(form.get("meta") or "{}")
+    except ValueError:
+        meta = None
+    results_file = form.get("results")
+    if not isinstance(meta, dict) or results_file is None or meta.get("engine") not in LOCAL_ENGINES:
+        return JSONResponse({"error": "errorLocalSaveFailed", "i18n_key": "errorLocalSaveFailed"}, status_code=400)
+    results = checked_local_results(await results_file.read())
+    if results is None:
+        return JSONResponse({"error": "errorLocalSaveFailed", "i18n_key": "errorLocalSaveFailed"}, status_code=400)
+    try:
+        folder = await resolve_folder(user_identifier, meta.get("folder"))
+    except FolderNotFound:
+        return folder_not_found_response()
+    filename = os.path.basename(str(meta.get("filename") or "recording"))[:255] or "recording"
+    language = str(meta.get("language") or "he")[:8]
+    try:
+        duration = max(0.0, float(meta.get("duration_seconds") or 0))
+    except (TypeError, ValueError):
+        duration = 0.0
+    origin = str(meta.get("origin") or "")[:20] or None
+
+    work = tempfile.mkdtemp(prefix="local-")
+    opus_path = None
+    try:
+        audio = form.get("audio")
+        if audio is not None and hasattr(audio, "read"):
+            source = os.path.join(work, "audio")
+            with open(source, "wb") as f:
+                while chunk := await audio.read(1024 * 1024):
+                    f.write(chunk)
+            opus_path = os.path.join(work, "audio.opus")
+            if not await transcode_to_opus(source, opus_path, duration_hint=duration or None):
+                opus_path = None
+        results_id = await store_transcript(
+            refresh_token=refresh_token,
+            user_email=user_email,
+            folder=folder,
+            job_id=str(uuid.uuid4()),
+            filename=filename,
+            language=language,
+            duration=duration,
+            completed_at=datetime.now(),
+            results=results,
+            origin=origin,
+            opus_path=opus_path,
+            engine=meta["engine"],
+        )
+    except DriveStorageFullError:
+        return JSONResponse({"error": "errorDriveStorageFull", "i18n_key": "errorDriveStorageFull"}, status_code=507)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if not results_id:
+        return JSONResponse({"error": "errorLocalSaveFailed", "i18n_key": "errorLocalSaveFailed"}, status_code=502)
+    await db.incr_stat("local_transcripts", 1)
+    await db.incr_stat("local_minutes", duration / 60.0)
+    log_message(f"{user_email}: saved a transcript made on the device ({duration:.0f}s, {meta['engine']})")
+    return JSONResponse({"results_id": results_id, "audio_saved": bool(opus_path)})
+
+
 @app.post("/appdata/move", dependencies=[Depends(require_google_login)])
 async def move_transcript(request: Request):
     """A transcript from one folder to another: {results_id, from, to} (absent means
@@ -4479,6 +4583,11 @@ async def validate_upload_request_metadata(
     if not user_email:
         return None, JSONResponse({"error": "errorUserEmailNotFound", "i18n_key": "errorUserEmailNotFound"}, status_code=401)
 
+    # The user chose to transcribe on their own devices only: their audio is not
+    # transcribed here, whatever a client asks.
+    if await db.get_local_only(user_email):
+        return None, JSONResponse({"error": "errorLocalOnly", "i18n_key": "errorLocalOnly"}, status_code=403)
+
     normalized_runpod_token = get_session_runpod_token(request)
     has_private_credentials = bool(normalized_runpod_token)
 
@@ -4902,6 +5011,91 @@ async def push_job_finished(job_desc, status, results_id):
     await asyncio.gather(*(push_one(sub) for sub in subscriptions))
 
 
+async def store_transcript(*, refresh_token, user_email, folder, job_id, filename, language, duration,
+                           completed_at, results, origin=None, opus_path=None, engine=None) -> Optional[str]:
+    """A finished transcript into the user's Drive (My files): its results file, its
+    audio (an opus file, when kept), its readable Doc, its entry in the folder's
+    list, and its search index entry. Returns its results id, or None when the
+    results file could not be written. Raises when the list could not be updated
+    (DriveStorageFullError when Drive is full). For the server's own jobs and for
+    transcripts made on the user's device (POST /appdata/local)."""
+    toc_version = os.environ.get("TOC_VER", "1.0")
+    completed_at_iso = completed_at.isoformat()
+    results_id = str(uuid.uuid4())
+
+    # Metadata AND results in one file, so the list can be rebuilt from the files.
+    full_payload = {
+        "results_id": results_id,
+        "job_id": job_id,
+        "source_filename": filename,
+        "language": language,
+        "duration_seconds": duration,
+        "completed_at": completed_at_iso,
+        "toc_version": toc_version,
+        "results": results,
+    }
+    if engine:
+        full_payload["engine"] = engine
+    # The results file first, before the list refers to it.
+    file_data = gzip.compress(json.dumps(full_payload).encode("utf-8"))
+    user_identifier = get_user_identifier(refresh_token=refresh_token, user_email=user_email)
+    upload_success = await file_storage_backend.upload_file(
+        f"{results_id}.json.gz", file_data, "application/gzip", user_identifier, user_email, folder=folder,
+    )
+    if not upload_success:
+        await db.incr_stat("gdrive_error_audio_upload", 1)
+        logger.error(f"Failed to upload results file for {job_id}, skipping TOC update")
+        return None
+
+    if opus_path:
+        try:
+            if os.path.exists(opus_path):
+                with open(opus_path, "rb") as f:
+                    opus_data = f.read()
+                opus_filename = f"{results_id}.opus"
+                if await file_storage_backend.upload_file(
+                    opus_filename, opus_data, "audio/opus", user_identifier, user_email, folder=folder,
+                ):
+                    log_message(f"{user_email}: Uploaded opus file for {job_id} as {opus_filename}")
+                else:
+                    await db.incr_stat("gdrive_error_audio_upload", 1)
+                    logger.warning(f"Failed to upload opus file for {job_id}, but continuing")
+            else:
+                logger.warning(f"Opus file not found for {job_id} at {opus_path}, skipping audio upload")
+        except Exception as e:
+            logger.error(f"Error uploading opus file for {job_id}: {e}")
+
+    toc_entry = {
+        "results_id": results_id,
+        "job_id": job_id,
+        "source_filename": filename,
+        "language": language,
+        "duration_seconds": duration,
+        "completed_at": completed_at_iso,
+        "status": "Ready",
+        "toc_version": toc_version,
+    }
+    if origin:
+        toc_entry["origin"] = origin
+    if engine:
+        toc_entry["engine"] = engine
+    # The readable copy, beside the JSON (never holding the transcript back).
+    doc_id = await write_readable_doc(refresh_token, user_email, folder, toc_entry, results)
+    if doc_id:
+        toc_entry["doc_id"] = doc_id
+
+    async with get_toc_lock(user_email, folder):
+        toc_data = await download_toc(refresh_token, user_email=user_email, folder=folder)
+        toc_data.setdefault("entries", []).append(toc_entry)
+        if not await upload_toc(refresh_token, toc_data, user_email=user_email, folder=folder):
+            await db.incr_stat("gdrive_error_toc_upload", 1)
+            raise Exception("Failed to upload TOC")
+
+    log_message(f"{user_email}: Uploaded transcription to TOC (results_id: {results_id})")
+    asyncio.create_task(index_transcript(refresh_token, user_email, folder, toc_entry, results, None))
+    return results_id
+
+
 async def transcribe_job(job_desc, hub_entry=None):
     """Transcribe one job and save it to the user's Drive. In hub mode hub_entry is the
     credit it runs under: the RunPod job id is recorded there (so a restarted server
@@ -5107,119 +5301,22 @@ async def transcribe_job(job_desc, hub_entry=None):
 
         # After completion, store results separately and update TOC
         try:
-            # Get TOC version from environment
-            toc_version = os.environ.get("TOC_VER", "1.0")
-
-            completed_at_iso = job_results[job_id]["completion_time"].isoformat()
-            results_id = str(uuid.uuid4())
-            
-            # Create full payload with both metadata AND results
-            # This allows TOC to be rebuilt from individual files if needed
-            full_payload = {
-                "results_id": results_id,
-                "job_id": job_id,
-                "source_filename": job_desc.filename,
-                "language": job_desc.language,
-                "duration_seconds": duration,
-                "completed_at": completed_at_iso,
-                "toc_version": toc_version,
-                "results": job_results[job_id]["results"],
-            }
-            
-            # Upload results file first (before TOC update)
-            # This ensures results exist before TOC references them
-            results_filename = f"{results_id}.json.gz"
-            # Compress JSON data
-            json_data = json.dumps(full_payload).encode('utf-8')
-            file_data = gzip.compress(json_data)
-            mime_type = "application/gzip"
-            user_identifier = get_user_identifier(refresh_token=job_desc.refresh_token, user_email=job_desc.user_email)
-            folder = job_desc.get("folder")
-            upload_success = await file_storage_backend.upload_file(
-                results_filename,
-                file_data,
-                mime_type,
-                user_identifier,
-                job_desc.user_email,
-                folder=folder,
+            results_id = await store_transcript(
+                refresh_token=job_desc.refresh_token,
+                user_email=job_desc.user_email,
+                folder=job_desc.get("folder"),
+                job_id=job_id,
+                filename=job_desc.filename,
+                language=job_desc.language,
+                duration=duration,
+                completed_at=job_results[job_id]["completion_time"],
+                results=job_results[job_id]["results"],
+                origin=job_desc.get("origin"),
+                opus_path=temp_files.get(job_id) if job_desc.save_audio else None,
             )
-
-            if not upload_success:
-                await db.incr_stat("gdrive_error_audio_upload", 1)
-                logger.error(f"Failed to upload results file for {job_id}, skipping TOC update")
+            if not results_id:
                 await notify_job_finished(job_desc, "failed", None)
                 return
-            
-            # Upload opus file if save_audio is True
-            if job_desc.save_audio:
-                try:
-                    opus_file_path = temp_files.get(job_id)
-                    if opus_file_path and os.path.exists(opus_file_path):
-                        # Read the opus file
-                        with open(opus_file_path, 'rb') as f:
-                            opus_data = f.read()
-                        
-                        # Upload as uuid4.opus
-                        opus_filename = f"{results_id}.opus"
-                        opus_mime_type = "audio/opus"
-                        opus_upload_success = await file_storage_backend.upload_file(
-                            opus_filename,
-                            opus_data,
-                            opus_mime_type,
-                            user_identifier,
-                            job_desc.user_email,
-                            folder=folder,
-                        )
-                        
-                        if opus_upload_success:
-                            log_message(f"{job_desc.user_email}: Uploaded opus file for {job_id} as {opus_filename}")
-                        else:
-                            await db.incr_stat("gdrive_error_audio_upload", 1)
-                            logger.warning(f"Failed to upload opus file for {job_id}, but continuing")
-                    else:
-                        logger.warning(f"Opus file not found for {job_id} at {opus_file_path}, skipping audio upload")
-                except Exception as e:
-                    logger.error(f"Error uploading opus file for {job_id}: {e}")
-                        
-            # Create TOC entry for completed job
-            toc_entry = {
-                "results_id": results_id,
-                "job_id": job_id,
-                "source_filename": job_desc.filename,
-                "language": job_desc.language,
-                "duration_seconds": duration,
-                "completed_at": completed_at_iso,
-                "status": "Ready",
-                "toc_version": toc_version,
-            }
-            if job_desc.get("origin"):
-                toc_entry["origin"] = job_desc.origin
-            # The readable copy, beside the JSON (never holding the transcript back).
-            doc_id = await write_readable_doc(
-                job_desc.refresh_token, job_desc.user_email, folder, toc_entry, job_results[job_id]["results"])
-            if doc_id:
-                toc_entry["doc_id"] = doc_id
-            
-            # Acquire per-user lock for TOC updates
-            toc_lock = get_toc_lock(job_desc.user_email, folder)
-            async with toc_lock:
-                # Download current TOC
-                toc_data = await download_toc(job_desc.refresh_token, user_email=job_desc.user_email, folder=folder)
-
-                # Append new entry
-                if "entries" not in toc_data:
-                    toc_data["entries"] = []
-                toc_data["entries"].append(toc_entry)
-
-                # Upload updated TOC atomically
-                success = await upload_toc(job_desc.refresh_token, toc_data, user_email=job_desc.user_email, folder=folder)
-                if not success:
-                    await db.incr_stat("gdrive_error_toc_upload", 1)
-                    raise Exception("Failed to upload TOC")
-
-            log_message(f"{job_desc.user_email}: Uploaded transcription to TOC (results_id: {results_id})")
-            asyncio.create_task(index_transcript(
-                job_desc.refresh_token, job_desc.user_email, folder, toc_entry, job_results[job_id]["results"], None))
             transcript_delivered = True
             await notify_job_finished(job_desc, "completed", results_id)
         except DriveStorageFullError as e:
@@ -5605,6 +5702,7 @@ if APP_SITE:
         response = JSONResponse({
             "signedIn": True,
             "email": current["user_email"],
+            "localOnly": await db.get_local_only(current["user_email"]),
             "runpodKeyStatus": runpod_key_status(current),
             "quotaIncreaseUrl": QUOTA_INCREASE_URL,
         }, headers={"Cache-Control": "no-store"})
@@ -5664,6 +5762,7 @@ if APP_SITE:
             return JSONResponse({"error": "signed_out"}, status_code=401)
         return JSONResponse({
             "clipsToDrive": await db.get_clips_to_drive(email),
+            "localOnly": await db.get_local_only(email),
             "driveConnected": bool(await db.get_drive_grant(email)),
         }, headers={"Cache-Control": "no-store"})
 
@@ -5675,6 +5774,8 @@ if APP_SITE:
         body = await request.json()
         if "clipsToDrive" in (body or {}):
             await db.set_clips_to_drive(email, bool(body["clipsToDrive"]), int(time.time()))
+        if "localOnly" in (body or {}):
+            await db.set_local_only(email, bool(body["localOnly"]), int(time.time()))
         return await get_settings(request)
 
     CLIP_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")

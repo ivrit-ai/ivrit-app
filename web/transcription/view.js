@@ -11,6 +11,7 @@
 import * as api from "./api.js";
 import * as reader from "./reader.js";
 import * as recorder from "./recorder.js";
+import * as local from "./local/local.js";
 import { language, serverError, setLanguage, tr } from "./strings.js";
 import { clock } from "./transcript.js";
 
@@ -493,6 +494,9 @@ function entryCard(entry, index) {
   } else if (failed) {
     tag = el("span", { class: "tag danger", text: tr("statusFailed") });
     note = [entry.failure_reason ? tr(entry.failure_reason) : tr("statusError"), entry.quota_refunded ? tr("quotaRefunded") : null].filter(Boolean).join(" · ");
+  } else if (ready && entry.engine) {
+    // Made on the user's device: no speakers.
+    tag = el("span", { class: "tag", text: tr("madeOnDevice") });
   }
   const open = () => ready && reader.navigate(entry.results_id, folder);
   const actions = el("div", { class: "msg-actions" }, [
@@ -522,9 +526,10 @@ function entryCard(entry, index) {
 function pendingCard(id, p) {
   const { el } = host;
   const percent = p.percent == null ? null : Math.round(p.percent);
-  const text = p.stage === "uploading"
-    ? tr("statusUploading", { progress: percent ?? 0 })
-    : percent ? tr("statusPreparing", { progress: percent }) : tr("statusPreparingStart");
+  const text = p.stage === "local" ? localStatus(p, percent)
+    : p.stage === "uploading"
+      ? tr("statusUploading", { progress: percent ?? 0 })
+      : percent ? tr("statusPreparing", { progress: percent }) : tr("statusPreparingStart");
   return el("article", { class: "msg tr-file" }, [
     glyph(),
     el("div", { class: "msg-main" }, [
@@ -533,6 +538,17 @@ function pendingCard(id, p) {
       el("div", { class: "tr-progress" }, [el("span", { style: `width:${Math.max(2, percent ?? 0)}%` })]),
     ]),
   ]);
+}
+
+// On this device: the recording read, the model fetched (once), transcribed, saved.
+function localStatus(p, percent) {
+  if (p.phase === "model") return tr("statusLocalModel", { progress: percent ?? 0 });
+  if (p.phase === "transcribing") {
+    const status = tr("statusLocalTranscribing", { progress: percent ?? 0 });
+    return p.left == null ? status : `${status} · ${eta(p.left)}`;
+  }
+  if (p.phase === "saving") return tr("statusLocalSaving");
+  return tr("statusLocalPreparing");
 }
 
 async function renameEntry(entry) {
@@ -642,7 +658,11 @@ export function chooseFiles(files) {
 
 function openNewSheet() {
   const { el, icon } = host;
-  const languages = Object.entries(config?.languages || { he: { enabled: true } }).filter(([, c]) => c.enabled).map(([key]) => key);
+  // On the user's devices only: the on-device model speaks Hebrew alone.
+  const onDevice = Boolean(boot?.localOnly);
+  const languages = onDevice
+    ? [local.LANGUAGE]
+    : Object.entries(config?.languages || { he: { enabled: true } }).filter(([, c]) => c.enabled).map(([key]) => key);
   const order = ["he", "en", "fr", "es", "de", "zh", "yi"];
   languages.sort((a, b) => order.indexOf(a) - order.indexOf(b));
   const preferred = localStorage.getItem("tr_language");
@@ -690,6 +710,7 @@ function openNewSheet() {
     list,
     more,
     el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("transcribeLanguage") }), select]),
+    onDevice ? el("p", { class: "muted", text: tr("localOnlyHint") }) : null,
     tree?.folders.length ? el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("saveTo") }), destination]) : null,
     el("label", { class: "tr-check" }, [keep, el("span", {}, [
       el("span", { text: tr("saveAudioInDrive") }),
@@ -719,8 +740,18 @@ async function send(files, options) {
   if (options.folder !== folder) openFolder(options.folder);
   else showList(folder);
   let queued = 0;
-  for (const file of files) {
+  let saved = 0;
+  // On this device: when the user chose it for good, or for the rest of this
+  // batch once the free time ran out.
+  let onDevice = Boolean(boot?.localOnly);
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
     const id = crypto.randomUUID();
+    if (onDevice) {
+      if (!(await sendLocally(file, options, id))) break;
+      saved++;
+      continue;
+    }
     pending.set(id, { name: file.name, size: file.size, stage: "uploading", percent: 0, folder: options.folder });
     draw();
     try {
@@ -732,16 +763,67 @@ async function send(files, options) {
       queued++;
       recorder.sent(file);
     } catch (err) {
-      host.toast(`${file.name}: ${serverError(err.data, "uploadError")}`);
       pending.delete(id);
       draw();
+      if (outOfFreeTime(err) && canTranscribeHere(options.language)
+        && (await host.ask(tr("outOfTimeLocal"), { ok: tr("transcribeOnDevice") }))) {
+        onDevice = true;
+        i--; // this file again, here
+        continue;
+      }
+      host.toast(`${file.name}: ${serverError(err.data, "uploadError")}`);
       break;
     }
     pending.delete(id);
   }
   if (queued) host.toast(queued > 1 ? tr("batchQueued", { count: queued }) : tr("fileQueued"));
+  if (saved) host.toast(tr("localSaved"));
   renderQuota();
   refresh();
+}
+
+const outOfFreeTime = (err) => ["errorRateLimitExceeded", "errorFileTooLargeForFreeService"].includes(err?.data?.i18n_key);
+const canTranscribeHere = (lang) => lang === local.LANGUAGE && local.supported();
+
+// One file through the on-device model, with progress in its card, then into My
+// files. False when it could not be done (the user was told why).
+async function sendLocally(file, options, id) {
+  const card = (fields) => {
+    pending.set(id, { name: file.name, size: file.size, stage: "local", folder: options.folder, ...fields });
+    draw();
+  };
+  card({ phase: "decoding", percent: 0 });
+  let transcribingSince = null;
+  try {
+    const { segments, duration } = await local.transcribe(file, {
+      onProgress: ({ stage, fraction }) => {
+        if (stage === "transcribing" && transcribingSince === null) transcribingSince = { at: Date.now(), fraction };
+        // Time left, from the pace so far (after the first few percent).
+        let left = null;
+        if (stage === "transcribing" && fraction - transcribingSince.fraction > 0.03) {
+          const rate = (fraction - transcribingSince.fraction) / (Date.now() - transcribingSince.at);
+          left = (1 - fraction) / rate / 1000;
+        }
+        card({ phase: stage, percent: fraction * 100, left });
+      },
+    });
+    card({ phase: "saving", percent: 100 });
+    await api.saveLocal(
+      { filename: file.name, language: local.LANGUAGE, duration_seconds: duration, folder: options.folder, origin: options.origin, engine: local.ENGINE },
+      segments,
+      options.saveAudio ? file : null
+    );
+    recorder.sent(file);
+    return true;
+  } catch (err) {
+    if (err instanceof local.TooLong) host.toast(`${file.name}: ${tr("localTooLong", { hours: local.MAX_SECONDS / 3600 })}`);
+    else if (err instanceof api.ApiRefusal) host.toast(`${file.name}: ${serverError(err.data, "errorLocalSaveFailed")}`);
+    else host.toast(`${file.name}: ${tr("localFailed", { details: err?.message || "" })}`);
+    return false;
+  } finally {
+    pending.delete(id);
+    draw();
+  }
 }
 
 // ------------------------------------------------------------------ screens
