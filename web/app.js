@@ -1,5 +1,5 @@
 import { LOCALES, detectLocale, hebrewScript, localized, locale, setLocale, t } from "./i18n.js";
-import { ApiError, createCommunicator, pushSupported } from "./client/communicator.js";
+import { ApiError, createCommunicator } from "./client/communicator.js";
 import * as transcribeApi from "./transcription/api.js";
 import * as transcription from "./transcription/view.js";
 import * as transcriptionSettings from "./transcription/settings.js";
@@ -284,13 +284,15 @@ const notify = shell
         });
       },
     }
-  : {
-      supported: pushSupported,
-      permission: () => (pushSupported() ? Notification.permission : "unsupported"),
+  : // In a browser there are none: notifications come through the ivrit.ai app on
+    // a phone, and here new messages show while the page is open.
+    {
+      supported: () => false,
+      permission: () => "unsupported",
       popupOff: () => false,
       async refresh() {},
-      request: () => Notification.requestPermission(),
-      register: () => communicator.registerDevice(),
+      request: async () => "unsupported",
+      register: async () => null,
     };
 
 const registerThisDevice = () => notify.register();
@@ -365,13 +367,13 @@ function platform() {
 }
 
 function troubleWithoutPush() {
-  if (shell) return "unsupported";
-  return platform().os === "ios" && !installed() ? "ios-install" : "unsupported";
+  return "unsupported";
 }
 
 // Why notifications cannot reach this device, or null when nothing is known to
 // be wrong. "default" (never asked) is not trouble: it is a question to ask.
 function notificationTrouble() {
+  if (!shell) return null;
   if (!notify.supported()) return troubleWithoutPush();
   if (notify.permission() === "denied") return "denied";
   if (notify.permission() === "granted" && state.pushFailed) return "failed";
@@ -380,25 +382,11 @@ function notificationTrouble() {
 }
 
 function helpSteps(trouble) {
-  if (shell) {
-    const ios = nativeStatus?.platform === "ios" && trouble !== "failed" ? "Ios" : "";
-    return t(`${trouble === "nopopup" ? "helpAppPopup" : trouble === "denied" ? "helpAppDenied" : "helpAppFailed"}${ios}`);
-  }
-  const { os, browser } = platform();
-  const host = location.host;
-  if (trouble === "ios-install") return t("helpIos-install");
-  if (trouble === "hidden") return t("helpHidden");
-  if (trouble === "failed") return browser === "brave" ? t("helpBrave") : t("helpFailed");
-  if (trouble === "unsupported") return t("helpFailed");
-  if (os === "ios") return t("helpIos");
-  if (os === "android") return browser === "samsung" ? t("helpSamsung", host) : t("helpAndroid", host);
-  if (browser === "firefox") return t("helpFirefox", host);
-  if (browser === "safari") return t("helpSafari", host);
-  if (["chrome", "edge", "brave"].includes(browser)) return t("helpChromium", host);
-  return t("helpGeneric");
+  const ios = nativeStatus?.platform === "ios" && trouble !== "failed" ? "Ios" : "";
+  return t(`${trouble === "nopopup" ? "helpAppPopup" : trouble === "denied" ? "helpAppDenied" : "helpAppFailed"}${ios}`);
 }
 
-// Steps for this browser and device, and what to do once they are done.
+// Steps for this phone, and what to do once they are done.
 function helpPanel(trouble, { retry, skip } = {}) {
   const actions = [];
   // In the app, the right settings screen is one tap away.
@@ -407,7 +395,7 @@ function helpPanel(trouble, { retry, skip } = {}) {
       el("button", { class: "btn primary", type: "button", text: t("openSettings"), onclick: () => shell.ivrit.openNotificationSettings() })
     );
   }
-  if (retry && trouble !== "unsupported" && trouble !== "ios-install" && trouble !== "nopopup") {
+  if (retry && trouble !== "unsupported" && trouble !== "nopopup") {
     actions.push(el("button", { class: "btn primary", type: "button", text: t("helpRetry"), onclick: retry }));
   }
   if (skip) actions.push(el("button", { class: "btn quiet", type: "button", text: t("linkAnyway"), onclick: skip }));
@@ -415,7 +403,6 @@ function helpPanel(trouble, { retry, skip } = {}) {
     el("h3", { text: t(`helpTitle_${trouble}`) }),
     el("p", { class: "muted", text: t(trouble === "nopopup" ? "helpLeadPopup" : "helpLead") }),
     el("ol", {}, helpSteps(trouble).map((step) => el("li", { text: step }))),
-    !shell && (trouble === "denied" || trouble === "hidden") ? el("p", { class: "hint", text: t("helpSystem") }) : null,
     actions.length ? el("div", { class: "row" }, actions) : null,
   ]);
 }
@@ -431,19 +418,6 @@ async function recheckNotifications() {
   }
   return enableNotifications();
 }
-
-// Permission changes (the user fixing it in site settings) re-render whatever
-// is showing, where the browser reports them.
-navigator.permissions
-  ?.query({ name: "notifications" })
-  .then((status) => {
-    status.onchange = () => {
-      if (!state.me) return;
-      renderNotifyBanner();
-      if (state.view === "settings") renderPermission();
-    };
-  })
-  .catch(() => {});
 
 function renderNotifyBanner() {
   const box = $("notify-banner");
@@ -1084,6 +1058,14 @@ async function changeLocale(next) {
 }
 
 function renderPermission() {
+  if (!shell) {
+    $("permission").textContent = t("notifyInApp");
+    $("permission").hidden = false;
+    $("permission-help").replaceChildren();
+    $("enable").hidden = true;
+    $("test").hidden = true;
+    return;
+  }
   const permission = notify.supported() ? notify.permission() : "unsupported";
   const trouble = notificationTrouble();
   const copy = { unsupported: "permUnsupported", default: "permDefault", granted: "permGranted", denied: "permDenied" };
@@ -1154,16 +1136,7 @@ async function renderDiagnostics() {
     $("diagnostics").replaceChildren(...rows.flatMap(([term, value]) => [el("dt", { text: term }), el("dd", { text: value })]));
     return;
   }
-  const rows = [
-    [t("permission"), pushSupported() ? Notification.permission : "unsupported"],
-    [t("installed"), installed() ? t("yes") : t("noTab")],
-    [t("serviceWorker"), "serviceWorker" in navigator ? "supported" : "missing"],
-  ];
-  if (pushSupported()) {
-    const reg = await navigator.serviceWorker.getRegistration();
-    const sub = await reg?.pushManager.getSubscription();
-    rows.push([t("pushService"), sub ? new URL(sub.endpoint).host : t("notSubscribed")]);
-  }
+  const rows = [[t("serviceWorker"), "serviceWorker" in navigator ? "supported" : "missing"]];
   $("diagnostics").replaceChildren(...rows.flatMap(([term, value]) => [el("dt", { text: term }), el("dd", { text: value })]));
 }
 
@@ -1178,52 +1151,24 @@ async function forgetThisDevice() {
 
 // ---------------------------------------------------------------- transcribe
 
-// Files shared to the site (a WhatsApp voice note, a recording) wait in this
-// cache, put there by the service worker, until sent to the Transcribe view or
-// discarded.
-const SHARE_CACHE = "share-inbox";
-
-// In the app, the phone hands the files to native code, which keeps them until
-// takeShared sends them on (to Eliezer, or into My files).
+// Files shared into the app on a phone: native code keeps them until takeShared
+// sends them on (to Eliezer, or into My files).
 async function sharedFiles() {
-  if (shell) {
-    const { files } = await shell.ivrit.sharedFiles();
-    return files.map((f) => ({
-      key: f.id,
-      name: f.name || t("sharedUnnamed"),
-      type: f.type,
-      size: f.size,
-      durationMs: f.durationMs,
-      origin: f.origin || "",
-      uploadId: f.uploadId || "",
-    }));
-  }
-  const cache = await caches.open(SHARE_CACHE);
-  const files = [];
-  for (const request of await cache.keys()) {
-    const res = await cache.match(request);
-    const name = decodeURIComponent(res.headers.get("x-name") || "") || t("sharedUnnamed");
-    const blob = await res.blob();
-    files.push({ key: request.url, name, type: res.headers.get("content-type") || "", blob, size: blob.size });
-  }
-  return files;
+  if (!shell) return [];
+  const { files } = await shell.ivrit.sharedFiles();
+  return files.map((f) => ({
+    key: f.id,
+    name: f.name || t("sharedUnnamed"),
+    type: f.type,
+    size: f.size,
+    durationMs: f.durationMs,
+    origin: f.origin || "",
+    uploadId: f.uploadId || "",
+  }));
 }
 
 async function discardShared(key) {
   if (shell) return shell.ivrit.discardShared({ id: key });
-  await (await caches.open(SHARE_CACHE)).delete(key);
-}
-
-function formatSize(bytes) {
-  const mb = bytes / 1_048_576;
-  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
-
-async function sendToTranscribe(file) {
-  if (!(await showTranscribeApp())) return toast(t("connectDriveFirst"));
-  transcription.chooseFiles([new File([file.blob], file.name, { type: file.type })]);
-  await discardShared(file.key);
-  renderTranscribe();
 }
 
 // ---------------------------------------------------------------- transcribe here, by Eliezer
@@ -1667,43 +1612,6 @@ $("connect-drive").addEventListener("click", async () => {
 
 async function renderTranscribe() {
   showTranscribeApp();
-  const box = $("shared");
-  // In the app, shared files go straight on (takeShared); nothing waits here.
-  if (shell) {
-    box.hidden = true;
-    return;
-  }
-  const files = await sharedFiles().catch(() => []);
-  box.hidden = !files.length;
-  if (!files.length) return box.replaceChildren();
-  box.replaceChildren(
-    el("h3", { text: t("sharedTitle") }),
-    el("p", { class: "muted", text: t("sharedLede") }),
-    el(
-      "div",
-      { class: "list" },
-      files.map((file) =>
-        el("div", { class: "list-row" }, [
-          el("div", { class: "grow" }, [
-            el("div", { dir: "auto", text: file.name }),
-            el("div", { class: "sub" }, [
-              el("bdi", { dir: "ltr", text: [file.durationMs > 0 ? clock(file.durationMs / 1000) : null, formatSize(file.size)].filter(Boolean).join(" · ") }),
-            ]),
-          ]),
-          el("button", { class: "btn primary small", type: "button", text: t("sharedSend"), onclick: () => sendToTranscribe(file) }),
-          el("button", {
-            class: "icon-btn",
-            type: "button",
-            "aria-label": t("delete"),
-            onclick: async () => {
-              await discardShared(file.key);
-              renderTranscribe();
-            },
-          }, [icon("trash")]),
-        ])
-      )
-    )
-  );
 }
 
 // ---------------------------------------------------------------- clips in Drive
@@ -2053,9 +1961,6 @@ if (shell) {
 navigator.serviceWorker?.addEventListener("message", (event) => {
   if (!state.me) return;
   if (event.data?.type === "push") refreshInbox({ fromServer: false });
-  if (event.data?.type === "open") {
-    location.hash = `#m/${encodeURIComponent(event.data.id)}`;
-  }
 });
 
 addEventListener("hashchange", openFromHash);
@@ -2071,41 +1976,6 @@ document.addEventListener("visibilitychange", async () => {
   }
   reconcile();
   refreshInbox();
-});
-
-function installed() {
-  return Boolean(shell) || navigator.standalone || matchMedia("(display-mode: standalone)").matches;
-}
-
-function showIosHint() {
-  const isIos = /iPhone|iPad|iPod/.test(navigator.userAgent);
-  $("ios-hint").hidden = !isIos || installed();
-}
-
-// Chrome and friends fire this instead of offering an install affordance of
-// their own, and the event is only honoured if replayed from a real gesture —
-// so it has to be captured here and spent inside the click handler.
-let installPrompt = null;
-
-addEventListener("beforeinstallprompt", (event) => {
-  event.preventDefault();
-  installPrompt = event;
-  $("install-hint").hidden = installed();
-});
-
-addEventListener("appinstalled", () => {
-  installPrompt = null;
-  $("install-hint").hidden = true;
-});
-
-$("install").addEventListener("click", async () => {
-  if (!installPrompt) return;
-  installPrompt.prompt();
-  const { outcome } = await installPrompt.userChoice;
-  // Single use: a spent event cannot be replayed.
-  installPrompt = null;
-  $("install-hint").hidden = true;
-  if (outcome === "dismissed") toast(t("installLater"));
 });
 
 // A different account on this browser must never see the previous one's
@@ -2193,7 +2063,6 @@ async function start() {
   const asked = askedLocale();
   setLocale(detectLocale(asked));
   renderLocaleSwitches();
-  showIosHint();
   // Signed in is having a session: no call to Google, no account sheet. In a
   // browser the server may know this browser already (its cookie).
   const session = await signedIn;
@@ -2202,7 +2071,6 @@ async function start() {
   if (session) transcribeApi.prefetch();
   await notifyKnown;
   if (!session) {
-    if (location.hash === "#shared") return showSharedSignedOut();
     $("landing").hidden = false;
     document.body.dataset.started = "1";
     return;
@@ -2213,7 +2081,6 @@ async function start() {
     if (err instanceof ApiError && err.status === 401) {
       // A session no longer accepted (say, a new signing key): sign in again.
       writeSession(null);
-      if (location.hash === "#shared") return showSharedSignedOut();
       $("landing").hidden = false;
       document.body.dataset.started = "1";
       return;
@@ -2257,6 +2124,9 @@ async function start() {
     toast(t("upgraded"));
   }
   if (state.me.offline) return;
+  // Browsers no longer get notifications (the phone app does): a push
+  // registration left from before is dropped, here and at Communicator.
+  if (!shell && localStorage.getItem("device_id")) communicator.forgetDevice().catch(() => {});
 
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   await refreshCatalog();
@@ -2267,7 +2137,7 @@ async function start() {
   await openFromHash();
   if (shell) await takeShared();
   watchJobs();
-  if (location.hash === "#shared" || location.hash === "#transcribe" || location.hash.startsWith("#t/") || location.hash.startsWith("#f/")) {
+  if (location.hash === "#transcribe" || location.hash.startsWith("#t/") || location.hash.startsWith("#f/")) {
     if (!/^#[tf]\//.test(location.hash)) history.replaceState(null, "", location.pathname + location.search);
     showView("transcribe");
   }

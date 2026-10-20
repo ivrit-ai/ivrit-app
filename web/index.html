@@ -7,7 +7,6 @@
     <meta name="theme-color" content="#111110" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="ivrit.ai: transcribe Hebrew recordings with speakers, search everything you transcribed, on every device." />
     <title>ivrit.ai</title>
-    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icons/mark.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <link rel="preload" href="/fonts/ibm-plex-sans-hebrew-latin-400.woff2" as="font" type="font/woff2" crossorigin />
@@ -93,26 +92,6 @@
       </div>
     </header>
 
-    <!-- Shown only once the browser has fired beforeinstallprompt, i.e. only
-         when installing would actually succeed. iOS never fires it and gets
-         the hint below instead. -->
-    <aside id="install-hint" class="banner" hidden>
-      <div>
-        <strong data-i18n="installTitle">Install ivrit.ai</strong>
-        <span data-i18n="installBody"></span>
-      </div>
-      <button id="install" class="btn primary small" type="button" data-i18n="install">Install</button>
-    </aside>
-
-    <!-- The Home Screen cookie jar is separate from Safari's, so signing in
-         first yields a signed-out PWA and an inexplicable second login. -->
-    <aside id="ios-hint" class="banner" hidden>
-      <div>
-        <strong data-i18n="iosHintTitle"></strong>
-        <span data-i18n="iosHintBody"></span>
-      </div>
-    </aside>
-
     <main id="main">
       <!-- Signing in: what ivrit.ai is, the one way in, and what it agrees to. -->
       <section id="landing" class="landing" hidden>
@@ -147,7 +126,6 @@
 
       <section id="view-transcribe" class="view wide" hidden>
         <button id="transcribe-back" class="btn quiet small" type="button" hidden data-i18n="back"></button>
-        <div id="shared" class="panel" hidden></div>
         <!-- Transcribing keeps files in the user's Google Drive: this browser has to
              be signed in at the server with Drive (web/app.js, connectDrive). -->
         <div id="transcribe-connect" class="panel" hidden>

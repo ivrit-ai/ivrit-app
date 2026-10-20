@@ -1,6 +1,7 @@
-importScripts("/config.js", "/client/store.js", "/client/push.js");
-
-const SHELL = "shell-v2";
+// The page, its code and styles, kept for when there is no network. Nothing
+// else: no push (notifications come through the phone app), no share target
+// (the site is not installed as an app).
+const SHELL = "shell-v3";
 const SHELL_FILES = [
   "/",
   "/app.js",
@@ -8,10 +9,8 @@ const SHELL_FILES = [
   "/config.js",
   "/client/store.js",
   "/client/communicator.js",
-  "/client/push.js",
   "/styles.css",
   "/theme.css",
-  "/manifest.webmanifest",
   "/fonts/fonts.css",
   "/fonts/frank-ruhl-libre-hebrew.woff2",
   "/fonts/frank-ruhl-libre-latin.woff2",
@@ -27,18 +26,7 @@ const SHELL_FILES = [
   "/icons/badge-72.png",
 ];
 
-// Files shared into the app wait here until the page sends them on; see
-// "transcribe" in app.js.
-const SHARE_CACHE = "share-inbox";
-
-// The few strings the worker itself shows, when no window is open to ask.
-const STRINGS = {
-  en: { new: (n) => `${n} new messages`, open: "Open ivrit.ai to read them." },
-  he: { new: (n) => `${n} הודעות חדשות`, open: "פתחו את ivrit.ai כדי לקרוא." },
-};
-
-// Take over immediately rather than waiting for every tab to close. A stale
-// service worker keeps handling pushes with old logic long after a deploy.
+// Take over immediately rather than waiting for every tab to close.
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(SHELL_FILES)));
   self.skipWaiting();
@@ -49,46 +37,21 @@ self.addEventListener("activate", (event) => {
     (async () => {
       const names = await caches.keys();
       // The lab's model weights (whisper-gpu-weights) are 1.6 GB: never drop them here.
-      const keep = new Set([SHELL, SHARE_CACHE, "whisper-gpu-weights"]);
+      const keep = new Set([SHELL, "whisper-gpu-weights"]);
       await Promise.all(names.filter((n) => !keep.has(n)).map((n) => caches.delete(n)));
+      // A browser push subscription left from before: notifications no longer come
+      // this way (the page also removes the device at Communicator).
+      await (await self.registration.pushManager?.getSubscription())?.unsubscribe().catch(() => {});
       await self.clients.claim();
     })()
   );
 });
-
-// The manifest's share target posts the shared files here. Each is kept, with
-// its name, and the app opens on them.
-async function receiveShare(request) {
-  try {
-    const form = await request.formData();
-    const cache = await caches.open(SHARE_CACHE);
-    const stamp = Date.now();
-    const files = form.getAll("media").filter((f) => f instanceof File);
-    await Promise.all(
-      files.map((file, i) =>
-        cache.put(
-          `/__shared__/${stamp}-${i}`,
-          new Response(file, {
-            headers: { "content-type": file.type || "application/octet-stream", "x-name": encodeURIComponent(file.name || "") },
-          })
-        )
-      )
-    );
-  } catch {
-    // Land in the app regardless; the Transcribe tab shows what did arrive.
-  }
-  return Response.redirect("/#shared", 303);
-}
 
 // The shell only. API calls go to Communicator's origin and are never cached:
 // the device's copy of messages lives in IndexedDB.
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
-  if (event.request.method === "POST" && url.pathname === "/share-target") {
-    event.respondWith(receiveShare(event.request));
-    return;
-  }
   if (event.request.method !== "GET") return;
   // Caching the worker itself is how a bad deploy becomes permanent.
   if (url.pathname === "/sw.js" || url.pathname.startsWith("/.well-known/") || url.pathname.startsWith("/lab")) return;
@@ -114,7 +77,3 @@ self.addEventListener("fetch", (event) => {
     })()
   );
 });
-
-// Showing, storing, acking and opening pushed messages: Communicator's
-// client, pointed at Communicator's server.
-self.installCommunicatorPush({ apiBase: self.IVRIT_CONFIG.communicator, appName: "ivrit.ai", strings: STRINGS });

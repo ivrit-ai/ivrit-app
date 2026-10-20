@@ -286,6 +286,14 @@ try {
   await page.click("#tabs button[data-view='settings']");
   await page.waitForSelector("#transcribe-settings-box form", { timeout: 10000 }).catch(() => null);
   check("Settings holds transcribing's settings (the user's own RunPod key)", (await page.locator("#transcribe-settings-box input[type=password]").count()) === 1);
+  const webApp = await page.evaluate(() => ({
+    manifest: document.querySelectorAll("link[rel=manifest]").length,
+    hints: document.querySelectorAll("#install-hint, #ios-hint, #notify-banner:not([hidden])").length,
+    notifications: document.getElementById("permission")?.textContent ?? "",
+    enable: !document.getElementById("enable")?.hidden,
+  }));
+  check("in a browser: not an installable app, and notifications are the phone app's", webApp.manifest === 0 && webApp.hints === 0
+    && webApp.notifications.includes("לאפליקציית ivrit.ai") && !webApp.enable, JSON.stringify(webApp));
   await page.click("#transcribe-settings-box a[href='#t/stats']");
   const nerds = await page.waitForSelector(".tr-nerds .tr-figure", { timeout: 15000 }).catch(() => null);
   check("Stats for Nerds", Boolean(nerds) && (await page.locator(".tr-nerds .tr-chart").count()) >= 5);
