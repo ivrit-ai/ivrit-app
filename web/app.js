@@ -1600,6 +1600,7 @@ async function showTranscribeApp() {
       return false;
     }
     $("transcribe-connect").hidden = bootData.signedIn;
+    if (!bootData.signedIn) transcribeApi.forgetEarly();
     if (!bootData.signedIn) return false;
     if (state.localOnly !== Boolean(bootData.localOnly)) {
       state.localOnly = Boolean(bootData.localOnly);

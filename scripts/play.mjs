@@ -6,6 +6,7 @@
 //   node scripts/play.mjs icon <file.png>         sets the listing's icon
 //   node scripts/play.mjs graphics                feature graphic and screenshots from store/
 //   node scripts/play.mjs bundle <file.aab>       into the bundle library only, on no track
+//   node scripts/play.mjs share <file.aab>        a private install link (internal app sharing)
 //   node scripts/play.mjs upload <file.aab> [track] [notes]
 //   node scripts/play.mjs promote <versionCode> <track> [notes]   e.g. promote 12 alpha
 //
@@ -112,6 +113,15 @@ try {
     });
     await call("POST", `${API}/edits/${edit.id}:commit`);
     console.log(`${process.env.PLAY_STATUS === "draft" ? "drafted" : "released"} versionCode ${file} on ${track}`);
+  } else if (command === "share") {
+    // Internal app sharing: a private install link for this bundle, signed by
+    // Play, without a release (no review, no declarations). Needs no edit.
+    await call("DELETE", `${API}/edits/${edit.id}`).catch(() => {});
+    const shared = await call("POST", `https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/internalappsharing/${PACKAGE}/artifacts/bundle?uploadType=media`, {
+      body: readFileSync(file),
+      type: "application/octet-stream",
+    });
+    console.log(shared.downloadUrl);
   } else if (command === "bundle") {
     // Into the app bundle library only, on no track: for the Play Console to see
     // it (declarations that need a bundle), and to release by hand from there.
@@ -156,7 +166,7 @@ try {
     await call("POST", `${API}/edits/${edit.id}:commit`);
     console.log(`released versionCode ${bundle.versionCode} to ${track}`);
   } else {
-    throw new Error("usage: play.mjs status | listing | icon <file.png> | graphics | bundle <file.aab> | upload <file.aab> [track] [notes] | promote <versionCode> <track> [notes]");
+    throw new Error("usage: play.mjs status | listing | icon <file.png> | graphics | bundle <file.aab> | share <file.aab> | upload <file.aab> [track] [notes] | promote <versionCode> <track> [notes]");
   }
 } finally {
   if (command === "status" || command === "listing") await call("DELETE", `${API}/edits/${edit.id}`).catch(() => {});

@@ -38,7 +38,14 @@ const early = new Map(); // key -> {asked, at}
 function once(key, ask) {
   const kept = early.get(key);
   early.delete(key);
-  return kept && Date.now() - kept.at < EARLY_MS ? kept.asked : ask();
+  if (!kept || Date.now() - kept.at >= EARLY_MS) return ask();
+  // Asked before Drive was connected (a fresh install): ask again now.
+  return kept.asked.catch((err) => (err?.status === 401 ? ask() : Promise.reject(err)));
+}
+
+// Signed out at the server (no Drive yet): nothing asked early still holds.
+export function forgetEarly() {
+  early.clear();
 }
 export function prefetch() {
   const asks = { boot: bootNow, languages: languagesNow, folders: foldersNow, quota: quotaNow, toc: () => tocNow(null) };
