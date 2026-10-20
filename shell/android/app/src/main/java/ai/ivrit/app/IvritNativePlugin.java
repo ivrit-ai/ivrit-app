@@ -114,7 +114,7 @@ public class IvritNativePlugin extends Plugin {
             .put("popup", importance >= NotificationManager.IMPORTANCE_HIGH)
             .put("importance", importance)
             .put("platform", "android")
-            .put("features", new JSArray().put("watchFolders").put("localTranscription"));
+            .put("features", new JSArray().put("watchFolders").put("localTranscription").put("appSettings"));
     }
 
     @PluginMethod
@@ -150,6 +150,14 @@ public class IvritNativePlugin extends Plugin {
         } else {
             intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + pkg));
         }
+        getActivity().startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        call.resolve();
+    }
+
+    /** The app's own page in the phone's settings (its permissions: the microphone). */
+    @PluginMethod
+    public void openAppSettings(PluginCall call) {
+        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getContext().getPackageName()));
         getActivity().startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         call.resolve();
     }

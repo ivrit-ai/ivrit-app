@@ -1019,6 +1019,18 @@ function renderExpired(source, state_) {
 
 // ---------------------------------------------------------------- settings
 
+// Which app and which site this is, for reports: the installed app's version and
+// build (from Android or iOS), and the site's deployed commit.
+async function renderVersion() {
+  const parts = [];
+  if (shell) {
+    const info = await withTimeout(shell.app.getInfo().catch(() => null), 2000, null);
+    if (info) parts.push(`${t("versionApp")} ${info.version} (${info.build})`);
+  }
+  parts.push(`${t("versionSite")} ${config.build || "dev"}`);
+  $("version").textContent = parts.join(" · ");
+}
+
 function renderAccount() {
   const me = state.me;
   const box = $("account");
@@ -1587,6 +1599,9 @@ const transcriptionHost = {
   // In the app: hand a file to the phone, which transcribes it in the background.
   transcribeOnPhone: (file, options, onHanded) => (canTranscribeOnPhone() ? transcribeOnPhone(file, options, onHanded) : null),
   canTranscribeOnPhone: () => canTranscribeOnPhone(),
+  // The app's permissions page, where a refused microphone is allowed again.
+  canOpenAppSettings: () => Boolean(shell && nativeStatus?.features?.includes("appSettings")),
+  openAppSettings: () => shell?.ivrit.openAppSettings().catch(() => {}),
 };
 
 async function showTranscribeApp() {
@@ -1752,6 +1767,7 @@ function rerender() {
   }
   if (state.view === "settings") {
     renderAccount();
+    renderVersion().catch(() => {});
     renderLocaleSwitches();
     renderPermission();
     renderDevices().catch(() => {});

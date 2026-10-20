@@ -141,6 +141,11 @@ async function start(mode) {
   } catch (err) {
     host.sheet.close();
     if (err.name === "NoScreenAudio") return host.toast(tr("screenAudioNotSelected"));
+    // In the app, once refused, Android stops asking: the way back is its settings.
+    if (err.name === "NotAllowedError" && host.canOpenAppSettings?.()) {
+      if (await host.ask(tr("micAllowInSettings"), { ok: tr("micOpenSettings") })) host.openAppSettings();
+      return;
+    }
     return host.toast(err.name === "NotAllowedError" ? tr("micPermissionDenied") : tr(mode === "mic" ? "micError" : "screenAudioError"));
   }
   const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";

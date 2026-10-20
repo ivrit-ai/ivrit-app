@@ -76,6 +76,8 @@ def install_routes(app: FastAPI, google_client_id: Optional[str]):
         # Google Analytics, for the site in a browser only (web/app.js): the tag
         # transcribe.ivrit.ai has, so its numbers carry on here.
         "analytics": os.environ.get("GOOGLE_ANALYTICS_TAG") or None,
+        # The deployed commit, shown in Settings (xhost sets it).
+        "build": (os.environ.get("XHOSTD_SHA") or os.environ.get("XHOST_SHA") or "")[:7] or None,
     }
     config_js = f"self.IVRIT_CONFIG = {json.dumps(config)};\n"
     sessions = make_sessions(google_client_id)

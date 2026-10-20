@@ -284,6 +284,15 @@
       "result": {
         "items": "[localTranscription event data] of the recordings still on their way"
       }
+    },
+    "openAppSettings": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "appSettings",
+      "note": "The app's page in the phone's settings, for its permissions (the microphone).",
+      "options": {},
+      "result": {}
     }
   },
   "events": {
