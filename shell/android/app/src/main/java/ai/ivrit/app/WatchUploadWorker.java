@@ -65,6 +65,15 @@ public class WatchUploadWorker extends Worker {
             .enqueueUniqueWork("watch-up-" + input.getString("uploadId"), ExistingWorkPolicy.KEEP, request);
     }
 
+    /** The file transcribed on the phone instead (LocalTranscribeWorker), into the watch's folder. */
+    static void onPhone(Context context, Watches.Watch watch, String docId, Uri doc, String name, String type) {
+        LocalTranscribeWorker.enqueue(context, LocalTranscribeWorker
+            .input("watch", "watch-" + hash(watch.id + "\n" + docId), doc.toString(), name, type, watch.folder, true, "watch")
+            .putString("watchId", watch.id)
+            .putString("docId", docId)
+            .build());
+    }
+
     private static String hash(String text) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));
@@ -85,9 +94,20 @@ public class WatchUploadWorker extends Worker {
         String docId = input.getString("docId");
         Watches.Watch watch = Watches.find(context, watchId);
         if (watch == null || docId == null) return Result.success(); // removed meanwhile
+        // Chosen meanwhile: on the phone.
+        if (Watches.onPhone(context, watch)) {
+            onPhone(context, watch, docId, Uri.parse(input.getString("uri")), input.getString("name"), input.getString("type"));
+            return Result.success();
+        }
         String token = Store.appToken(context);
         if (token.isEmpty()) return lookAgainLater(context, watchId, docId, "signin");
-        if (watch.quotaUntil > System.currentTimeMillis()) return lookAgainLater(context, watchId, docId, "quota");
+        if (watch.quotaUntil > System.currentTimeMillis()) {
+            if (Watches.AUTO.equals(watch.where) && "he".equals(watch.language)) {
+                onPhone(context, watch, docId, Uri.parse(input.getString("uri")), input.getString("name"), input.getString("type"));
+                return Result.success();
+            }
+            return lookAgainLater(context, watchId, docId, "quota");
+        }
 
         String site = Store.site(context);
         String name = input.getString("name");
@@ -184,6 +204,14 @@ public class WatchUploadWorker extends Worker {
             return retry(context, watchId, docId);
         }
         boolean quota = error != null && (error.contains("RateLimit") || error.contains("Quota") || error.contains("TooLargeForFreeService"));
+        Watches.Watch watch = Watches.find(context, watchId);
+        if (quota && watch != null && Watches.AUTO.equals(watch.where) && "he".equals(watch.language)) {
+            // Out of free time: this one, and the next until the quota is back, on the phone.
+            Data input = getInputData();
+            onPhone(context, watch, docId, Uri.parse(input.getString("uri")), input.getString("name"), input.getString("type"));
+            Watches.update(context, watchId, w -> w.quotaUntil = System.currentTimeMillis() + QUOTA_WAIT_MS);
+            return Result.success();
+        }
         if (quota) {
             Watches.update(context, watchId, w -> w.quotaUntil = System.currentTimeMillis() + QUOTA_WAIT_MS);
             return lookAgainLater(context, watchId, docId, "quota");

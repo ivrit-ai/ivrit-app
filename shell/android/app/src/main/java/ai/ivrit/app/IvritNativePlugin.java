@@ -52,6 +52,7 @@ import org.json.JSONArray;
 public class IvritNativePlugin extends Plugin {
     private static volatile IvritNativePlugin current;
     private String pendingOpen;
+    private String pendingLink;
     private ActivityResultLauncher<IntentSenderRequest> driveConsent;
     private PluginCall pendingDrive;
     private ActivityResultLauncher<Uri> folderPicker;
@@ -81,6 +82,12 @@ public class IvritNativePlugin extends Plugin {
             pendingOpen = id;
             notifyListeners("opened", new JSObject().put("id", id), true);
         }
+        String link = intent.getStringExtra(Notifications.EXTRA_LINK);
+        if (link != null) {
+            intent.removeExtra(Notifications.EXTRA_LINK);
+            pendingLink = link;
+            notifyListeners("opened", new JSObject().put("link", link), true);
+        }
         if (Shares.receive(getContext(), intent, () -> notifyListeners("shared", new JSObject(), true))) {
             intent.setAction(Intent.ACTION_MAIN);
         }
@@ -107,7 +114,7 @@ public class IvritNativePlugin extends Plugin {
             .put("popup", importance >= NotificationManager.IMPORTANCE_HIGH)
             .put("importance", importance)
             .put("platform", "android")
-            .put("features", new JSArray().put("watchFolders"));
+            .put("features", new JSArray().put("watchFolders").put("localTranscription"));
     }
 
     @PluginMethod
@@ -176,6 +183,7 @@ public class IvritNativePlugin extends Plugin {
         JSArray sources = call.getArray("sources");
         Store.configure(getContext(), call.getString("locale"), call.getString("communicator"), sources == null ? null : (JSONArray) sources);
         Store.configureUploads(getContext(), call.getString("site"), call.getString("appToken"));
+        if (call.hasOption("localOnly")) Store.setLocalOnly(getContext(), Boolean.TRUE.equals(call.getBoolean("localOnly", false)));
         call.resolve();
     }
 
@@ -184,7 +192,9 @@ public class IvritNativePlugin extends Plugin {
     public void takeOpened(PluginCall call) {
         JSObject result = new JSObject();
         if (pendingOpen != null) result.put("id", pendingOpen);
+        if (pendingLink != null) result.put("link", pendingLink);
         pendingOpen = null;
+        pendingLink = null;
         call.resolve(result);
     }
 
@@ -407,6 +417,7 @@ public class IvritNativePlugin extends Plugin {
         if (call.hasOption("maxSeconds")) w.maxSeconds = Math.max(0, call.getInt("maxSeconds", 0));
         if (call.hasOption("wifiOnly")) w.wifiOnly = Boolean.TRUE.equals(call.getBoolean("wifiOnly", false));
         if (call.hasOption("paused")) w.paused = Boolean.TRUE.equals(call.getBoolean("paused", false));
+        if (call.hasOption("where")) w.where = Watches.where(call.getString("where", Watches.AUTO));
         if (w.folder == null) w.folder = "";
         if (w.folderName == null) w.folderName = "";
     }
@@ -437,6 +448,117 @@ public class IvritNativePlugin extends Plugin {
             FolderWatchWorker.schedule(getContext());
         }
         call.resolve();
+    }
+
+    // --- transcribing on the phone (LocalTranscribeWorker) -----------------------
+
+    /** What the page last heard of each recording on its way, so My files can show them. */
+    private static final java.util.Map<String, JSObject> local = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** A shared recording, transcribed on the phone: {id, folder, saveAudio, origin}. */
+    @PluginMethod
+    public void transcribeShared(PluginCall call) {
+        Shares.Entry entry = Shares.find(getContext(), call.getString("id", ""));
+        if (entry == null) {
+            call.reject("not found", "not_found");
+            return;
+        }
+        LocalTranscribeWorker.enqueue(getContext(), LocalTranscribeWorker
+            .input("share", "share-" + entry.id, entry.file.getAbsolutePath(), entry.name, entry.type,
+                call.getString("folder", ""), Boolean.TRUE.equals(call.getBoolean("saveAudio", true)),
+                call.getString("origin", entry.origin.isEmpty() ? "app" : entry.origin))
+            .putString("shareId", entry.id)
+            .build());
+        call.resolve(new JSObject().put("key", "share-" + entry.id));
+    }
+
+    // A file picked in the app, handed over in pieces (the page cannot pass a file
+    // otherwise), then transcribed on the phone in the background.
+    private java.io.File staged(String id) {
+        if (id == null || !id.matches("[0-9a-f-]{36}")) return null;
+        java.io.File dir = new java.io.File(getContext().getCacheDir(), "staged");
+        //noinspection ResultOfMethodCallIgnored
+        dir.mkdirs();
+        return new java.io.File(dir, id);
+    }
+
+    @PluginMethod
+    public void stageFile(PluginCall call) {
+        String id = java.util.UUID.randomUUID().toString();
+        try {
+            //noinspection ResultOfMethodCallIgnored
+            staged(id).createNewFile();
+        } catch (java.io.IOException e) {
+            call.reject("no room", "io");
+            return;
+        }
+        call.resolve(new JSObject().put("id", id));
+    }
+
+    /** {id, data: base64} appended. */
+    @PluginMethod
+    public void appendStaged(PluginCall call) {
+        java.io.File file = staged(call.getString("id"));
+        String data = call.getString("data", "");
+        if (file == null || !file.isFile()) {
+            call.reject("not found", "not_found");
+            return;
+        }
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(file, true)) {
+            out.write(android.util.Base64.decode(data, android.util.Base64.DEFAULT));
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("could not write", "io");
+        }
+    }
+
+    @PluginMethod
+    public void discardStaged(PluginCall call) {
+        java.io.File file = staged(call.getString("id"));
+        //noinspection ResultOfMethodCallIgnored
+        if (file != null) file.delete();
+        call.resolve();
+    }
+
+    /** {id, name, type, folder, saveAudio, origin}: the staged file, transcribed on the phone. */
+    @PluginMethod
+    public void transcribeStaged(PluginCall call) {
+        java.io.File file = staged(call.getString("id"));
+        if (file == null || !file.isFile()) {
+            call.reject("not found", "not_found");
+            return;
+        }
+        String key = "staged-" + call.getString("id");
+        LocalTranscribeWorker.enqueue(getContext(), LocalTranscribeWorker
+            .input("staged", key, file.getAbsolutePath(), call.getString("name", "recording"), call.getString("type", ""),
+                call.getString("folder", ""), Boolean.TRUE.equals(call.getBoolean("saveAudio", true)), call.getString("origin", "upload"))
+            .build());
+        call.resolve(new JSObject().put("key", key));
+    }
+
+    /** The recordings on their way, as last reported. */
+    @PluginMethod
+    public void localTranscriptions(PluginCall call) {
+        JSArray list = new JSArray();
+        for (JSObject o : local.values()) list.put(o);
+        call.resolve(new JSObject().put("items", list));
+    }
+
+    /** From LocalTranscribeWorker: queued, model, transcribing, saving, done or failed. */
+    static void localTranscription(String key, String name, String folder, String phase, double fraction, String resultsId, String extra) {
+        if (key == null) return;
+        JSObject data = new JSObject()
+            .put("key", key)
+            .put("name", name)
+            .put("folder", folder == null ? "" : folder)
+            .put("phase", phase)
+            .put("fraction", fraction);
+        if (resultsId != null) data.put("resultsId", resultsId);
+        if (extra != null) data.put("transcribing".equals(phase) ? "secondsLeft" : "error", extra);
+        if ("done".equals(phase) || "failed".equals(phase)) local.remove(key);
+        else local.put(key, data);
+        IvritNativePlugin plugin = current;
+        if (plugin != null) plugin.notifyListeners("localTranscription", data, true);
     }
 
     /** From the workers: a watch's state changed. */

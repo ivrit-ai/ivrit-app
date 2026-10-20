@@ -1464,7 +1464,13 @@ async function takeShared() {
   // until then they wait, kept on the phone.
   const transcribing = await transcribeApi.boot().catch(() => null);
   if (transcribing?.localOnly) {
-    toast(t("localSharedWaiting"));
+    // Older app builds cannot transcribe on the phone: the files wait.
+    if (!canTranscribeOnPhone()) return toast(t("localSharedWaiting"));
+    for (const file of files) {
+      await shell.ivrit.transcribeShared({ id: file.key, folder: "", saveAudio: true, origin: file.origin || "app" }).catch(() => {});
+    }
+    toast(t("transcribingOnPhone"));
+    showView("transcribe");
     return;
   }
   let sent = 0;
@@ -1578,6 +1584,9 @@ const transcriptionHost = {
     if (state.view !== "transcribe") showView("transcribe");
   },
   openSearch: () => openSearch({ where: ["transcript"] }),
+  // In the app: hand a file to the phone, which transcribes it in the background.
+  transcribeOnPhone: (file, options, onHanded) => (canTranscribeOnPhone() ? transcribeOnPhone(file, options, onHanded) : null),
+  canTranscribeOnPhone: () => canTranscribeOnPhone(),
 };
 
 async function showTranscribeApp() {
@@ -1592,6 +1601,10 @@ async function showTranscribeApp() {
     }
     $("transcribe-connect").hidden = bootData.signedIn;
     if (!bootData.signedIn) return false;
+    if (state.localOnly !== Boolean(bootData.localOnly)) {
+      state.localOnly = Boolean(bootData.localOnly);
+      configureShell();
+    }
     $("transcribe-mount").hidden = false;
     await transcription.mount($("transcribe-mount"), transcriptionHost, bootData);
     // A transcript's link (a notification, or one from transcribe.ivrit.ai).
@@ -1744,13 +1757,39 @@ function rerender() {
     renderStorage();
     renderDiagnostics();
     loadSettings().then(renderClipsSetting);
-    transcriptionSettings.render($("transcribe-settings-box"), transcriptionHost, (bootData) => transcription.setBoot(bootData)).catch(() => {});
+    transcriptionSettings.render($("transcribe-settings-box"), transcriptionHost, (bootData) => {
+      transcription.setBoot(bootData);
+      state.localOnly = Boolean(bootData.localOnly);
+      configureShell();
+    }).catch(() => {});
     renderWatches();
   }
 }
 
 // Watched folders (Android): only where the shell can watch, and with Drive connected.
 const canWatch = () => Boolean(shell && nativeStatus?.features?.includes("watchFolders"));
+// The phone transcribes in the background itself (native, LocalTranscribeWorker).
+const canTranscribeOnPhone = () => Boolean(shell && nativeStatus?.features?.includes("localTranscription"));
+
+// A file picked in the app, handed to the phone in pieces and transcribed there,
+// in the background. The phone's progress comes back as "localTranscription".
+async function transcribeOnPhone(file, { folder, saveAudio, origin }, onHanded) {
+  const { id } = await shell.ivrit.stageFile();
+  const CHUNK = 512 * 1024;
+  try {
+    for (let at = 0; at < file.size; at += CHUNK) {
+      const bytes = new Uint8Array(await file.slice(at, at + CHUNK).arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      await shell.ivrit.appendStaged({ id, data: btoa(binary) });
+      onHanded?.(Math.min(1, (at + CHUNK) / file.size));
+    }
+    return await shell.ivrit.transcribeStaged({ id, name: file.name, type: file.type || "", folder: folder || "", saveAudio, origin: origin || "upload" });
+  } catch (err) {
+    shell.ivrit.discardStaged({ id }).catch(() => {});
+    throw err;
+  }
+}
 
 async function renderWatches() {
   const panel = $("watch-panel");
@@ -1925,9 +1964,13 @@ addEventListener("scroll", () => document.querySelector(".bar").classList.toggle
 // replaced the device's token.
 if (shell) {
   shell.ivrit.addListener("push", () => state.me && refreshInbox());
-  shell.ivrit.addListener("opened", ({ id }) => {
-    if (state.me && id) location.hash = `#m/${encodeURIComponent(id)}`;
+  shell.ivrit.addListener("opened", ({ id, link }) => {
+    if (!state.me) return;
+    if (link) openOwnLink(link);
+    else if (id) location.hash = `#m/${encodeURIComponent(id)}`;
   });
+  // Recordings transcribed on the phone, as they go: their cards in My files.
+  shell.ivrit.addListener("localTranscription", (item) => transcription.deviceJob(item));
   shell.ivrit.addListener("shared", () => {
     if (state.me) takeShared();
     else showSharedSignedOut();
@@ -1948,6 +1991,8 @@ if (shell) {
       $("transcribe-connect").hidden = false;
     } else if (progress === "failed") {
       toast(t("fileUploadFailed"));
+    } else if (progress === "device") {
+      toast(t("onPhoneInstead"));
     }
     if (state.view === "transcribe") transcription.refresh();
   });
@@ -2043,6 +2088,8 @@ function configureShell() {
       // and the app's session (renewed here whenever the app opens).
       site: location.origin,
       appToken: readSession()?.token ?? "",
+      // Transcribing on the devices only: shared recordings and watched folders too.
+      ...(state.localOnly === undefined ? {} : { localOnly: state.localOnly }),
     })
     .catch(() => {});
 }
@@ -2142,6 +2189,11 @@ async function start() {
   await refreshInbox();
   const opened = await shell?.ivrit.takeOpened().catch(() => null);
   if (opened?.id) history.replaceState(null, "", `/#m/${encodeURIComponent(opened.id)}`);
+  if (opened?.link) history.replaceState(null, "", `/${opened.link}`);
+  // Recordings the phone is still transcribing (begun while the page was closed).
+  if (canTranscribeOnPhone()) {
+    shell.ivrit.localTranscriptions().then(({ items }) => items.forEach((item) => transcription.deviceJob(item))).catch(() => {});
+  }
   await openFromHash();
   if (shell) await takeShared();
   watchJobs();

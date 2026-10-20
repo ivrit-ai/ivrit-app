@@ -114,6 +114,98 @@ final class Notifications {
         }
     }
 
+    // --- transcribing on the phone (LocalTranscribeWorker) -----------------------
+
+    static final String WORK_CHANNEL = "work";
+    static final String EXTRA_LINK = "ai.ivrit.app.LINK";
+
+    /** A quiet channel for work in progress: it never pops up or makes a sound. */
+    private static void ensureWorkChannel(Context context) {
+        if (Build.VERSION.SDK_INT < 26) return;
+        NotificationChannel channel = new NotificationChannel(
+            WORK_CHANNEL, context.getString(R.string.channel_work), NotificationManager.IMPORTANCE_LOW);
+        channel.setDescription(context.getString(R.string.channel_work_description));
+        context.getSystemService(NotificationManager.class).createNotificationChannel(channel);
+    }
+
+    static int localProgressId(String key) {
+        return ("local:" + key).hashCode();
+    }
+
+    /** "Transcribing on this phone": the file, how far, and a way to stop. */
+    static android.app.Notification localProgress(Context context, String name, String phase, int percent, Double secondsLeft, PendingIntent cancel) {
+        ensureWorkChannel(context);
+        String text;
+        if ("model".equals(phase)) text = context.getString(R.string.local_model, Math.max(0, percent));
+        else if ("saving".equals(phase)) text = context.getString(R.string.local_saving);
+        else if ("transcribing".equals(phase)) {
+            text = secondsLeft == null
+                ? context.getString(R.string.local_percent, Math.max(0, percent))
+                : context.getString(R.string.local_percent_left, Math.max(0, percent), Math.max(1, (int) Math.round(secondsLeft / 60)));
+        } else text = context.getString(R.string.local_preparing);
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, WORK_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_ivrit)
+            .setContentTitle(context.getString(R.string.local_title, name))
+            .setContentText(text)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setProgress(100, Math.max(0, percent), percent < 0 || "saving".equals(phase))
+            .addAction(0, context.getString(R.string.local_stop), cancel)
+            .setContentIntent(linkIntent(context, "#transcribe"));
+        return builder.build();
+    }
+
+    static void cancelLocalProgress(Context context, String key) {
+        NotificationManagerCompat.from(context).cancel(localProgressId(key));
+    }
+
+    /** Done: the transcript, a tap away. */
+    static void showLocalReady(Context context, String key, String name, String resultsId, String folder) {
+        if (!allowed(context)) return;
+        ensureChannel(context);
+        String link = "#t/" + android.net.Uri.encode(resultsId) + (folder == null || folder.isEmpty() ? "" : "?f=" + android.net.Uri.encode(folder));
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_ivrit)
+            .setContentTitle(context.getString(R.string.local_ready))
+            .setContentText(name)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(linkIntent(context, link));
+        try {
+            NotificationManagerCompat.from(context).notify(("ready:" + key).hashCode(), builder.build());
+        } catch (SecurityException ignored) {
+            // Permission withdrawn between the check and here.
+        }
+    }
+
+    static void showLocalFailed(Context context, String key, String name) {
+        if (!allowed(context)) return;
+        ensureChannel(context);
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_ivrit)
+            .setContentTitle(context.getString(R.string.local_failed))
+            .setContentText(name)
+            .setAutoCancel(true)
+            .setContentIntent(linkIntent(context, "#transcribe"));
+        try {
+            NotificationManagerCompat.from(context).notify(("failed:" + key).hashCode(), builder.build());
+        } catch (SecurityException ignored) {
+            // Permission withdrawn between the check and here.
+        }
+    }
+
+    /** Opens the app at a place in it (a transcript, My files). */
+    private static PendingIntent linkIntent(Context context, String link) {
+        Intent intent = new Intent(context, MainActivity.class)
+            .setAction(Intent.ACTION_VIEW)
+            .putExtra(EXTRA_LINK, link)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        return PendingIntent.getActivity(
+            context, link.hashCode(), intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+
     private static PendingIntent openIntent(Context context, String id) {
         Intent intent = new Intent(context, MainActivity.class)
             .setAction(Intent.ACTION_VIEW)

@@ -6,4 +6,15 @@
     <string name="custom_url_scheme">ai.ivrit.app</string>
     <string name="channel_messages">Messages</string>
     <string name="channel_messages_description">Transcripts and other messages from ivrit.ai services</string>
+    <string name="channel_work">Work in progress</string>
+    <string name="channel_work_description">Recordings being transcribed on this phone</string>
+    <string name="local_title">Transcribing on this phone · %1$s</string>
+    <string name="local_preparing">Preparing the recording</string>
+    <string name="local_model">Downloading the transcription model (once) · %1$d%%</string>
+    <string name="local_percent">%1$d%%</string>
+    <string name="local_percent_left">%1$d%% · about %2$d min left</string>
+    <string name="local_saving">Saving to My files</string>
+    <string name="local_stop">Stop</string>
+    <string name="local_ready">Transcript ready</string>
+    <string name="local_failed">Transcribing on the phone did not work</string>
 </resources>

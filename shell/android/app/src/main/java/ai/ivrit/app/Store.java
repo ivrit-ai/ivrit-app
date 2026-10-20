@@ -60,6 +60,15 @@ final class Store {
         edit.apply();
     }
 
+    /** The user chose to transcribe on their devices only (the web app says so). */
+    static void setLocalOnly(Context context, boolean on) {
+        prefs(context).edit().putBoolean("local_only", on).apply();
+    }
+
+    static boolean localOnly(Context context) {
+        return prefs(context).getBoolean("local_only", false);
+    }
+
     static String site(Context context) {
         return prefs(context).getString("site", "https://app.ivrit.ai");
     }

@@ -63,7 +63,12 @@ dependencies {
     implementation "com.google.android.libraries.identity.googleid:googleid:$googleIdVersion"
     implementation "com.google.android.gms:play-services-auth:$playServicesAuthVersion"
     implementation "androidx.work:work-runtime:$workVersion"
+    // On-device transcription (LocalTranscriber): sherpa-onnx, fetched by
+    // scripts/fetch-sherpa.sh.
+    implementation files('libs/sherpa-onnx.aar')
     testImplementation "junit:junit:$junitVersion"
+    // Android's own org.json is a stub in JVM tests.
+    testImplementation "org.json:json:20250517"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

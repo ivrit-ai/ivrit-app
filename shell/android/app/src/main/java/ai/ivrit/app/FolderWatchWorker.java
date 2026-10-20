@@ -152,7 +152,9 @@ public class FolderWatchWorker extends Worker {
             return;
         }
         file.put("state", "queued");
-        WatchUploadWorker.enqueue(context, watch, id, doc, name, mime.isEmpty() ? "application/octet-stream" : mime, size, modified);
+        String type = mime.isEmpty() ? "application/octet-stream" : mime;
+        if (Watches.onPhone(context, watch)) WatchUploadWorker.onPhone(context, watch, id, doc, name, type);
+        else WatchUploadWorker.enqueue(context, watch, id, doc, name, type, size, modified);
     }
 
     private static long durationSeconds(Context context, Uri doc) {

@@ -100,8 +100,10 @@ public class FileUploadWorker extends Worker {
             }
             if (status >= 500 || status == 429) return retry();
             if (status != 200) {
+                String error = read(connection.getErrorStream());
+                if (onPhoneInstead(context, entry, input, error)) return Result.success();
                 Shares.discard(context, shareId);
-                IvritNativePlugin.fileUpload(shareId, "failed", read(connection.getErrorStream()));
+                IvritNativePlugin.fileUpload(shareId, "failed", error);
                 return Result.failure();
             }
             // The server answers as it goes: transcoding, then queued (or why not).
@@ -117,6 +119,7 @@ public class FileUploadWorker extends Worker {
                     if (queued || error != null) break;
                 }
             }
+            if (!queued && onPhoneInstead(context, entry, input, error)) return Result.success();
             Shares.discard(context, shareId);
             IvritNativePlugin.fileUpload(shareId, queued ? "queued" : "failed", error);
             return queued ? Result.success() : Result.failure();
@@ -144,5 +147,22 @@ public class FileUploadWorker extends Worker {
             for (int n; (n = stream.read(buffer)) > 0; ) out.write(buffer, 0, n);
             return out.toString("UTF-8");
         }
+    }
+
+    /**
+     * Out of free time, or the user transcribes on their devices only: a Hebrew
+     * recording goes on, transcribed on the phone (LocalTranscribeWorker), which
+     * then lets the shared file go. True when it did.
+     */
+    private static boolean onPhoneInstead(Context context, Shares.Entry entry, Data input, String error) {
+        boolean quota = error != null && (error.contains("RateLimit") || error.contains("TooLargeForFreeService") || error.contains("LocalOnly"));
+        if (!quota || !"he".equals(input.getString("language"))) return false;
+        LocalTranscribeWorker.enqueue(context, LocalTranscribeWorker
+            .input("share", "share-" + entry.id, entry.file.getAbsolutePath(), entry.name, entry.type, "",
+                input.getBoolean("saveAudio", true), entry.origin.isEmpty() ? "app" : entry.origin)
+            .putString("shareId", entry.id)
+            .build());
+        IvritNativePlugin.fileUpload(entry.id, "device", error);
+        return true;
     }
 }

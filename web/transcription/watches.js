@@ -54,6 +54,7 @@ function state(w) {
   const parts = [w.lastChecked ? tr("watchChecked", { when: ago(w.lastChecked) }) : tr("watchStarting")];
   if (w.waiting) parts.push(tr("watchWaiting", { n: w.waiting }));
   if (w.sent) parts.push(tr("watchSent", { n: w.sent }));
+  if (w.where === "device") parts.push(tr("watchOnPhone"));
   return parts.join(" · ");
 }
 
@@ -107,11 +108,25 @@ async function addSheet(existing) {
   const minSeconds = el("input", { class: "tr-input", type: "number", min: 0, max: 3600, value: existing?.minSeconds ?? 5, dir: "ltr" });
   const maxMinutes = el("input", { class: "tr-input", type: "number", min: 0, max: 1200, value: existing ? Math.round((existing.maxSeconds || 0) / 60) : 0, dir: "ltr" });
   const wifi = el("input", { type: "checkbox", checked: existing?.wifiOnly ?? false });
+  // Where its files are transcribed (Hebrew, where the phone can): the servers, the
+  // phone, or the servers until the free time runs out, then the phone.
+  const phone = Boolean(host.canTranscribeOnPhone?.());
+  const where = el("select", { class: "tr-select", "aria-label": tr("whereTitle") }, [
+    el("option", { value: "auto", text: tr("watchWhereAuto") }),
+    el("option", { value: "server", text: tr("watchWhereServer") }),
+    el("option", { value: "device", text: tr("watchWhereDevice") }),
+  ]);
+  where.value = existing?.where || "auto";
+  const whereField = el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("whereTitle") }), where]);
+  const showWhere = () => (whereField.hidden = !phone || language.value !== "he");
+  language.addEventListener("change", showWhere);
+  showWhere();
   const go = el("button", { class: "btn primary", type: "submit", text: existing ? tr("save") : tr("watchChoose") });
   const disclose = !existing && !localStorage.getItem(DISCLOSED);
   const form = el("form", { class: "stack" }, [
     el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("watchInto") }), folder]),
     el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("transcribeLanguage") }), language]),
+    whereField,
     el("div", { class: "row" }, [
       el("label", { class: "tr-field grow" }, [el("span", { class: "muted", text: tr("watchMinSeconds") }), minSeconds]),
       el("label", { class: "tr-field grow" }, [el("span", { class: "muted", text: tr("watchMaxMinutes") }), maxMinutes]),
@@ -129,6 +144,7 @@ async function addSheet(existing) {
       minSeconds: Math.max(0, Number(minSeconds.value) || 0),
       maxSeconds: Math.max(0, Number(maxMinutes.value) || 0) * 60,
       wifiOnly: wifi.checked,
+      ...(phone ? { where: where.value } : {}),
     };
     go.disabled = true;
     try {

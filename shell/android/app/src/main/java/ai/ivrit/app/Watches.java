@@ -23,6 +23,19 @@ import org.json.JSONObject;
 final class Watches {
     private Watches() {}
 
+    static final String SERVER = "server";
+    static final String DEVICE = "device";
+    static final String AUTO = "auto";
+
+    static String where(String value) {
+        return SERVER.equals(value) || DEVICE.equals(value) ? value : AUTO;
+    }
+
+    /** On the phone: chosen for this watch, or for everything (local only); Hebrew only. */
+    static boolean onPhone(Context context, Watch w) {
+        return "he".equals(w.language) && (Store.localOnly(context) || DEVICE.equals(w.where));
+    }
+
     private static SharedPreferences prefs(Context context) {
         return context.getSharedPreferences("ivrit_watches", Context.MODE_PRIVATE);
     }
@@ -43,13 +56,16 @@ final class Watches {
         long quotaUntil; // the free quota ran out: waiting until then (ms)
         String lastError = "";
         int sent;
+        // Where its files are transcribed: on the server (with speakers), on the phone
+        // (Hebrew, no speakers), or on the server until the free time runs out.
+        String where = AUTO;
 
         JSONObject toJson() throws Exception {
             return new JSONObject()
                 .put("id", id).put("tree", tree).put("label", label).put("folder", folder).put("folderName", folderName)
                 .put("language", language).put("minSeconds", minSeconds).put("maxSeconds", maxSeconds)
                 .put("wifiOnly", wifiOnly).put("paused", paused).put("since", since).put("lastChecked", lastChecked)
-                .put("quotaUntil", quotaUntil).put("lastError", lastError).put("sent", sent);
+                .put("quotaUntil", quotaUntil).put("lastError", lastError).put("sent", sent).put("where", where);
         }
 
         static Watch fromJson(JSONObject o) {
@@ -69,6 +85,7 @@ final class Watches {
             w.quotaUntil = o.optLong("quotaUntil", 0);
             w.lastError = o.optString("lastError", "");
             w.sent = o.optInt("sent", 0);
+            w.where = where(o.optString("where", AUTO));
             return w;
         }
 
@@ -89,6 +106,7 @@ final class Watches {
             o.put("quotaUntil", quotaUntil);
             o.put("lastError", lastError);
             o.put("sent", sent);
+            o.put("where", where);
             o.put("waiting", waiting(context, id));
             return o;
         }

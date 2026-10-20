@@ -24,3 +24,7 @@
 # without the original file names.
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
+
+# sherpa-onnx's native code reads its config classes' fields and builds its
+# result class by name.
+-keep class com.k2fsa.sherpa.onnx.** { *; }

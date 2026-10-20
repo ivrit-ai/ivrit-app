@@ -41,14 +41,16 @@
         "communicator": "Communicator's base URL, for acks and source logos",
         "sources": "[{id, name, name_he}]: names for notifications shown while the app is closed",
         "site": "this site's origin, where watched folders upload",
-        "appToken": "the app's session token, which watched folders upload with"
+        "appToken": "the app's session token, which watched folders upload with",
+        "localOnly": "boolean: the user transcribes on their devices only (shared recordings and watched folders then do too)"
       },
       "result": {}
     },
     "takeOpened": {
       "options": {},
       "result": {
-        "id": "string, optional: the message a notification tap opened, once"
+        "id": "string, optional: the message a notification tap opened, once",
+        "link": "string, optional: the place in the app a notification tap opened (\"#t/<id>\"…), once"
       }
     },
     "googleIdToken": {
@@ -155,7 +157,7 @@
       "feature": "watchFolders",
       "options": {},
       "result": {
-        "watches": "[{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting}]"
+        "watches": "[{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting, where (\"server\" | \"device\" | \"auto\")}]"
       }
     },
     "addWatch": {
@@ -170,10 +172,11 @@
         "language": "e.g. \"he\"",
         "minSeconds": "number",
         "maxSeconds": "number (0: none)",
-        "wifiOnly": "boolean"
+        "wifiOnly": "boolean",
+        "where": "\"server\" | \"device\" | \"auto\" (server until the free time runs out, then the phone; the default)"
       },
       "result": {
-        "watch": "{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting}"
+        "watch": "{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting, where}"
       },
       "rejects": [
         "cancelled",
@@ -187,7 +190,8 @@
       "feature": "watchFolders",
       "options": {
         "id": "string",
-        "...": "any of addWatch's options, and paused"
+        "...": "any of addWatch's options, and paused",
+        "where": "as addWatch"
       },
       "result": {
         "watch": "{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting}"
@@ -205,14 +209,89 @@
         "id": "string"
       },
       "result": {}
+    },
+    "transcribeShared": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "localTranscription",
+      "note": "A shared recording transcribed on the phone, in the background (LocalTranscribeWorker), into My files.",
+      "options": {
+        "id": "a sharedFiles id",
+        "folder": "My files folder id (\"\" the top)",
+        "saveAudio": "boolean",
+        "origin": "string"
+      },
+      "result": {
+        "key": "its localTranscription key"
+      }
+    },
+    "stageFile": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "localTranscription",
+      "note": "A file picked in the app, handed over in pieces (appendStaged), then transcribeStaged.",
+      "options": {},
+      "result": {
+        "id": "string"
+      }
+    },
+    "appendStaged": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "localTranscription",
+      "options": {
+        "id": "string",
+        "data": "base64"
+      },
+      "result": {}
+    },
+    "discardStaged": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "localTranscription",
+      "options": {
+        "id": "string"
+      },
+      "result": {}
+    },
+    "transcribeStaged": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "localTranscription",
+      "options": {
+        "id": "string",
+        "name": "string",
+        "type": "MIME type",
+        "folder": "My files folder id",
+        "saveAudio": "boolean",
+        "origin": "string"
+      },
+      "result": {
+        "key": "string"
+      }
+    },
+    "localTranscriptions": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "localTranscription",
+      "options": {},
+      "result": {
+        "items": "[localTranscription event data] of the recordings still on their way"
+      }
     }
   },
   "events": {
     "push": "{}: a message arrived while the app was open",
-    "opened": "{id}: a notification was tapped",
+    "opened": "{id} a message, or {link} a place in the app: a notification was tapped",
     "shared": "{}: files were shared into the app",
     "transcription": "{uploadId, state: \"queued\" | \"done\" | \"failed\" | \"signin\", error?}",
-    "fileUpload": "{id, state: \"queued\" | \"failed\" | \"signin\", error?}",
+    "fileUpload": "{id, state: \"queued\" | \"failed\" | \"signin\" | \"device\" (refused for free time: transcribed on the phone instead), error?}",
     "pushToken": "{}: the push token changed; register again",
     "watch": {
       "platforms": [
@@ -220,6 +299,13 @@
       ],
       "feature": "watchFolders",
       "about": "{id}: a watch's state changed (checked, sent, an error)"
+    },
+    "localTranscription": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "localTranscription",
+      "about": "{key, name, folder, phase: \"queued\" | \"model\" | \"transcribing\" | \"saving\" | \"done\" | \"failed\", fraction (0-1), secondsLeft?, resultsId? (done), error? (failed)}"
     }
   }
 }

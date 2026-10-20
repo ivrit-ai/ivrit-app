@@ -2,4 +2,15 @@
 <resources>
     <string name="channel_messages">הודעות</string>
     <string name="channel_messages_description">תמלולים והודעות נוספות משירותי ivrit.ai</string>
+    <string name="channel_work">עבודה בתהליך</string>
+    <string name="channel_work_description">הקלטות שמתומללות בטלפון הזה</string>
+    <string name="local_title">מתמלל בטלפון · %1$s</string>
+    <string name="local_preparing">מכין את ההקלטה</string>
+    <string name="local_model">מוריד את מודל התמלול (פעם אחת) · %1$d%%</string>
+    <string name="local_percent">%1$d%%</string>
+    <string name="local_percent_left">%1$d%% · עוד כ-%2$d דקות</string>
+    <string name="local_saving">שומר בקבצים שלי</string>
+    <string name="local_stop">עצירה</string>
+    <string name="local_ready">התמלול מוכן</string>
+    <string name="local_failed">התמלול בטלפון לא הצליח</string>
 </resources>

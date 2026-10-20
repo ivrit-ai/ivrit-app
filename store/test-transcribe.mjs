@@ -76,6 +76,8 @@ try {
   const sheet = await page.waitForSelector("#sheet[open] .tr-new", { timeout: 5000 }).catch(() => null);
   check("choosing a file opens the app's sheet, with the language and keeping the audio", Boolean(sheet)
     && (await page.locator("#sheet .tr-select").inputValue()) === "he");
+  check("...and, for Hebrew, where to transcribe: the servers by default, or this device", (await page.locator("#sheet .tr-where button").count()) === 2
+    && (await page.locator("#sheet .tr-where button[aria-pressed='true']").textContent()).includes("בשרתים"));
   await shot("2-sheet");
   await page.click("#sheet .tr-new button[type=submit]");
   const onItsWay = await page.waitForSelector("#tr-feed .tr-file .tag.accent, #tr-feed .tr-file .tag", { timeout: 10000 }).catch(() => null);

@@ -542,6 +542,8 @@ function pendingCard(id, p) {
 
 // On this device: the recording read, the model fetched (once), transcribed, saved.
 function localStatus(p, percent) {
+  if (p.phase === "handing") return tr("statusLocalHanding", { progress: percent ?? 0 });
+  if (p.phase === "queued") return tr("statusLocalQueued");
   if (p.phase === "model") return tr("statusLocalModel", { progress: percent ?? 0 });
   if (p.phase === "transcribing") {
     const status = tr("statusLocalTranscribing", { progress: percent ?? 0 });
@@ -705,12 +707,38 @@ function openNewSheet() {
   const more = batchLimit() > 1
     ? el("button", { class: "btn quiet small", type: "button", onclick: () => $("tr-input").click() }, [icon("plus"), el("span", { text: tr("addFiles") })])
     : null;
+  // Where, for Hebrew: ivrit.ai's servers (with speakers) or this device (no
+  // speakers, nothing uploaded to be transcribed). Not asked when the user chose
+  // their devices only.
+  let where = localStorage.getItem("tr_where") === "device" ? "device" : "server";
+  const whereBox = el("div", { class: "tr-field" });
+  const drawWhere = () => {
+    const show = !onDevice && canTranscribeHere(select.value);
+    whereBox.hidden = !show;
+    if (!show) return;
+    const option = (value, label, sub) => el("button", {
+      class: "tr-choice-row", type: "button", "aria-pressed": String(where === value),
+      onclick: () => {
+        where = value;
+        drawWhere();
+      },
+    }, [el("span", { text: label }), el("span", { class: "sub", text: sub })]);
+    whereBox.replaceChildren(
+      el("span", { class: "muted", text: tr("whereTitle") }),
+      el("div", { class: "seg wide tr-where", role: "group" }, [
+        option("server", tr("whereServer"), tr("whereServerSub")),
+        option("device", tr("whereDevice"), tr("whereDeviceSub")),
+      ]),
+    );
+  };
+  select.addEventListener("change", drawWhere);
+  drawWhere();
   const go = el("button", { class: "btn primary large", type: "submit", text: tr("transcribe") });
   const form = el("form", { class: "stack tr-new" }, [
     list,
     more,
     el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("transcribeLanguage") }), select]),
-    onDevice ? el("p", { class: "muted", text: tr("localOnlyHint") }) : null,
+    onDevice ? el("p", { class: "muted", text: tr("localOnlyHint") }) : whereBox,
     tree?.folders.length ? el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("saveTo") }), destination]) : null,
     el("label", { class: "tr-check" }, [keep, el("span", {}, [
       el("span", { text: tr("saveAudioInDrive") }),
@@ -722,10 +750,12 @@ function openNewSheet() {
     e.preventDefault();
     localStorage.setItem("tr_language", select.value);
     localStorage.setItem("tr_save_audio", String(keep.checked));
+    const here = !whereBox.hidden && where === "device";
+    if (!whereBox.hidden) localStorage.setItem("tr_where", where);
     const files = chosen;
     chosen = [];
     host.sheet.close();
-    send(files, { language: select.value, saveAudio: keep.checked, folder: destination.value || null });
+    send(files, { language: select.value, saveAudio: keep.checked, folder: destination.value || null, where: here ? "device" : "server" });
   });
   host.sheet.open(tr("newTitle"), form, () => {
     chosen = [];
@@ -743,7 +773,7 @@ async function send(files, options) {
   let saved = 0;
   // On this device: when the user chose it for good, or for the rest of this
   // batch once the free time ran out.
-  let onDevice = Boolean(boot?.localOnly);
+  let onDevice = Boolean(boot?.localOnly) || options.where === "device";
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     const id = crypto.randomUUID();
@@ -765,11 +795,17 @@ async function send(files, options) {
     } catch (err) {
       pending.delete(id);
       draw();
-      if (outOfFreeTime(err) && canTranscribeHere(options.language)
-        && (await host.ask(tr("outOfTimeLocal"), { ok: tr("transcribeOnDevice") }))) {
-        onDevice = true;
-        i--; // this file again, here
-        continue;
+      if (outOfFreeTime(err) && canTranscribeHere(options.language)) {
+        const choice = await outOfTimeChoice();
+        if (choice === "device") {
+          onDevice = true;
+          i--; // this file again, here
+          continue;
+        }
+        if (choice === "runpod") {
+          host.openSettings();
+          break;
+        }
       }
       host.toast(`${file.name}: ${serverError(err.data, "uploadError")}`);
       break;
@@ -782,8 +818,50 @@ async function send(files, options) {
   refresh();
 }
 
+// A recording the phone is transcribing (native, in the background): its card,
+// from the phone's reports, until it is in My files.
+export function deviceJob(item) {
+  if (!item?.key) return;
+  const id = `device:${item.key}`;
+  if (item.phase === "done" || item.phase === "failed") {
+    pending.delete(id);
+    if (item.phase === "failed" && item.error && item.error !== "gone") host?.toast(`${item.name}: ${tr("localFailed", { details: item.error })}`);
+    draw();
+    refresh();
+    return;
+  }
+  pending.set(id, {
+    name: item.name,
+    stage: "local",
+    phase: item.phase,
+    percent: (item.fraction ?? 0) * 100,
+    left: item.secondsLeft != null ? Number(item.secondsLeft) : null,
+    folder: item.folder || null,
+  });
+  draw();
+}
+
 const outOfFreeTime = (err) => ["errorRateLimitExceeded", "errorFileTooLargeForFreeService"].includes(err?.data?.i18n_key);
-const canTranscribeHere = (lang) => lang === local.LANGUAGE && local.supported();
+const canTranscribeHere = (lang) => lang === local.LANGUAGE && (local.supported() || Boolean(host?.canTranscribeOnPhone?.()));
+
+// Out of free time: on this device (no speakers), with the user's own RunPod key
+// (the servers, with speakers, no weekly limit), or not now.
+function outOfTimeChoice() {
+  const { el } = host;
+  return new Promise((resolve) => {
+    let chosen = null;
+    const pick = (value) => () => {
+      chosen = value;
+      host.sheet.close();
+    };
+    host.sheet.open(tr("outOfTimeTitle"), el("div", { class: "stack" }, [
+      el("p", { class: "muted", text: tr("outOfTimeBody") }),
+      el("button", { class: "btn primary", type: "button", text: tr("transcribeOnDevice"), onclick: pick("device") }),
+      el("button", { class: "btn", type: "button", text: tr("useRunpodKey"), onclick: pick("runpod") }),
+      el("button", { class: "btn quiet", type: "button", text: tr("notNow"), onclick: pick(null) }),
+    ]), () => resolve(chosen));
+  });
+}
 
 // One file through the on-device model, with progress in its card, then into My
 // files. False when it could not be done (the user was told why).
@@ -792,6 +870,21 @@ async function sendLocally(file, options, id) {
     pending.set(id, { name: file.name, size: file.size, stage: "local", folder: options.folder, ...fields });
     draw();
   };
+  // In the app, the phone does it, in the background (with the app closed too).
+  if (host.canTranscribeOnPhone?.()) {
+    try {
+      card({ phase: "handing", percent: 0 });
+      await host.transcribeOnPhone(file, options, (fraction) => card({ phase: "handing", percent: fraction * 100 }));
+      recorder.sent(file);
+      return true;
+    } catch (err) {
+      host.toast(`${file.name}: ${tr("localFailed", { details: err?.message || "" })}`);
+      return false;
+    } finally {
+      pending.delete(id);
+      draw();
+    }
+  }
   card({ phase: "decoding", percent: 0 });
   let transcribingSince = null;
   try {

@@ -27,6 +27,7 @@ IVRIT_VERSION_CODE=$(git rev-list --count HEAD)
 IVRIT_VERSION_NAME=$(node -p 'require("./shared/app.json").version')
 export IVRIT_VERSION_CODE IVRIT_VERSION_NAME
 
+scripts/fetch-sherpa.sh
 (cd shell && npm ci --silent && npx cap sync android)
 (cd shell/android && ./gradlew --no-daemon -q bundleRelease assembleRelease)
 
