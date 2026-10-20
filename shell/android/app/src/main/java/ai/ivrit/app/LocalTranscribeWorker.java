@@ -110,11 +110,56 @@ public class LocalTranscribeWorker extends Worker {
             return done(kind, input, null, "unsupported");
         } catch (Refused e) {
             return done(kind, input, null, e.getMessage());
-        } catch (Exception e) {
+        } catch (Exception | LinkageError e) {
             if (isStopped()) return Result.success();
             Log.w(TAG, "transcribing on the phone failed", e);
-            if (getRunAttemptCount() < 2) return Result.retry();
-            return done(kind, input, null, "failed");
+            report(context, kind, e);
+            if (getRunAttemptCount() < 2 && e instanceof Exception) return Result.retry();
+            String detail = e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage());
+            return done(kind, input, null, detail.length() > 200 ? detail.substring(0, 200) : detail);
+        }
+    }
+
+    /** What went wrong, to the site's log (POST /lab/report), so a failure on a phone can be seen. */
+    private void report(Context context, String kind, Throwable e) {
+        HttpURLConnection connection = null;
+        try {
+            java.io.StringWriter trace = new java.io.StringWriter();
+            e.printStackTrace(new java.io.PrintWriter(trace));
+            String stack = trace.toString();
+            JSONObject body = new JSONObject()
+                .put("kind", kind)
+                .put("error", e.toString())
+                .put("stack", stack.length() > 4000 ? stack.substring(0, 4000) : stack)
+                .put("attempt", getRunAttemptCount())
+                .put("sdk", Build.VERSION.SDK_INT)
+                .put("device", Build.MANUFACTURER + " " + Build.MODEL)
+                .put("abi", Build.SUPPORTED_ABIS.length > 0 ? Build.SUPPORTED_ABIS[0] : "")
+                .put("app", appVersion(context));
+            connection = (HttpURLConnection) new URL(Store.site(context) + "/lab/report?kind=local-native").openConnection();
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(10000);
+            connection.setRequestProperty("Content-Type", "application/json");
+            try (OutputStream out = connection.getOutputStream()) {
+                out.write(body.toString().getBytes(StandardCharsets.UTF_8));
+            }
+            connection.getResponseCode();
+        } catch (Exception ignored) {
+            // Only the report is lost.
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private static String appVersion(Context context) {
+        try {
+            android.content.pm.PackageInfo info = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
+            long code = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+            return info.versionName + " (" + code + ")";
+        } catch (Exception e) {
+            return "";
         }
     }
 
