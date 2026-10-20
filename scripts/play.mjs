@@ -5,6 +5,7 @@
 //   node scripts/play.mjs listing                 the store listing, per language
 //   node scripts/play.mjs icon <file.png>         sets the listing's icon
 //   node scripts/play.mjs graphics                feature graphic and screenshots from store/
+//   node scripts/play.mjs bundle <file.aab>       into the bundle library only, on no track
 //   node scripts/play.mjs upload <file.aab> [track] [notes]
 //   node scripts/play.mjs promote <versionCode> <track> [notes]   e.g. promote 12 alpha
 //
@@ -111,6 +112,22 @@ try {
     });
     await call("POST", `${API}/edits/${edit.id}:commit`);
     console.log(`${process.env.PLAY_STATUS === "draft" ? "drafted" : "released"} versionCode ${file} on ${track}`);
+  } else if (command === "bundle") {
+    // Into the app bundle library only, on no track: for the Play Console to see
+    // it (declarations that need a bundle), and to release by hand from there.
+    const bundle = await call("POST", `${UPLOAD}/edits/${edit.id}/bundles?uploadType=media`, {
+      body: readFileSync(file),
+      type: "application/octet-stream",
+    });
+    const mapping = file.replace(/\.aab$/, "-mapping.txt");
+    if (existsSync(mapping)) {
+      await call("POST", `${UPLOAD}/edits/${edit.id}/apks/${bundle.versionCode}/deobfuscationFiles/proguard?uploadType=media`, {
+        body: readFileSync(mapping),
+        type: "application/octet-stream",
+      });
+    }
+    await call("POST", `${API}/edits/${edit.id}:commit`);
+    console.log(`versionCode ${bundle.versionCode} in the library, on no track`);
   } else if (command === "upload") {
     const bundle = await call("POST", `${UPLOAD}/edits/${edit.id}/bundles?uploadType=media`, {
       body: readFileSync(file),
@@ -139,7 +156,7 @@ try {
     await call("POST", `${API}/edits/${edit.id}:commit`);
     console.log(`released versionCode ${bundle.versionCode} to ${track}`);
   } else {
-    throw new Error("usage: play.mjs status | listing | icon <file.png> | graphics | upload <file.aab> [track] [notes] | promote <versionCode> <track> [notes]");
+    throw new Error("usage: play.mjs status | listing | icon <file.png> | graphics | bundle <file.aab> | upload <file.aab> [track] [notes] | promote <versionCode> <track> [notes]");
   }
 } finally {
   if (command === "status" || command === "listing") await call("DELETE", `${API}/edits/${edit.id}`).catch(() => {});
