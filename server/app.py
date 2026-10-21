@@ -157,6 +157,14 @@ MAX_MINUTES_PER_WEEK = (
 REPLENISH_RATE_MINUTES_PER_DAY = MAX_MINUTES_PER_WEEK / 7  # Automatically derive daily replenish rate
 MAX_BATCH_LOCAL = args.max_batch_local
 MAX_BATCH_PRIVATE = args.max_batch_private
+# Free users: how many of their files may wait at once. With the hub, which runs
+# each user's files one at a time and fairly, several can wait (recordings made one
+# after another); without it, this server's own queues take one.
+MAX_BATCH_FREE = int(os.environ.get("TS_MAX_BATCH_FREE", "10"))
+
+
+def free_batch_limit() -> int:
+    return MAX_BATCH_FREE if HUB_MODE else 1
 
 # Under xhost the operator configures only BASE_URL; derive the OAuth redirect
 # from it so gdrive_auth (which reads GOOGLE_REDIRECT_URI at import) picks it up.
@@ -1524,7 +1532,7 @@ async def queue_job(job_id, user_email, filename, duration, runpod_token="", lan
     elif in_local_mode:
         user_batch_limit = MAX_BATCH_LOCAL
     else:
-        user_batch_limit = 1
+        user_batch_limit = free_batch_limit()
 
     active_count = await active_transcriptions(user_email)
     if active_count >= user_batch_limit:
@@ -1699,7 +1707,7 @@ async def list_languages():
         "batch": {
             "max_batch_local": MAX_BATCH_LOCAL,
             "max_batch_private": MAX_BATCH_PRIVATE,
-            "max_batch_default": 1,
+            "max_batch_default": free_batch_limit(),
         },
     })
 
@@ -4597,7 +4605,7 @@ async def validate_upload_request_metadata(
     elif in_local_mode:
         user_batch_limit = MAX_BATCH_LOCAL
     else:
-        user_batch_limit = 1
+        user_batch_limit = free_batch_limit()
 
     # Count active transcription jobs
     active_job_count = await active_transcriptions(user_email)

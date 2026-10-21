@@ -14,6 +14,9 @@ const PYTHON = process.env.SERVER_PYTHON ?? "python3";
 const OUT = process.env.OUT ?? (await import("node:os")).tmpdir();
 const SAMPLE = path.join(OUT, "sample.ogg");
 (await import("node:child_process")).execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=40", "-c:a", "libopus", "-b:a", "24k", SAMPLE]);
+// The fake microphone hears Hebrew (the fixture, as WAV, which Chromium wants).
+const MIC = path.join(OUT, "hebrew-mic.wav");
+(await import("node:child_process")).execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", path.join(ROOT, "store/fixtures/hebrew-12s.ogg"), "-ac", "1", "-ar", "48000", MIC]);
 const COMMUNICATOR = path.resolve(process.env.COMMUNICATOR_DIR ?? path.join(ROOT, "../notifier"));
 const { ADMIN_EMAIL, createUser, freshDatabase, startApp } = await import(path.join(COMMUNICATOR, "test/harness.js"));
 const CHROME = process.env.CHROME ?? `${process.env.HOME}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`;
@@ -40,7 +43,7 @@ const check = (name, ok, detail = "") => {
 };
 
 // A fake microphone, allowed without asking, for recording.
-const browser = await chromium.launch({ executablePath: CHROME, args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] });
+const browser = await chromium.launch({ executablePath: CHROME, args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", `--use-file-for-fake-audio-capture=${MIC}`] });
 try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "he-IL", acceptDownloads: true, permissions: ["microphone"] });
   await context.addInitScript((session) => {
@@ -391,6 +394,29 @@ try {
   await onlyHere.uncheck().catch(() => null);
   await page.waitForTimeout(1000);
 
+  // --- live: the words as they are spoken, paused, then saved with the recording
+  await page.goto(`${origin}/?live=${Date.now()}#transcribe`);
+  await page.waitForSelector("#view-transcribe:not([hidden]) #tr-list:not([hidden]) button:has-text('תמלול חי')", { timeout: 30000 }).catch(() => null);
+  await page.click("#tr-list button:has-text('תמלול חי')", { timeout: 10000 });
+  const heardLive = await page.waitForSelector("#tr-live .tr-live-text p:has-text('בפרק')", { timeout: 60000 }).catch(() => null);
+  check("live: the words appear as they are spoken", Boolean(heardLive), (await page.locator("#tr-live").textContent().catch(() => "")).slice(0, 160));
+  await shot("8d-live");
+  await page.click("#tr-live .tr-live-controls button:has-text('השהיה')");
+  const pausedAt = await page.locator("#tr-live .tr-timer").textContent();
+  await page.waitForTimeout(2500);
+  const stillAt = await page.locator("#tr-live .tr-timer").textContent();
+  check("...pausing stops the clock", pausedAt === stillAt && (await page.locator("#tr-live .tr-live-status").textContent()) === "מושהה", `${pausedAt} ${stillAt}`);
+  await page.click("#tr-live .tr-live-controls button:has-text('המשך')");
+  await page.waitForTimeout(2000);
+  await page.click("#tr-live .tr-live-controls button:has-text('סיום')");
+  const saveLive = await page.waitForSelector("#tr-live .tr-live-save button.primary", { timeout: 30000 }).catch(() => null);
+  check("...finishing offers to save it", Boolean(saveLive));
+  if (saveLive) await saveLive.click();
+  const savedLive = await page.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 30000 }).catch(() => null);
+  const liveToc = (await server("/appdata/toc")).body?.entries?.find((e) => e.origin === "live");
+  check("...and it opens from My files, with its recording", Boolean(savedLive) && Boolean(liveToc)
+    && (await page.locator("#tr-text").textContent()).includes("בפרק") && (await page.locator("#tr-audio").count()) === 1);
+
   // --- a phone
   await page.setViewportSize({ width: 412, height: 860 });
   await page.goto(`${origin}/#t/${encodeURIComponent(ready?.results_id ?? "")}`);
@@ -493,6 +519,23 @@ try {
   }
   check("a recording goes to be transcribed with one click on Transcribe", Boolean(recorded)
     && (await page.locator("#tr-recovered .tr-recovered").count()) === 0);
+
+  // --- several files waiting at once (the hub runs them one after another)
+  const twoA = path.join(OUT, "first-of-two.ogg");
+  const twoB = path.join(OUT, "second-of-two.ogg");
+  (await import("node:fs")).copyFileSync(SAMPLE, twoA);
+  (await import("node:fs")).copyFileSync(SAMPLE, twoB);
+  await page.setInputFiles("#tr-input", [twoA, twoB]);
+  await page.waitForSelector("#sheet[open] .tr-new", { timeout: 5000 }).catch(() => null);
+  const listedTwo = await page.locator("#sheet .tr-new .list-row").count();
+  await page.click("#sheet .tr-new button[type=submit]");
+  let both = [];
+  for (let i = 0; i < 40 && both.length < 2; i++) {
+    await page.waitForTimeout(1500);
+    const toc = await server("/appdata/toc");
+    both = (toc.body?.entries ?? []).filter((e) => /-of-two\.ogg$/.test(e.source_filename || ""));
+  }
+  check("two files sent together both wait their turn, neither refused", listedTwo === 2 && both.length === 2, `${listedTwo} ${JSON.stringify(both.map((e) => e.status))}`);
 
   // --- deleting the account: this server forgets it too, and the browser is signed out here
   const deletedHere = await server("/account/delete", { method: "POST" });

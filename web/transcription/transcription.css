@@ -626,3 +626,34 @@ button.tr-who::after,
   font-size: 12px;
   color: var(--muted);
 }
+
+/* Live transcription: the controls stay in reach; the sentence still forming is lighter. */
+.tr-live-controls {
+  position: sticky;
+  top: calc(var(--bar-h) + 6px);
+  z-index: 5;
+  align-items: center;
+  padding: 10px 12px;
+  margin: 4px 0 12px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.tr-live-controls .tr-timer {
+  font: 600 20px/1 var(--font-mono);
+}
+
+.tr-live-text {
+  min-height: 40vh;
+}
+
+.tr-live-now {
+  color: var(--muted);
+}
+
+.tr-live-save {
+  margin-top: 12px;
+  padding: 16px;
+}

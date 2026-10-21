@@ -36,7 +36,8 @@ import org.json.JSONObject;
  * signed in with the app's own session). The recording itself leaves the phone only
  * if the user keeps the audio, for playback in their Drive.
  *
- * It runs in the foreground, one recording at a time (the model is large), with a
+ * Each recording is its own work (stopping one leaves the others), and they take
+ * turns (TURN): one at a time, as the model is large. It runs in the foreground with a
  * notification showing how far it got and a way to stop it, and tells the page as
  * it goes ("localTranscription" events) so My files shows it too.
  *
@@ -45,8 +46,9 @@ import org.json.JSONObject;
  */
 public class LocalTranscribeWorker extends Worker {
     private static final String TAG = "IvritLocal";
-    static final String UNIQUE = "local-transcription";
     private static final double BLOCK_SECONDS = 4;
+    // One recording through the model at a time; the others wait their turn.
+    private static final java.util.concurrent.Semaphore TURN = new java.util.concurrent.Semaphore(1, true);
 
     public LocalTranscribeWorker(@NonNull Context context, @NonNull WorkerParameters params) {
         super(context, params);
@@ -57,8 +59,10 @@ public class LocalTranscribeWorker extends Worker {
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(LocalTranscribeWorker.class)
             .setInputData(input)
             .addTag("local:" + input.getString("key"))
+            // Waiting its turn is a retry: looked at again every 20 seconds.
+            .setBackoffCriteria(androidx.work.BackoffPolicy.LINEAR, 20, java.util.concurrent.TimeUnit.SECONDS)
             .build();
-        WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE, ExistingWorkPolicy.APPEND_OR_REPLACE, request);
+        WorkManager.getInstance(context).enqueueUniqueWork("local-" + input.getString("key"), ExistingWorkPolicy.KEEP, request);
         IvritNativePlugin.localTranscription(input.getString("key"), input.getString("name"), input.getString("folder"), "queued", 0, null, null);
     }
 
@@ -92,6 +96,20 @@ public class LocalTranscribeWorker extends Worker {
         String kind = input.getString("kind");
         Uri source = sourceUri(input.getString("source"));
         if (source == null) return done(kind, input, null, "gone");
+        // Another recording has the model: this one waits its turn, without holding
+        // one of WorkManager's few threads (uploads and folder checks need them).
+        if (!TURN.tryAcquire()) {
+            IvritNativePlugin.localTranscription(key, name, folder, "queued", 0, null, null);
+            return Result.retry();
+        }
+        try {
+            return transcribeNow(context, kind, input, source);
+        } finally {
+            TURN.release();
+        }
+    }
+
+    private Result transcribeNow(Context context, String kind, Data input, Uri source) {
         try {
             setForegroundAsync(foreground(-1, null, null));
         } catch (Exception e) {
@@ -114,10 +132,20 @@ public class LocalTranscribeWorker extends Worker {
             if (isStopped()) return Result.success();
             Log.w(TAG, "transcribing on the phone failed", e);
             report(context, kind, e);
-            if (getRunAttemptCount() < 2 && e instanceof Exception) return Result.retry();
+            if (failures(context, key, 1) < 2 && e instanceof Exception) return Result.retry();
             String detail = e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage());
             return done(kind, input, null, detail.length() > 200 ? detail.substring(0, 200) : detail);
         }
+    }
+
+    /** This recording's failures so far, after adding `add` (cleared when it is done). */
+    private static synchronized int failures(Context context, String key, int add) {
+        android.content.SharedPreferences prefs = context.getSharedPreferences("ivrit_local", Context.MODE_PRIVATE);
+        int n = prefs.getInt("failures:" + key, 0) + add;
+        if (add == 0 && n == 0) return 0;
+        if (add < 0) prefs.edit().remove("failures:" + key).apply();
+        else prefs.edit().putInt("failures:" + key, n).apply();
+        return n;
     }
 
     /** What went wrong, to the site's log (POST /lab/report), so a failure on a phone can be seen. */
@@ -301,6 +329,7 @@ public class LocalTranscribeWorker extends Worker {
         Context context = getApplicationContext();
         Notifications.cancelLocalProgress(context, key);
         Checkpoint.forget(context, key);
+        failures(context, key, -1);
         if ("share".equals(kind)) {
             Shares.discard(context, input.getString("shareId"));
         } else if ("staged".equals(kind)) {

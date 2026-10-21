@@ -12,6 +12,7 @@ import * as api from "./api.js";
 import * as reader from "./reader.js";
 import * as recorder from "./recorder.js";
 import * as local from "./local/local.js";
+import * as liveView from "./live-view.js";
 import { language, serverError, setLanguage, tr } from "./strings.js";
 import { clock } from "./transcript.js";
 
@@ -142,6 +143,8 @@ function renderShell() {
     el("div", { class: "row tr-actions" }, [
       el("button", { class: "btn primary", type: "button", onclick: () => input.click() }, [icon("plus"), el("span", { text: tr("uploadFile") })]),
       recorder.supported() ? el("button", { class: "btn", type: "button", onclick: () => recorder.choose() }, [icon("mic"), el("span", { text: tr("record") })]) : null,
+      // Live, in Hebrew, on the device: the words as they are spoken.
+      liveView.supported() ? el("button", { class: "btn", type: "button", onclick: () => openLive() }, [icon("wave"), el("span", { text: tr("liveButton") })]) : null,
       el("button", { class: "btn quiet", type: "button", onclick: () => newFolder() }, [icon("folder-plus"), el("span", { text: tr("newFolder") })]),
       input,
     ]),
@@ -304,6 +307,8 @@ function openFolder(id) {
 }
 
 function showFolder(id) {
+  // A live session stays on screen until it is stopped.
+  if (liveView.busy()) return;
   $("tr-screen").hidden = true;
   $("tr-list").hidden = false;
   if (id !== folder) {
@@ -929,7 +934,24 @@ function showList(to = folder) {
   showFolder(to);
 }
 
+function openLive() {
+  liveView.open(host, {
+    folder,
+    folderPicker,
+    hooks: {
+      showScreen,
+      back: () => showList(folder),
+      saved: (resultsId, to) => reader.navigate(resultsId, to),
+    },
+  });
+}
+
 export function showScreen(node) {
+  // A live session keeps its screen until it is stopped.
+  if (liveView.busy() && node.id !== "tr-live") {
+    host.toast(tr("liveRunning"));
+    return;
+  }
   $("tr-list").hidden = true;
   const screen = $("tr-screen");
   screen.replaceChildren(node);

@@ -48,9 +48,21 @@ async function decode(file) {
   }
 }
 
-// {segments, duration}. onProgress({stage: "decoding" | "model" | "transcribing",
-// fraction}) as it goes; abort with the signal.
-export async function transcribe(file, { onProgress = () => {}, signal } = {}) {
+// One file at a time through the model (each would load its own copy, ~220 MB):
+// the others wait their turn, shown as waiting.
+let turn = Promise.resolve();
+
+// {segments, duration}. onProgress({stage: "queued" | "decoding" | "model" |
+// "transcribing", fraction}) as it goes; abort with the signal.
+export function transcribe(file, options = {}) {
+  const waiting = turn;
+  options.onProgress?.({ stage: "queued", fraction: 0 });
+  const mine = waiting.then(() => transcribeNow(file, options));
+  turn = mine.catch(() => {});
+  return mine;
+}
+
+async function transcribeNow(file, { onProgress = () => {}, signal } = {}) {
   onProgress({ stage: "decoding", fraction: 0 });
   const { pcm, sampleRate, duration } = await decode(file);
   if (signal?.aborted) throw new DOMException("aborted", "AbortError");
