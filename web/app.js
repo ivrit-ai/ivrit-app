@@ -1562,6 +1562,7 @@ async function connectDrive() {
 
 // What transcribing needs from the app: its parts (elements, icons, messages,
 // questions, the bottom sheet), the language, and the way back to Drive's sign-in.
+let sheetGeneration = 0;
 const transcriptionHost = {
   el,
   icon,
@@ -1572,10 +1573,21 @@ const transcriptionHost = {
     open(title, body, onClose) {
       const dialog = $("sheet");
       clearSheetTimers();
+      const generation = ++sheetGeneration;
       $("sheet-title").textContent = title;
       $("sheet-avatar").replaceChildren();
       $("sheet-body").replaceChildren(body);
-      if (onClose) dialog.addEventListener("close", onClose, { once: true });
+      if (onClose) {
+        // This sheet's own closing only: the dialog's close event arrives a moment
+        // after close(), so a sheet opened straight after another (a recording's
+        // send sheet after its recording sheet) would otherwise take that one's.
+        const closed = () => {
+          if (generation !== sheetGeneration) return; // replaced by a newer sheet
+          if (dialog.open) return dialog.addEventListener("close", closed, { once: true });
+          onClose();
+        };
+        dialog.addEventListener("close", closed, { once: true });
+      }
       if (!dialog.open) dialog.showModal();
     },
     close() {

@@ -473,6 +473,27 @@ try {
   await landing.screenshot({ path: path.join(OUT, "bt-0-landing-1280.png") });
   await guest.close();
 
+  // --- a recording, sent with a single "transcribe"
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${origin}/#transcribe`);
+  await page.waitForSelector("#tr-list:not([hidden])", { timeout: 20000 }).catch(() => null);
+  await page.click("#tr-list button:has(use[href='#i-mic'])");
+  await page.click("#sheet .tr-choice:has(use[href='#i-mic'])");
+  await page.waitForSelector("#sheet button:has(use[href='#i-stop'])", { timeout: 10000 }).catch(() => null);
+  await page.waitForTimeout(2500);
+  await page.click("#sheet button:has(use[href='#i-stop'])");
+  await page.waitForSelector("#sheet[open] .tr-new .tr-take audio", { timeout: 15000 }).catch(() => null);
+  await page.waitForTimeout(800);
+  await page.click("#sheet .tr-new button[type=submit]");
+  let recorded = null;
+  for (let i = 0; i < 40 && !recorded; i++) {
+    await page.waitForTimeout(1500);
+    const toc = await server("/appdata/toc");
+    recorded = toc.body?.entries?.find((e) => String(e.source_filename || "").startsWith("recording_")) ?? null;
+  }
+  check("a recording goes to be transcribed with one click on Transcribe", Boolean(recorded)
+    && (await page.locator("#tr-recovered .tr-recovered").count()) === 0);
+
   // --- deleting the account: this server forgets it too, and the browser is signed out here
   const deletedHere = await server("/account/delete", { method: "POST" });
   const bootAfter = await server("/transcribe/boot");
