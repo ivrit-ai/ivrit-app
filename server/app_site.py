@@ -87,7 +87,9 @@ def install_routes(app: FastAPI, google_client_id: Optional[str]):
     async def config_script():
         return Response(config_js, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
 
-    # Android checks this to let the app open app.ivrit.ai without browser UI.
+    # Android checks this to open links to app.ivrit.ai in the app (app links):
+    # the certificates Play signs it with, for the store and for internal sharing
+    # (scripts/play.mjs signing <versionCode>, and share).
     @app.get("/.well-known/assetlinks.json", include_in_schema=False)
     async def assetlinks():
         path = SHARED_DIR / "assetlinks.json"
