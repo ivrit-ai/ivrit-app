@@ -30,6 +30,7 @@
     <link rel="modulepreload" href="/transcription/local/local.js" />
     <link rel="modulepreload" href="/transcription/local/live.js" />
     <link rel="modulepreload" href="/transcription/live-view.js" />
+    <link rel="modulepreload" href="/transcription/device.js" />
     <link rel="modulepreload" href="/search/normalize.js" />
     <link rel="modulepreload" href="/search/engine.js" />
     <link rel="modulepreload" href="/search/library.js" />
@@ -108,6 +109,8 @@
         </a>
         <!-- Live transcription runs on the device: no account needed. -->
         <button id="landing-live" class="btn landing-live" type="button"><svg class="i"><use href="#i-mic" /></svg><span data-i18n="liveNoSignIn"></span></button>
+        <!-- So does transcribing a file on the device, into My files kept there. -->
+        <button id="landing-files" class="btn landing-live" type="button"><svg class="i"><use href="#i-device" /></svg><span data-i18n="filesNoSignIn"></span></button>
         <p class="fine" data-i18n="driveNote"></p>
         <p class="fine">
           <span data-i18n="consentBefore"></span><a href="https://www.ivrit.ai/en/privacy/" target="_blank" rel="noopener" data-i18n="consentLink"></a><span data-i18n="consentAfter"></span>

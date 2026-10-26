@@ -1,8 +1,8 @@
 // What the search screen searches, kept current: the search indexes from the user's
 // Drive (one per My files folder, and one for clips; server/search_index.py), kept
 // on this device (IndexedDB "ivrit-search") so only those that changed are fetched
-// again, and the inbox's messages, handed in by the app. The searching itself is
-// engine.js's.
+// again, and the inbox's messages, handed in by the app; without Drive, the
+// transcripts kept on the device (setDeviceDocs). The searching itself is engine.js's.
 
 import { createSearch } from "./engine.js";
 
@@ -60,6 +60,7 @@ export function createLibrary({ sourceName, onChange = () => {} } = {}) {
   const pending = new Map(); // shard → entries still being indexed
   let loading = null;
   let available = true; // false when this browser has no Drive (signed in to the app only)
+  let onDevice = false; // My files is kept on the device, and handed in
 
   const folderById = (id) => tree.folders.find((f) => f.id === id);
   // A folder's names from just under the top down to it.
@@ -119,7 +120,12 @@ export function createLibrary({ sourceName, onChange = () => {} } = {}) {
     engine,
     tree: () => tree,
     pathOf,
-    available: () => available,
+    available: () => available || onDevice,
+    /** My files kept on the device (transcription/device.js searchDocs). */
+    setDeviceDocs(docs) {
+      onDevice = true;
+      engine.setShard("device", docs);
+    },
     pending: () => [...pending.values()].reduce((a, b) => a + b, 0),
     /** Brings the indexes up to date (once at a time); resolves when done. */
     refresh() {

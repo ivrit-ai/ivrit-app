@@ -430,7 +430,7 @@ try {
   const saveLive = await page.waitForSelector("#tr-live .tr-live-save button.primary", { timeout: 30000 }).catch(() => null);
   check("...finishing offers to save it, in My files or on this device", Boolean(saveLive)
     && (await page.locator("#tr-live .tr-live-save select").count()) === 1
-    && (await page.locator("#tr-live .tr-live-save button:has-text('שמירה במכשיר')").count()) === 1
+    && (await page.locator("#tr-live .tr-live-save button:has-text('שמירה כקובץ')").count()) === 1
     && (await page.locator("#live-dot:not([hidden])").count()) === 0);
   if (saveLive) await saveLive.click();
   const savedLive = await page.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 30000 }).catch(() => null);
@@ -549,13 +549,15 @@ try {
   await landing.screenshot({ path: path.join(OUT, "bt-0-landing-1280.png") });
   await guest.close();
 
-  // --- signed out: live transcription needs no account
+  // --- signed out: live, and files, on the device, in My files kept there
   const anon = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "he-IL", acceptDownloads: true, permissions: ["microphone"] });
   const guestPage = await anon.newPage();
   guestPage.on("pageerror", (e) => errors.push(`signed out: ${e}`));
   anon.on("page", (popup) => popup !== guestPage && popup.close().catch(() => {}));
   await guestPage.goto(`${origin}/`);
   await guestPage.waitForSelector("#landing:not([hidden]) #landing-live", { timeout: 15000 }).catch(() => null);
+  check("signed out, the landing first, offering live and files on the device without signing in",
+    (await guestPage.locator("#landing:not([hidden]) #landing-files").count()) === 1 && (await guestPage.locator("#tabs button.active").count()) === 0);
   await guestPage.click("#tabs button[data-view='settings']");
   await guestPage.waitForTimeout(300);
   const guestSettings = {
@@ -563,37 +565,71 @@ try {
     language: await guestPage.locator("#lang-setting:visible").count(),
     account: await guestPage.locator("#signout:visible, #permission:visible, #devices:visible").count(),
   };
-  check("signed out, the tabs show: Settings holds the language and the theme, nothing of an account's",
+  check("...the tabs show: Settings holds the language and the theme, nothing of an account's",
     guestSettings.theme === 1 && guestSettings.language === 1 && guestSettings.account === 0, JSON.stringify(guestSettings));
-  await guestPage.click("#tabs button[data-view='transcribe']");
-  await guestPage.click("#landing-live");
+  await guestPage.click("#tabs button[data-view='inbox']");
+  check("...and Messages asks to sign in", (await guestPage.locator("#landing:not([hidden])").count()) === 1);
+
+  // Live, saved to My files on the device.
+  await guestPage.click("#tabs button[data-view='live']");
   await guestPage.click("#view-live:not([hidden]) #tr-live-start", { timeout: 10000 });
   const guestHeard = await guestPage.waitForSelector("#tr-live .tr-live-text p:has-text('בפרק')", { timeout: 60000 }).catch(() => null);
-  check("...and from the landing, live transcription works without signing in", Boolean(guestHeard));
+  check("live transcription works without signing in", Boolean(guestHeard));
   await guestPage.waitForTimeout(1500);
   await guestPage.click("#tr-live .tr-live-controls button:has-text('סיום')");
-  await guestPage.waitForSelector("#tr-live .tr-live-save button.primary", { timeout: 30000 }).catch(() => null);
-  const guestOffered = await guestPage.locator("#tr-live .tr-live-save").textContent().catch(() => "");
+  await guestPage.waitForSelector("#tr-live .tr-live-save button.primary:has-text('שמירה בקבצים שלי')", { timeout: 30000 }).catch(() => null);
   const [guestDownload] = await Promise.all([
     guestPage.waitForEvent("download", { timeout: 10000 }).catch(() => null),
-    guestPage.click("#tr-live .tr-live-save button:has-text('שמירה במכשיר')"),
+    guestPage.click("#tr-live .tr-live-save button:has-text('שמירה כקובץ')"),
   ]);
   const downloaded = guestDownload ? (await import("node:fs")).readFileSync(await guestDownload.path(), "utf8") : "";
-  check("...saved to the device as text, or kept to sign in and save in My files", guestOffered.includes("כניסה ושמירה בקבצים שלי")
-    && /\.txt$/.test(guestDownload?.suggestedFilename() ?? "") && downloaded.includes("בפרק"), `${guestOffered.slice(0, 80)} ${guestDownload?.suggestedFilename()}`);
+  check("...saved as a text file", /\.txt$/.test(guestDownload?.suggestedFilename() ?? "") && downloaded.includes("בפרק"), guestDownload?.suggestedFilename());
   await guestPage.screenshot({ path: path.join(OUT, "bt-8g-live-signed-out.png") });
-  const liveBefore = ((await server("/appdata/toc")).body?.entries ?? []).filter((e) => e.origin === "live").length;
   await guestPage.click("#tr-live .tr-live-save button.primary");
-  await guestPage.waitForTimeout(1000);
-  // Google's sign-in, as the server's test login stands in for it: the page starts again, signed in.
+  const guestLive = await guestPage.waitForSelector("#view-transcribe:not([hidden]) #tr-reader #tr-text .tr-seg", { timeout: 30000 }).catch(() => null);
+  check("...or into My files, kept on the device, where it opens", Boolean(guestLive)
+    && (await guestPage.locator("#tr-text").textContent()).includes("בפרק"));
+
+  // A file, transcribed on the device.
+  await guestPage.click("#tabs button[data-view='transcribe']");
+  await guestPage.click(".tr-back").catch(() => {});
+  await guestPage.waitForSelector("#tr-list:not([hidden]) .tr-device-note", { timeout: 15000 }).catch(() => null);
+  const noted = await guestPage.locator(".tr-device-note").textContent().catch(() => "");
+  check("signed out, Transcribe is My files on this device, saying so, with the way to sign in", noted.includes("במכשיר הזה בלבד")
+    && (await guestPage.locator(".tr-device-note button:has-text('Google')").count()) === 1
+    && (await guestPage.locator("#tr-feed .tr-file").count()) === 1, noted.slice(0, 80));
+  const HEBREW = path.join(ROOT, "store/fixtures/hebrew-12s.ogg");
+  await guestPage.setInputFiles("#tr-input", HEBREW);
+  await guestPage.waitForSelector("#sheet[open] .tr-new", { timeout: 5000 }).catch(() => null);
+  const guestSheet = await guestPage.locator("#sheet .tr-new").textContent().catch(() => "");
+  await guestPage.click("#sheet .tr-new button[type=submit]");
+  const guestFile = await guestPage.waitForSelector(`#tr-feed .tr-file.openable:has-text('${path.basename(HEBREW)}')`, { timeout: 120000 }).catch(() => null);
+  check("...a file is transcribed on the device, Hebrew only, into it", Boolean(guestFile) && guestSheet.includes("במכשיר הזה")
+    && (await guestPage.locator("#tr-feed .tr-file.openable").count()) === 2, guestSheet.slice(0, 80));
+  if (guestFile) await guestFile.click();
+  await guestPage.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 15000 }).catch(() => null);
+  check("...and opens, with its words and its recording, and no donating", (await guestPage.locator("#tr-text").textContent().catch(() => "")).includes("בפרק")
+    && (await guestPage.locator("#tr-audio").count()) === 1 && (await guestPage.locator("#tr-reader button:has(use[href='#i-heart'])").count()) === 0);
+  await guestPage.screenshot({ path: path.join(OUT, "bt-8h-file-signed-out.png") });
+
+  // Signed in with Drive (the server's test login stands in for Google): offered to move them there.
+  const beforeToc = (await server("/appdata/toc")).body?.entries ?? [];
+  const liveBefore = beforeToc.filter((e) => e.origin === "live").length;
+  const madeHereBefore = beforeToc.filter((e) => e.source_filename === path.basename(HEBREW) && e.engine).length;
   await guestPage.evaluate((session) => localStorage.setItem("app_session", JSON.stringify({ ...session, renewed_at: Date.now() })), info.session);
-  await guestPage.goto(`${origin}/__test/login?email=dana@example.com&sub=dana-sub&to=/`);
+  await guestPage.goto(`${origin}/__test/login?email=dana@example.com&sub=dana-sub&to=/%23transcribe`);
   const askedAgain = await guestPage.waitForSelector("dialog[open] #confirm-ok", { timeout: 8000 }).catch(() => null);
   if (askedAgain) await askedAgain.click();
-  const guestSaved = await guestPage.waitForSelector("#view-transcribe:not([hidden]) #tr-reader #tr-text .tr-seg", { timeout: 40000 }).catch(() => null);
-  const liveAfter = ((await server("/appdata/toc")).body?.entries ?? []).filter((e) => e.origin === "live").length;
-  check("...and once signed in, it is saved to My files by itself, and opens", Boolean(guestSaved) && liveAfter === liveBefore + 1,
-    `${liveBefore} → ${liveAfter}`);
+  const offer = await guestPage.waitForSelector(".tr-device-note button.primary", { timeout: 30000 }).catch(() => null);
+  const offerText = await guestPage.locator(".tr-device-note").textContent().catch(() => "");
+  check("signed in, what was kept on the device is offered to move to Drive", Boolean(offer) && offerText.includes("2"), offerText.slice(0, 80));
+  if (offer) await offer.click();
+  await guestPage.waitForFunction(() => !document.querySelector(".tr-device-note"), null, { timeout: 60000 }).catch(() => null);
+  const afterToc = (await server("/appdata/toc")).body?.entries ?? [];
+  const liveAfter = afterToc.filter((e) => e.origin === "live").length;
+  check("...and moved, they are in Drive and gone from the device", liveAfter === liveBefore + 1
+    && afterToc.filter((e) => e.source_filename === path.basename(HEBREW) && e.engine).length === madeHereBefore + 1
+    && (await guestPage.evaluate(async () => (await import("/transcription/device.js")).count())) === 0, `${liveBefore} → ${liveAfter}`);
   await anon.close();
 
   // --- a recording, sent with a single "transcribe"

@@ -7,8 +7,13 @@
 // My files has folders (real Drive folders, each with its own transcripts): the list
 // shows one folder at a time, its subfolders first, under a path back to the top
 // (#f/<folder> in the address; the top folder has none).
+//
+// Without Drive, My files is kept on the device (api.useDevice, device.js): the same
+// list, made on the device only (local/), with a note saying so. Once Drive is
+// connected, what was kept here is offered to be moved there (moveToDrive).
 
 import * as api from "./api.js";
+import * as device from "./device.js";
 import * as reader from "./reader.js";
 import * as recorder from "./recorder.js";
 import * as local from "./local/local.js";
@@ -69,7 +74,83 @@ export async function mount(container, hostApi, bootData) {
     if (input) input.multiple = batchLimit() > 1;
   }, () => {});
   await Promise.all([loadTree(), refresh(), renderQuota(), recorder.renderRecovered($("tr-recovered"))]);
+  drawDeviceNote();
   route();
+}
+
+// ------------------------------------------------------------------ kept on the device
+
+// On the device's own My files: a note saying so, with the way to Drive (host's).
+// With Drive: an offer to move there what was kept on this device.
+async function drawDeviceNote() {
+  const box = $("tr-device-note");
+  if (!box) return;
+  const { el } = host;
+  if (boot?.device) {
+    const action = host.deviceAction?.();
+    box.replaceChildren(el("div", { class: "card tr-device-note" }, [
+      el("p", { class: "muted", text: tr("deviceFilesNote") }),
+      action ? el("div", { class: "row" }, [el("button", { class: "btn", type: "button", text: action.label, onclick: action.run })]) : null,
+    ]));
+    return;
+  }
+  const count = await device.count();
+  if (!count) return box.replaceChildren();
+  const go = el("button", { class: "btn primary", type: "button", text: tr("deviceMove") });
+  go.addEventListener("click", () => moveToDrive(go));
+  box.replaceChildren(el("div", { class: "card tr-device-note" }, [
+    el("p", { text: tr("deviceMoveNote", { count }) }),
+    el("div", { class: "row" }, [go]),
+  ]));
+}
+
+// What was kept on this device into Drive, one transcript at a time, each into a
+// folder of the same path (made if need be), its edits and recording with it.
+async function moveToDrive(button) {
+  button.disabled = true;
+  const items = await device.everything();
+  const made = new Map(); // folder path → Drive folder id
+  const driveFolder = async (path) => {
+    let parent = null;
+    for (let i = 0; i < path.length; i++) {
+      const key = path.slice(0, i + 1).join("/");
+      if (!made.has(key)) {
+        const existing = childrenOf(parent).find((f) => f.name === path[i]);
+        made.set(key, existing ? existing.id : (await api.createFolder(path[i], parent)).id);
+      }
+      parent = made.get(key);
+    }
+    return parent;
+  };
+  let moved = 0;
+  for (const { entry, folderPath } of items) {
+    button.textContent = tr("deviceMoving", { done: moved, total: items.length });
+    try {
+      const to = await driveFolder(folderPath);
+      const [doc, state, blob] = await Promise.all([device.results(entry.results_id), device.edits(entry.results_id), device.audioBlob(entry.results_id)]);
+      const meta = { filename: entry.source_filename, language: entry.language, duration_seconds: entry.duration_seconds, folder: to, origin: entry.origin, engine: entry.engine };
+      const audio = blob ? new File([blob], blob.name || entry.source_filename || "audio", { type: blob.type }) : null;
+      let saved;
+      try {
+        saved = await api.saveToDrive(meta, doc?.results || [], audio);
+      } catch (err) {
+        // A full Drive: the words, without the recording.
+        if (!audio || !api.driveFull(err)) throw err;
+        saved = await api.saveToDrive(meta, doc?.results || [], null);
+      }
+      if (state) await api.saveEditsToDrive(saved.results_id, state, to);
+      await device.remove(entry.results_id);
+      moved++;
+    } catch (err) {
+      host.toast(serverError(err?.data, "deviceMoveFailed"));
+      break;
+    }
+  }
+  await device.dropEmptyFolders().catch(() => {});
+  if (moved) host.toast(tr("deviceMoved", { count: moved }));
+  await loadTree();
+  refresh();
+  drawDeviceNote();
 }
 
 // ------------------------------------------------------------------ last seen
@@ -145,6 +226,7 @@ function renderShell() {
       el("button", { class: "btn quiet", type: "button", onclick: () => newFolder() }, [icon("folder-plus"), el("span", { text: tr("newFolder") })]),
       input,
     ]),
+    el("div", { id: "tr-device-note" }),
     el("div", { id: "tr-recovered" }),
     el("nav", { id: "tr-path", class: "tr-path", "aria-label": tr("foldersPath") }),
     el("div", { id: "tr-feed", class: "feed" }),
@@ -741,8 +823,8 @@ function openNewSheet() {
     onDevice ? el("p", { class: "muted", text: tr("localOnlyHint") }) : whereBox,
     tree?.folders.length ? el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("saveTo") }), destination]) : null,
     el("label", { class: "tr-check" }, [keep, el("span", {}, [
-      el("span", { text: tr("saveAudioInDrive") }),
-      el("span", { class: "sub", text: tr("saveAudioInfoText") }),
+      el("span", { text: tr(boot?.device ? "saveAudioHere" : "saveAudioInDrive") }),
+      boot?.device ? null : el("span", { class: "sub", text: tr("saveAudioInfoText") }),
     ])]),
     go,
   ]);
@@ -847,7 +929,7 @@ export function deviceJob(item) {
 }
 
 const outOfFreeTime = (err) => ["errorRateLimitExceeded", "errorFileTooLargeForFreeService"].includes(err?.data?.i18n_key);
-const canTranscribeHere = (lang) => lang === local.LANGUAGE && (local.supported() || Boolean(host?.canTranscribeOnPhone?.()));
+const canTranscribeHere = (lang) => lang === local.LANGUAGE && (local.supported() || (!boot?.device && Boolean(host?.canTranscribeOnPhone?.())));
 
 // Out of free time: on this device (no speakers), with the user's own RunPod key
 // (the servers, with speakers, no weekly limit), or not now.
@@ -875,8 +957,9 @@ async function sendLocally(file, options, id) {
     pending.set(id, { name: file.name, size: file.size, stage: "local", folder: options.folder, ...fields });
     draw();
   };
-  // In the app, the phone does it, in the background (with the app closed too).
-  if (host.canTranscribeOnPhone?.()) {
+  // In the app, the phone does it, in the background (with the app closed too), into
+  // Drive; without Drive, here in the page.
+  if (!boot?.device && host.canTranscribeOnPhone?.()) {
     try {
       card({ phase: "handing", percent: 0 });
       await host.transcribeOnPhone(file, options, (fraction) => card({ phase: "handing", percent: fraction * 100 }));

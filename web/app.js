@@ -3,6 +3,7 @@ import { ApiError, createCommunicator } from "./client/communicator.js";
 import * as transcribeApi from "./transcription/api.js";
 import * as transcription from "./transcription/view.js";
 import * as live from "./transcription/live-view.js";
+import * as device from "./transcription/device.js";
 import * as transcriptionSettings from "./transcription/settings.js";
 import * as watches from "./transcription/watches.js";
 import { createLibrary } from "./search/library.js";
@@ -171,8 +172,10 @@ const library = createLibrary({
 });
 let searchFrom = "inbox";
 
-function openSearch({ query = "", where = [] } = {}) {
+async function openSearch({ query = "", where = [] } = {}) {
   if (state.view !== "search") searchFrom = state.view;
+  // My files kept on the device: searched from there.
+  if (transcribeApi.isDevice()) library.setDeviceDocs(await device.searchDocs().catch(() => []));
   showView("search");
   searchView.open($("view-search"), { query, where });
 }
@@ -187,7 +190,7 @@ searchView.init({
   openMessage: (id) => (location.hash = `#m/${encodeURIComponent(id)}`),
   async openTranscript(id, folder, at) {
     showView("transcribe");
-    if (await showTranscribeApp()) transcription.openResults(id, folder, at);
+    if (await showFiles()) transcription.openResults(id, folder, at);
   },
   async openClip(id, title) {
     const res = await fetch(`/appdata/clips/${encodeURIComponent(id)}`, { credentials: "same-origin" }).catch(() => null);
@@ -1567,6 +1570,8 @@ const transcriptionHost = {
   saveFile,
   // The microphone is the Live tab's while it transcribes.
   liveBusy: () => live.busy(),
+  // My files on the device: the way to Drive (signed in, the panel above has it).
+  deviceAction: () => (state.me ? null : { label: t("continueGoogle"), run: () => signInWithGoogle() }),
   canOpenAppSettings: () => Boolean(shell && nativeStatus?.features?.includes("appSettings")),
   openAppSettings: () => shell?.ivrit.openAppSettings().catch(() => {}),
 };
@@ -1615,26 +1620,18 @@ $("connect-drive").addEventListener("click", async () => {
 });
 
 async function renderTranscribe() {
-  showTranscribeApp();
+  showFiles();
 }
 
 // ---------------------------------------------------------------- live
 
-// The Live tab. It needs no account; where its transcript can be kept does.
+// The Live tab. It needs no account: its transcript goes to My files, in Drive or
+// on the device (showFiles).
 const liveHooks = {
   signedIn: () => Boolean(state.me),
-  async account() {
-    if (!state.me) return "signed-out";
-    return (await showTranscribeApp()) ? "ready" : "no-drive";
-  },
+  files: () => showFiles(),
   folderPicker: (selected) => transcription.folderPicker(selected),
   folder: () => transcription.currentFolder(),
-  signIn: () => signInWithGoogle(),
-  async connect() {
-    if (!(await connectDrive())) return false;
-    if (shell) takeShared();
-    return Boolean(await showTranscribeApp());
-  },
   saved(resultsId, folder) {
     showView("transcribe");
     transcription.openResults(resultsId, folder);
@@ -1651,20 +1648,46 @@ function mountLive() {
     $("landing-live").hidden = true;
     return Promise.resolve();
   }
-  liveMounted ??= live.mount($("live-mount"), transcriptionHost, liveHooks).catch(() => {});
+  liveMounted ??= Promise.resolve(live.mount($("live-mount"), transcriptionHost, liveHooks)).catch(() => {});
   return liveMounted;
 }
 
-// Opened at #live (a link to it), or with a transcript kept across signing in.
+// Opened at #live (a link to it).
 function liveFirst() {
-  if (location.hash === "#live") {
-    history.replaceState(null, "", location.pathname + location.search);
-    return true;
-  }
-  return live.hasResult();
+  if (location.hash !== "#live") return false;
+  history.replaceState(null, "", location.pathname + location.search);
+  return true;
 }
 
 $("landing-live").addEventListener("click", () => showView("live"));
+$("landing-files").addEventListener("click", () => showView("transcribe"));
+
+// ---------------------------------------------------------------- My files
+
+// My files: in Google Drive when this browser or phone has it, else kept on the
+// device (transcription/device.js), signed out or signed in without Drive. Resolves
+// to "drive", "device", or null when it cannot tell yet (offline).
+let filesReady = null;
+
+function showFiles() {
+  filesReady ??= (async () => {
+    if (state.me && !state.me.offline) {
+      if (await showTranscribeApp()) return "drive";
+      // Not Drive's refusal but no answer at all: neither, for now.
+      if ($("transcribe-connect").hidden) return null;
+    }
+    if (!device.supported()) return null;
+    device.setOwner(state.me?.sub);
+    transcribeApi.useDevice(true);
+    $("transcribe-mount").hidden = false;
+    await transcription.mount($("transcribe-mount"), transcriptionHost, await transcribeApi.boot());
+    return "device";
+  })().then((where) => {
+    if (!where) filesReady = null;
+    return where;
+  });
+  return filesReady;
+}
 
 // ---------------------------------------------------------------- appearance
 
@@ -1781,12 +1804,14 @@ async function saveClips() {
 // ---------------------------------------------------------------- views
 
 const VIEWS = ["inbox", "transcribe", "live", "sources", "settings", "search"];
+// Signed out: what needs an account shows the landing (sign in) instead, as does
+// "welcome", the first screen then.
+const ACCOUNT_VIEWS = ["inbox", "sources", "search"];
 
 function showView(name) {
-  if (!VIEWS.includes(name)) name = "inbox";
+  if (!VIEWS.includes(name) && name !== "welcome") name = "inbox";
   state.view = name;
-  // Signed out, Live and Settings work (they need no account); the rest ask to sign in.
-  const signIn = !state.me && name !== "live" && name !== "settings";
+  const signIn = !state.me && (name === "welcome" || ACCOUNT_VIEWS.includes(name) || (name === "transcribe" && !device.supported()));
   // Sources is reached from Messages, and counts as part of it.
   const tab = name === "sources" ? "inbox" : name;
   for (const button of document.querySelectorAll("#tabs button")) {
@@ -1803,8 +1828,8 @@ function showView(name) {
 }
 
 function rerender() {
-  if (state.view === "live") live.show();
   if (!state.me) {
+    if (state.view === "transcribe") renderTranscribe();
     if (state.view === "settings") {
       renderLocaleSwitches();
       renderThemeSwitch();
@@ -2154,13 +2179,16 @@ function goBack(canGoBack) {
   }
   if (state.view === "search") return showView(searchFrom);
   if (state.view === "sources") return showView("inbox");
-  if (state.view !== "transcribe") return showView("transcribe");
+  // The first screen: signed in, Transcribe; signed out, the landing.
+  if (state.view === "welcome") return shell.app.minimizeApp().catch(() => {});
+  if (state.view !== "transcribe") return showView(state.me ? "transcribe" : "welcome");
   // In Transcribe: a transcript or a folder goes back to where it was opened from.
   if (location.hash) {
     if (canGoBack) history.back();
     else location.hash = "";
     return;
   }
+  if (!state.me) return showView("welcome");
   // The main screen: the app goes to the background, as from any app's first screen.
   shell.app.minimizeApp().catch(() => {});
 }
@@ -2281,7 +2309,7 @@ async function showSignedOut() {
   document.body.dataset.started = "1";
   $("tabs").hidden = false;
   await mountLive();
-  showView(liveFirst() ? "live" : "transcribe");
+  showView(liveFirst() ? "live" : location.hash === "#transcribe" ? "transcribe" : "welcome");
 }
 
 async function start() {

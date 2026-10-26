@@ -1,6 +1,11 @@
 // This site's transcription API (server/app.py), signed in by the server's cookie.
 // Refusals come back as {error, i18n_key, i18n_vars, details}: ApiRefusal carries
 // that, for strings.js serverError() to put into words.
+//
+// Without Google Drive (signed out, or signed in without it), My files is kept on
+// this device instead: useDevice(true) sends the same calls to device.js.
+
+import * as device from "./device.js";
 
 export class ApiRefusal extends Error {
   constructor(status, data) {
@@ -9,6 +14,16 @@ export class ApiRefusal extends Error {
     this.data = data;
   }
 }
+
+let onDevice = false;
+export function useDevice(on) {
+  onDevice = Boolean(on);
+  early.clear();
+}
+export const isDevice = () => onDevice;
+// Off the device's own My files when the call is one it answers.
+const here = (fn, server) => (...args) => (onDevice ? fn(...args) : server(...args));
+const notHere = (server) => (...args) => (onDevice ? Promise.reject(new ApiRefusal(400, { i18n_key: "notOnDevice" })) : server(...args));
 
 let onSignedOut = () => {};
 export const whenSignedOut = (fn) => (onSignedOut = fn);
@@ -63,46 +78,51 @@ const quotaNow = () => call("/quota");
 const tocNow = (folder) => call(inFolder("/appdata/toc", folder));
 const foldersNow = () => call("/appdata/folders");
 
-export const boot = () => once("boot", bootNow);
-export const languages = () => once("languages", languagesNow);
-export const quota = () => once("quota", quotaNow);
-export const balance = () => call("/balance");
-export const toc = (folder) => (folder ? tocNow(folder) : once("toc", () => tocNow(null)));
-export const rename = (resultsId, name, folder) => call(inFolder("/appdata/rename", folder), { method: "POST", body: { results_id: resultsId, new_filename: name } });
-export const remove = (resultsId, folder) => call(inFolder("/appdata/delete", folder), { method: "POST", body: { results_id: resultsId } });
-export const donate = (resultsId, folder) => call(inFolder("/appdata/donate_data", folder), { method: "POST", body: { results_id: resultsId, checkbox_confirmed: true } });
+export const boot = here(device.boot, () => once("boot", bootNow));
+export const languages = here(device.languages, () => once("languages", languagesNow));
+export const quota = notHere(() => once("quota", quotaNow));
+export const balance = notHere(() => call("/balance"));
+export const toc = here(device.toc, (folder) => (folder ? tocNow(folder) : once("toc", () => tocNow(null))));
+export const rename = here(device.rename, (resultsId, name, folder) => call(inFolder("/appdata/rename", folder), { method: "POST", body: { results_id: resultsId, new_filename: name } }));
+export const remove = here(device.remove, (resultsId, folder) => call(inFolder("/appdata/delete", folder), { method: "POST", body: { results_id: resultsId } }));
+export const donate = notHere((resultsId, folder) => call(inFolder("/appdata/donate_data", folder), { method: "POST", body: { results_id: resultsId, checkbox_confirmed: true } }));
+// Donating sends the recording to ivrit.ai: from Drive only.
+export const canDonate = () => !onDevice;
 
 // Folders: {top, folders: [{id, name, parent}]}; made, renamed, and moved to Drive's trash.
-export const folders = () => once("folders", foldersNow);
-export const createFolder = (name, parent) => call("/appdata/folders", { method: "POST", body: { name, parent } });
-export const renameFolder = (id, name) => call(`/appdata/folders/${encodeURIComponent(id)}/rename`, { method: "POST", body: { name } });
-export const deleteFolder = (id) => call(`/appdata/folders/${encodeURIComponent(id)}`, { method: "DELETE" });
-export const move = (resultsId, from, to) => call("/appdata/move", { method: "POST", body: { results_id: resultsId, from, to } });
+export const folders = here(device.folders, () => once("folders", foldersNow));
+export const createFolder = here(device.createFolder, (name, parent) => call("/appdata/folders", { method: "POST", body: { name, parent } }));
+export const renameFolder = here(device.renameFolder, (id, name) => call(`/appdata/folders/${encodeURIComponent(id)}/rename`, { method: "POST", body: { name } }));
+export const deleteFolder = here(device.deleteFolder, (id) => call(`/appdata/folders/${encodeURIComponent(id)}`, { method: "DELETE" }));
+export const move = here(device.move, (resultsId, from, to) => call("/appdata/move", { method: "POST", body: { results_id: resultsId, from, to } }));
 export const saveRunpodKey = (key) => call("/runpod_key", { method: "POST", body: { runpod_token: key } });
 export const removeRunpodKey = () => call("/runpod_key", { method: "DELETE" });
 export const stats = () => call("/stats");
-export const audioUrl = (resultsId, folder) => inFolder(`/appdata/audio/stream/${encodeURIComponent(resultsId)}`, folder);
+export const audioUrl = here(device.audioUrl, (resultsId, folder) => inFolder(`/appdata/audio/stream/${encodeURIComponent(resultsId)}`, folder));
 
 // The transcript itself: stored gzipped, unpacked here.
-export async function results(resultsId, folder) {
+export const results = here(device.results, async (resultsId, folder) => {
   const res = await call(inFolder(`/appdata/results/${encodeURIComponent(resultsId)}`, folder), { raw: true });
   const stream = res.body.pipeThrough(new DecompressionStream("gzip"));
   return JSON.parse(await new Response(stream).text());
-}
+});
 
 // Its edits, or null if it has none (404).
-export async function edits(resultsId, folder) {
+export const edits = here(device.edits, async (resultsId, folder) => {
   try {
     return await call(inFolder(`/appdata/edits/${encodeURIComponent(resultsId)}`, folder));
   } catch (err) {
     if (err.status === 404) return null;
     throw err;
   }
-}
+});
 
 // A transcript made on this device (local/), into My files: the segments gzipped,
 // and the audio only if the user keeps it (for playback, in their Drive).
-export async function saveLocal(meta, segments, audio) {
+export const saveLocal = here(device.save, saveToDrive);
+
+// Into Drive, whichever My files is shown (moving what is on the device to Drive).
+export async function saveToDrive(meta, segments, audio) {
   const form = new FormData();
   form.append("meta", JSON.stringify(meta));
   const packed = await new Response(new Blob([JSON.stringify(segments)]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
@@ -135,16 +155,19 @@ export const plainTextFile = (segments) =>
 // Transcribing on the user's devices only (the server then refuses their audio).
 export const setLocalOnly = (on) => call("/settings", { method: "POST", body: { localOnly: on } });
 
-export const saveEdits = (resultsId, state, folder) =>
+export const saveEdits = here(device.saveEdits, (resultsId, state, folder) =>
+  call(inFolder(`/appdata/edits/${encodeURIComponent(resultsId)}`, folder), { method: "POST", body: state }));
+// The same, into Drive whichever My files is shown.
+export const saveEditsToDrive = (resultsId, state, folder) =>
   call(inFolder(`/appdata/edits/${encodeURIComponent(resultsId)}`, folder), { method: "POST", body: state });
 
-export async function hasAudio(resultsId, folder) {
+export const hasAudio = here(device.hasAudio, async (resultsId, folder) => {
   const res = await fetch(audioUrl(resultsId, folder), { method: "HEAD", credentials: "same-origin" }).catch(() => null);
   return Boolean(res?.ok);
-}
+});
 
-export const precheck = ({ size, language, saveAudio }) =>
-  call("/upload/precheck", { method: "POST", body: { file_size: size, language, save_audio: saveAudio ? "true" : "false" } });
+export const precheck = notHere(({ size, language, saveAudio }) =>
+  call("/upload/precheck", { method: "POST", body: { file_size: size, language, save_audio: saveAudio ? "true" : "false" } }));
 
 // A file up to the server, which transcodes it and queues it (its transcript lands in
 // `folder`, or the top folder). onProgress({stage:

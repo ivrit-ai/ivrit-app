@@ -656,3 +656,17 @@ button.tr-who::after,
   margin-top: 12px;
   padding: 16px;
 }
+
+/* My files kept on the device: what that means, and the way to Drive. */
+.tr-device-note {
+  margin-bottom: 14px;
+}
+
+.tr-device-note p {
+  margin: 0 0 10px;
+}
+
+.tr-device-note .row:last-child,
+.tr-device-note p:last-child {
+  margin-bottom: 0;
+}

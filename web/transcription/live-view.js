@@ -1,10 +1,9 @@
 // The Live tab: Hebrew transcribed as it is spoken, on the device
 // (local/live.js), with a timer, Pause and Finish; then what to do with it.
 //
-// Nothing here needs an account: the model runs on the device. Only keeping the
-// transcript in My files does (Google Drive). Signed out, it is saved to the
-// device, or kept here while the user signs in (which starts the page again) and
-// saved to My files after.
+// Nothing here needs an account: the model runs on the device. The transcript goes
+// to My files: in Google Drive when there is one, else kept on the device (api.js,
+// device.js). Or it is saved as a file.
 
 import * as api from "./api.js";
 import { ENGINE, LANGUAGE } from "./local/local.js";
@@ -19,11 +18,10 @@ let hooks = null;
 let root = null;
 let session = null; // the live session, while one runs
 let result = null; // what it heard, once finished, until saved or deleted
-let kept = false; // the result is also kept on the device (for after signing in)
 
 // Leaving the page mid-session loses it, and so does leaving what it heard unsaved.
 addEventListener("beforeunload", (e) => {
-  if (session || (result && !result.savedHere && !kept)) {
+  if (session || (result && !result.savedHere)) {
     e.preventDefault();
     e.returnValue = "";
   }
@@ -31,45 +29,27 @@ addEventListener("beforeunload", (e) => {
 
 export const busy = () => Boolean(session);
 
-// A transcript is on the tab, not yet saved anywhere.
-export const hasResult = () => Boolean(result && !result.savedHere);
-
 /**
  * Mounts the tab into container. hooks:
  *   signedIn(): whether there is an account
- *   account(): Promise<"signed-out" | "no-drive" | "ready">: where it can be saved
- *   folderPicker(selected), folder(): My files' folders, when ready
- *   signIn(): sign in (the page starts again after)
- *   connect(): Promise<boolean>: connect Google Drive
+ *   files(): Promise: My files is ready (in Drive, or on the device)
+ *   folderPicker(selected), folder(): My files' folders
  *   saved(resultsId, folder): it is in My files
  *   changed(busy): a session started or ended
  *   recording(): a recording is under way (the microphone is taken)
  */
-export async function mount(container, hostApi, tabHooks) {
+export function mount(container, hostApi, tabHooks) {
   host = hostApi;
   hooks = tabHooks;
   root = container;
   setLanguage(host.locale());
-  result = await takeKept().catch(() => null);
-  kept = Boolean(result);
-  if (result) drawResult({ recovered: true });
-  else drawStart();
-}
-
-// The tab is shown. A transcript kept across signing in is saved to My files then,
-// once Drive is ready; otherwise it waits on screen for the user.
-export async function show() {
-  if (!root || session || !result?.autoSave) return;
-  result.autoSave = false;
-  if ((await hooks.account()) !== "ready") return;
-  await drawn;
-  saveToFiles(null, [...root.querySelectorAll(".tr-live-save button")]);
+  drawStart();
 }
 
 export function relocalize(locale) {
   setLanguage(locale);
   if (!root || session) return;
-  if (result) drawResult({ recovered: kept });
+  if (result) drawResult();
   else drawStart();
 }
 
@@ -78,7 +58,6 @@ export function relocalize(locale) {
 function drawStart() {
   const { el, icon } = host;
   result = null;
-  kept = false;
   root.replaceChildren(
     el("div", { class: "tr-live tr-live-idle" }, [
       el("h2", { class: "title", text: tr("liveTitle") }),
@@ -183,21 +162,13 @@ async function begin() {
       return drawStart();
     }
     result = { segments: heard.segments, seconds: heard.seconds, audio: heard.audio };
-    kept = false;
-    drawResult({ recovered: false });
+    drawResult();
   });
 }
 
-// What was heard, and where it can go: My files (signing in, or connecting Drive,
-// first if need be), this device, or nowhere.
-let drawn = Promise.resolve();
-
-function drawResult(options) {
-  drawn = drawResultNow(options);
-  return drawn;
-}
-
-async function drawResultNow({ recovered }) {
+// What was heard, and where it can go: My files (in Drive, or on the device), a
+// file, or nowhere.
+async function drawResult() {
   const { el } = host;
   const { segments, seconds } = result;
   const text = el("article", { class: "card tr-text tr-live-text", dir: "rtl", lang: LANGUAGE },
@@ -206,47 +177,29 @@ async function drawResultNow({ recovered }) {
   root.replaceChildren(
     el("div", { class: "tr-live", id: "tr-live" }, [
       el("h2", { class: "title", text: tr("liveTitle") }),
-      el("p", { class: "lede tr-live-status", text: tr(recovered ? "liveRecovered" : "liveDone") }),
+      el("p", { class: "lede tr-live-status", text: tr("liveDone") }),
       el("div", { class: "row tr-live-controls" }, [el("span", { class: "tr-timer", dir: "ltr", text: clock(seconds) })]),
       text,
       box,
     ])
   );
 
-  const account = await hooks.account();
+  await hooks.files().catch(() => {});
   if (!result || !box.isConnected) return; // drawn again meanwhile
   const keep = el("input", { type: "checkbox", checked: result.keepAudio ?? readKeepAudio() });
   keep.addEventListener("change", () => (result.keepAudio = keep.checked));
-  const destination = account === "ready" ? hooks.folderPicker(hooks.folder()) : null;
-  const toFiles = el("button", { class: "btn primary", type: "button", text: tr(account === "signed-out" ? "liveSignInSave" : "liveSave") });
+  const destination = hooks.folderPicker(hooks.folder());
+  const toFiles = el("button", { class: "btn primary", type: "button", text: tr("liveSave") });
   const toDevice = el("button", { class: "btn", type: "button", text: tr("liveSaveDevice") });
   const discard = el("button", { class: "btn quiet", type: "button", text: tr(result.savedHere ? "liveNew" : "liveDiscard") });
   box.replaceChildren(
-    destination ? el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("saveTo") }), destination]) : "",
+    el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("saveTo") }), destination]),
     el("label", { class: "tr-check" }, [keep, el("span", { text: tr("liveKeepAudio") })]),
     el("div", { class: "row" }, [toFiles, toDevice, discard])
   );
 
-  toFiles.addEventListener("click", async () => {
+  toFiles.addEventListener("click", () => {
     result.keepAudio = keep.checked;
-    if (account === "signed-out") {
-      // Kept on the device while Google signs in; the page starts again after.
-      try {
-        await keepForLater({ ...result, autoSave: true });
-        kept = true;
-      } catch {
-        return host.toast(tr("liveCannotKeep"));
-      }
-      hooks.signIn();
-      return;
-    }
-    if (account === "no-drive") {
-      toFiles.disabled = true;
-      const connected = await hooks.connect().catch(() => false);
-      toFiles.disabled = false;
-      if (connected) drawResult({ recovered: kept });
-      return;
-    }
     saveToFiles(destination.value || null, [toFiles, toDevice, discard]);
   });
   toDevice.addEventListener("click", async () => {
@@ -258,7 +211,6 @@ async function drawResultNow({ recovered }) {
   });
   discard.addEventListener("click", async () => {
     if (!result.savedHere && !(await host.ask(tr("liveDiscardConfirm"), { ok: tr("liveDiscard"), danger: true }))) return;
-    await dropKept().catch(() => {});
     drawStart();
   });
 }
@@ -286,7 +238,6 @@ async function saveToFiles(to, buttons) {
     try {
       localStorage.setItem("tr_save_audio", String(keepAudio ?? readKeepAudio()));
     } catch {}
-    await dropKept().catch(() => {});
     host.toast(tr(saved.withoutAudio ? "savedWithoutAudio" : "localSaved"));
     drawStart();
     hooks.saved(saved.results_id, to);
@@ -299,7 +250,7 @@ async function saveToFiles(to, buttons) {
     } else {
       host.toast(serverError(err?.data, "errorLocalSaveFailed"));
     }
-    drawResult({ recovered: kept });
+    drawResult();
   }
 }
 
@@ -309,52 +260,4 @@ function readKeepAudio() {
   } catch {
     return true;
   }
-}
-
-// ------------------------------------------------------------------ kept for after signing in
-
-// One transcript at most, in a database of its own: {segments, seconds, audio,
-// name, keepAudio, autoSave}.
-const DB = "ivrit-live";
-
-function db() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore("kept");
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function run(mode, action) {
-  const d = await db();
-  try {
-    return await new Promise((resolve, reject) => {
-      const tx = d.transaction("kept", mode);
-      const request = action(tx.objectStore("kept"));
-      tx.oncomplete = () => resolve(request.result);
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
-  } finally {
-    d.close();
-  }
-}
-
-async function keepForLater({ segments, seconds, audio, keepAudio, autoSave }) {
-  await run("readwrite", (s) => s.put({ segments, seconds, audio, name: audio.name, keepAudio, autoSave }, "result"));
-}
-
-async function takeKept() {
-  if (!self.indexedDB) return null;
-  const row = await run("readonly", (s) => s.get("result"));
-  if (!row) return null;
-  const audio = row.audio instanceof File ? row.audio : new File([row.audio], row.name, { type: row.audio.type });
-  return { segments: row.segments, seconds: row.seconds, audio, keepAudio: row.keepAudio, autoSave: row.autoSave };
-}
-
-async function dropKept() {
-  if (!self.indexedDB || !kept) return;
-  await run("readwrite", (s) => s.delete("result"));
-  kept = false;
 }

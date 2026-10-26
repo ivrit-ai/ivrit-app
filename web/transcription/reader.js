@@ -205,7 +205,7 @@ function toolbar() {
   const { el, icon } = host;
   const act = (name, label, run, extra = {}) =>
     el("button", { class: "act", type: "button", title: label, "aria-label": label, onclick: run, ...extra }, [icon(name), el("span", { text: label })]);
-  const canDonate = doc.audio && !doc.entry.donated;
+  const canDonate = doc.audio && !doc.entry.donated && api.canDonate();
   return el("div", { class: "msg-actions tr-toolbar" }, [
     act("edit", tr("edit"), () => startEditing(doc.saved)),
     act("copy", tr("copy"), copyText),
