@@ -1,21 +1,29 @@
-// The live screen: Hebrew transcribed as it is spoken, on the device
-// (local/live.js), with a timer, Pause and Stop; then Save (the transcript, and
-// the recording if kept, into My files) or Discard.
+// The Live tab: Hebrew transcribed as it is spoken, on the device
+// (local/live.js), with a timer, Pause and Finish; then what to do with it.
+//
+// Nothing here needs an account: the model runs on the device. Only keeping the
+// transcript in My files does (Google Drive). Signed out, it is saved to the
+// device, or kept here while the user signs in (which starts the page again) and
+// saved to My files after.
 
 import * as api from "./api.js";
 import { ENGINE, LANGUAGE } from "./local/local.js";
 import { startLive, supported } from "./local/live.js";
-import { serverError, tr } from "./strings.js";
+import { serverError, setLanguage, tr } from "./strings.js";
 import { clock } from "./transcript.js";
 
 export { supported };
 
 let host = null;
+let hooks = null;
+let root = null;
 let session = null; // the live session, while one runs
+let result = null; // what it heard, once finished, until saved or deleted
+let kept = false; // the result is also kept on the device (for after signing in)
 
-// Leaving the page mid-session loses it: asked first.
+// Leaving the page mid-session loses it, and so does leaving what it heard unsaved.
 addEventListener("beforeunload", (e) => {
-  if (session) {
+  if (session || (result && !result.savedHere && !kept)) {
     e.preventDefault();
     e.returnValue = "";
   }
@@ -23,11 +31,73 @@ addEventListener("beforeunload", (e) => {
 
 export const busy = () => Boolean(session);
 
+// A transcript is on the tab, not yet saved anywhere.
+export const hasResult = () => Boolean(result && !result.savedHere);
+
 /**
- * Opens the live screen. hooks: showScreen(node), back() (to the list), saved(resultsId, folder).
+ * Mounts the tab into container. hooks:
+ *   signedIn(): whether there is an account
+ *   account(): Promise<"signed-out" | "no-drive" | "ready">: where it can be saved
+ *   folderPicker(selected), folder(): My files' folders, when ready
+ *   signIn(): sign in (the page starts again after)
+ *   connect(): Promise<boolean>: connect Google Drive
+ *   saved(resultsId, folder): it is in My files
+ *   changed(busy): a session started or ended
+ *   recording(): a recording is under way (the microphone is taken)
  */
-export async function open(hostApi, { folder, folderPicker, hooks }) {
+export async function mount(container, hostApi, tabHooks) {
   host = hostApi;
+  hooks = tabHooks;
+  root = container;
+  setLanguage(host.locale());
+  result = await takeKept().catch(() => null);
+  kept = Boolean(result);
+  if (result) drawResult({ recovered: true });
+  else drawStart();
+}
+
+// The tab is shown. A transcript kept across signing in is saved to My files then,
+// once Drive is ready; otherwise it waits on screen for the user.
+export async function show() {
+  if (!root || session || !result?.autoSave) return;
+  result.autoSave = false;
+  if ((await hooks.account()) !== "ready") return;
+  await drawn;
+  saveToFiles(null, [...root.querySelectorAll(".tr-live-save button")]);
+}
+
+export function relocalize(locale) {
+  setLanguage(locale);
+  if (!root || session) return;
+  if (result) drawResult({ recovered: kept });
+  else drawStart();
+}
+
+// ------------------------------------------------------------------ screens
+
+function drawStart() {
+  const { el, icon } = host;
+  result = null;
+  kept = false;
+  root.replaceChildren(
+    el("div", { class: "tr-live tr-live-idle" }, [
+      el("h2", { class: "title", text: tr("liveTitle") }),
+      el("p", { class: "lede", text: tr("liveHint") }),
+      el("div", { class: "row" }, [
+        el("button", { id: "tr-live-start", class: "btn primary", type: "button", onclick: () => begin() }, [
+          icon("mic"),
+          el("span", { text: tr("liveStart") }),
+        ]),
+      ]),
+      hooks.signedIn() ? "" : el("p", { class: "fine", text: tr("liveNoAccount") }),
+    ])
+  );
+}
+
+const visible = () => root && !root.closest("[hidden]");
+
+async function begin() {
+  if (hooks.recording?.()) return host.toast(tr("recordingRunning"));
   const { el, icon } = host;
   const status = el("p", { class: "lede tr-live-status", text: tr("liveStarting") });
   const timer = el("span", { class: "tr-timer", dir: "ltr", text: "00:00" });
@@ -37,18 +107,12 @@ export async function open(hostApi, { folder, folderPicker, hooks }) {
   const pause = el("button", { class: "btn", type: "button", disabled: true }, [icon("pause"), el("span", { text: tr("livePause") })]);
   const stop = el("button", { class: "btn primary", type: "button", disabled: true }, [icon("stop"), el("span", { text: tr("liveStop") })]);
   const controls = el("div", { class: "row tr-live-controls" }, [timer, el("span", { class: "spacer" }), pause, stop]);
-  const back = el("button", { class: "btn quiet small tr-back", type: "button", onclick: () => leave() }, [icon("back"), el("span", { text: tr("back") })]);
-  const screen = el("div", { class: "tr-reader tr-live", id: "tr-live" }, [
-    back,
-    el("h2", { class: "title", text: tr("liveTitle") }),
-    status,
-    controls,
-    text,
-  ]);
-  hooks.showScreen(screen);
+  root.replaceChildren(
+    el("div", { class: "tr-live", id: "tr-live" }, [el("h2", { class: "title", text: tr("liveTitle") }), status, controls, text])
+  );
 
   let follow = true; // keep the newest words in view, until the user scrolls up
-  const onScroll = () => (follow = innerHeight + scrollY >= document.body.scrollHeight - 80);
+  const onScroll = () => visible() && (follow = innerHeight + scrollY >= document.body.scrollHeight - 80);
   addEventListener("scroll", onScroll, { passive: true });
   let ticker = null;
 
@@ -56,21 +120,14 @@ export async function open(hostApi, { folder, folderPicker, hooks }) {
     if (!segments.length) return;
     text.replaceChildren(...segments.map((s, i) =>
       el("p", { class: `tr-turn${i === segments.length - 1 && session && !session.paused ? " tr-live-now" : ""}`, text: s.text })));
-    if (follow) scrollTo({ top: document.body.scrollHeight });
+    // Only while the tab is shown: otherwise the page is another tab's.
+    if (follow && visible()) scrollTo({ top: document.body.scrollHeight });
   };
 
-  async function leave() {
-    if (session && !(await host.ask(tr("liveDiscardConfirm"), { ok: tr("liveDiscard"), danger: true }))) return;
-    session?.discard();
-    session = null;
-    finish();
-    hooks.back();
-  }
-
-  function finish() {
+  const finish = () => {
     clearInterval(ticker);
     removeEventListener("scroll", onScroll);
-  }
+  };
 
   try {
     session = await startLive({
@@ -94,8 +151,9 @@ export async function open(hostApi, { folder, folderPicker, hooks }) {
     } else {
       host.toast(tr("localFailed", { details: err?.message || "" }));
     }
-    return hooks.back();
+    return drawStart();
   }
+  hooks.changed?.(true);
 
   ticker = setInterval(() => (timer.textContent = clock(session?.seconds ?? 0)), 500);
   pause.disabled = false;
@@ -112,66 +170,191 @@ export async function open(hostApi, { folder, folderPicker, hooks }) {
     stop.disabled = true;
     status.textContent = tr("liveFinishing");
     const live = session;
-    let result;
+    let heard;
     try {
-      result = await live.stop();
+      heard = await live.stop();
     } finally {
       session = null;
       finish();
+      hooks.changed?.(false);
     }
-    draw(result.segments);
-    offerSave(result);
+    if (!heard.segments.length) {
+      host.toast(tr("liveNothing"));
+      return drawStart();
+    }
+    result = { segments: heard.segments, seconds: heard.seconds, audio: heard.audio };
+    kept = false;
+    drawResult({ recovered: false });
   });
+}
 
-  // What was heard: into My files (with the recording if kept), or nowhere.
-  function offerSave({ segments, seconds, audio }) {
-    controls.replaceChildren(timer);
-    timer.textContent = clock(seconds);
-    if (!segments.length) {
-      status.textContent = tr("liveNothing");
+// What was heard, and where it can go: My files (signing in, or connecting Drive,
+// first if need be), this device, or nowhere.
+let drawn = Promise.resolve();
+
+function drawResult(options) {
+  drawn = drawResultNow(options);
+  return drawn;
+}
+
+async function drawResultNow({ recovered }) {
+  const { el } = host;
+  const { segments, seconds } = result;
+  const text = el("article", { class: "card tr-text tr-live-text", dir: "rtl", lang: LANGUAGE },
+    segments.map((s) => el("p", { class: "tr-turn", text: s.text })));
+  const box = el("div", { class: "card stack tr-live-save" });
+  root.replaceChildren(
+    el("div", { class: "tr-live", id: "tr-live" }, [
+      el("h2", { class: "title", text: tr("liveTitle") }),
+      el("p", { class: "lede tr-live-status", text: tr(recovered ? "liveRecovered" : "liveDone") }),
+      el("div", { class: "row tr-live-controls" }, [el("span", { class: "tr-timer", dir: "ltr", text: clock(seconds) })]),
+      text,
+      box,
+    ])
+  );
+
+  const account = await hooks.account();
+  if (!result || !box.isConnected) return; // drawn again meanwhile
+  const keep = el("input", { type: "checkbox", checked: result.keepAudio ?? readKeepAudio() });
+  keep.addEventListener("change", () => (result.keepAudio = keep.checked));
+  const destination = account === "ready" ? hooks.folderPicker(hooks.folder()) : null;
+  const toFiles = el("button", { class: "btn primary", type: "button", text: tr(account === "signed-out" ? "liveSignInSave" : "liveSave") });
+  const toDevice = el("button", { class: "btn", type: "button", text: tr("liveSaveDevice") });
+  const discard = el("button", { class: "btn quiet", type: "button", text: tr(result.savedHere ? "liveNew" : "liveDiscard") });
+  box.replaceChildren(
+    destination ? el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("saveTo") }), destination]) : "",
+    el("label", { class: "tr-check" }, [keep, el("span", { text: tr("liveKeepAudio") })]),
+    el("div", { class: "row" }, [toFiles, toDevice, discard])
+  );
+
+  toFiles.addEventListener("click", async () => {
+    result.keepAudio = keep.checked;
+    if (account === "signed-out") {
+      // Kept on the device while Google signs in; the page starts again after.
+      try {
+        await keepForLater({ ...result, autoSave: true });
+        kept = true;
+      } catch {
+        return host.toast(tr("liveCannotKeep"));
+      }
+      hooks.signIn();
       return;
     }
-    status.textContent = tr("liveDone");
-    const keep = el("input", { type: "checkbox", checked: localStorage.getItem("tr_save_audio") !== "false" });
-    const destination = folderPicker(folder);
-    const save = el("button", { class: "btn primary", type: "button", text: tr("liveSave") });
-    const discard = el("button", { class: "btn quiet", type: "button", text: tr("liveDiscard") });
-    const box = el("div", { class: "card stack tr-live-save" }, [
-      el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("saveTo") }), destination]),
-      el("label", { class: "tr-check" }, [keep, el("span", { text: tr("liveKeepAudio") })]),
-      el("div", { class: "row" }, [save, discard]),
-    ]);
-    screen.append(box);
-    discard.addEventListener("click", async () => {
-      if (!(await host.ask(tr("liveDiscardConfirm"), { ok: tr("liveDiscard"), danger: true }))) return;
-      hooks.back();
-    });
-    save.addEventListener("click", async () => {
-      save.disabled = true;
-      discard.disabled = true;
-      save.textContent = tr("statusLocalSaving");
-      try {
-        const to = destination.value || null;
-        const saved = await api.saveLocalFitting(
-          { filename: audio.name, language: LANGUAGE, duration_seconds: seconds, folder: to, origin: "live", engine: ENGINE },
-          segments,
-          keep.checked ? audio : null
-        );
-        localStorage.setItem("tr_save_audio", String(keep.checked));
-        host.toast(tr(saved.withoutAudio ? "savedWithoutAudio" : "localSaved"));
-        hooks.saved(saved.results_id, to);
-      } catch (err) {
-        // No room in Drive even for the words: they are kept on this device, and
-        // the session stays here to save again once there is room.
-        if (api.driveFull(err) && (await host.saveFile(api.plainTextFile(segments), audio.name.replace(/\.[^.]{1,5}$/, ".txt")))) {
-          host.toast(tr("driveFullKeptHere"));
-        } else {
-          host.toast(serverError(err?.data, "errorLocalSaveFailed"));
-        }
-        save.disabled = false;
-        discard.disabled = false;
-        save.textContent = tr("liveSave");
-      }
-    });
+    if (account === "no-drive") {
+      toFiles.disabled = true;
+      const connected = await hooks.connect().catch(() => false);
+      toFiles.disabled = false;
+      if (connected) drawResult({ recovered: kept });
+      return;
+    }
+    saveToFiles(destination.value || null, [toFiles, toDevice, discard]);
+  });
+  toDevice.addEventListener("click", async () => {
+    result.keepAudio = keep.checked;
+    if (await saveToDevice()) {
+      result.savedHere = true;
+      discard.textContent = tr("liveNew");
+    }
+  });
+  discard.addEventListener("click", async () => {
+    if (!result.savedHere && !(await host.ask(tr("liveDiscardConfirm"), { ok: tr("liveDiscard"), danger: true }))) return;
+    await dropKept().catch(() => {});
+    drawStart();
+  });
+}
+
+// The words as a text file, and the recording beside them if kept.
+async function saveToDevice() {
+  const { segments, audio, keepAudio } = result;
+  const where = await host.saveFile(api.plainTextFile(segments), audio.name.replace(/\.[^.]{1,5}$/, ".txt"));
+  if (!where) return false;
+  if (keepAudio) await host.saveFile(audio, audio.name);
+  if (where === "downloaded") host.toast(tr("liveSavedHere"));
+  return true;
+}
+
+async function saveToFiles(to, buttons) {
+  const { segments, seconds, audio, keepAudio } = result;
+  for (const b of buttons) b.disabled = true;
+  if (buttons[0]) buttons[0].textContent = tr("statusLocalSaving");
+  try {
+    const saved = await api.saveLocalFitting(
+      { filename: audio.name, language: LANGUAGE, duration_seconds: seconds, folder: to, origin: "live", engine: ENGINE },
+      segments,
+      keepAudio ?? readKeepAudio() ? audio : null
+    );
+    try {
+      localStorage.setItem("tr_save_audio", String(keepAudio ?? readKeepAudio()));
+    } catch {}
+    await dropKept().catch(() => {});
+    host.toast(tr(saved.withoutAudio ? "savedWithoutAudio" : "localSaved"));
+    drawStart();
+    hooks.saved(saved.results_id, to);
+  } catch (err) {
+    // No room in Drive even for the words: they are kept on this device, and
+    // the transcript stays here to save again once there is room.
+    if (api.driveFull(err) && (await host.saveFile(api.plainTextFile(segments), audio.name.replace(/\.[^.]{1,5}$/, ".txt")))) {
+      result.savedHere = true;
+      host.toast(tr("driveFullKeptHere"));
+    } else {
+      host.toast(serverError(err?.data, "errorLocalSaveFailed"));
+    }
+    drawResult({ recovered: kept });
   }
+}
+
+function readKeepAudio() {
+  try {
+    return localStorage.getItem("tr_save_audio") !== "false";
+  } catch {
+    return true;
+  }
+}
+
+// ------------------------------------------------------------------ kept for after signing in
+
+// One transcript at most, in a database of its own: {segments, seconds, audio,
+// name, keepAudio, autoSave}.
+const DB = "ivrit-live";
+
+function db() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("kept");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function run(mode, action) {
+  const d = await db();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = d.transaction("kept", mode);
+      const request = action(tx.objectStore("kept"));
+      tx.oncomplete = () => resolve(request.result);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    d.close();
+  }
+}
+
+async function keepForLater({ segments, seconds, audio, keepAudio, autoSave }) {
+  await run("readwrite", (s) => s.put({ segments, seconds, audio, name: audio.name, keepAudio, autoSave }, "result"));
+}
+
+async function takeKept() {
+  if (!self.indexedDB) return null;
+  const row = await run("readonly", (s) => s.get("result"));
+  if (!row) return null;
+  const audio = row.audio instanceof File ? row.audio : new File([row.audio], row.name, { type: row.audio.type });
+  return { segments: row.segments, seconds: row.seconds, audio, keepAudio: row.keepAudio, autoSave: row.autoSave };
+}
+
+async function dropKept() {
+  if (!self.indexedDB || !kept) return;
+  await run("readwrite", (s) => s.delete("result"));
+  kept = false;
 }

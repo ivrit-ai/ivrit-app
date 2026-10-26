@@ -1,7 +1,7 @@
 // The page, its code and styles, kept for when there is no network. Nothing
 // else: no push (notifications come through the phone app), no share target
 // (the site is not installed as an app).
-const SHELL = "shell-v3";
+const SHELL = "shell-v4";
 const SHELL_FILES = [
   "/",
   "/app.js",
@@ -11,6 +11,7 @@ const SHELL_FILES = [
   "/client/communicator.js",
   "/styles.css",
   "/theme.css",
+  "/theme.js",
   "/fonts/fonts.css",
   "/fonts/frank-ruhl-libre-hebrew.woff2",
   "/fonts/frank-ruhl-libre-latin.woff2",

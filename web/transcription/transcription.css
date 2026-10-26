@@ -400,18 +400,17 @@ button.tr-who::after,
 .speaker-9 { color: #a07800; }
 .speaker-10 { color: #546e7a; }
 
-@media (prefers-color-scheme: dark) {
-  .speaker-1 { color: #64b5f6; }
-  .speaker-2 { color: #81c784; }
-  .speaker-3 { color: #ffb74d; }
-  .speaker-4 { color: #f06292; }
-  .speaker-5 { color: #ba68c8; }
-  .speaker-6 { color: #ef5350; }
-  .speaker-7 { color: #4dd0e1; }
-  .speaker-8 { color: #aed581; }
-  .speaker-9 { color: #ffd54f; }
-  .speaker-10 { color: #90a4ae; }
-}
+/* Dark by <html data-theme> (theme.js), the device's or the user's choice. */
+:root[data-theme="dark"] .speaker-1 { color: #64b5f6; }
+:root[data-theme="dark"] .speaker-2 { color: #81c784; }
+:root[data-theme="dark"] .speaker-3 { color: #ffb74d; }
+:root[data-theme="dark"] .speaker-4 { color: #f06292; }
+:root[data-theme="dark"] .speaker-5 { color: #ba68c8; }
+:root[data-theme="dark"] .speaker-6 { color: #ef5350; }
+:root[data-theme="dark"] .speaker-7 { color: #4dd0e1; }
+:root[data-theme="dark"] .speaker-8 { color: #aed581; }
+:root[data-theme="dark"] .speaker-9 { color: #ffd54f; }
+:root[data-theme="dark"] .speaker-10 { color: #90a4ae; }
 
 .tr-progress span[class*="speaker-"] {
   background: currentColor;

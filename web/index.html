@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#F7F6F3" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#111110" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#F7F6F3" />
+    <script src="/theme.js"></script>
     <meta name="description" content="ivrit.ai: transcribe Hebrew recordings with speakers, search everything you transcribed, on every device." />
     <title>ivrit.ai</title>
     <link rel="icon" href="/icons/mark.svg" type="image/svg+xml" />
@@ -89,6 +89,7 @@
         </div>
         <nav id="tabs" class="tabs" hidden>
           <button type="button" data-view="transcribe"><svg class="i"><use href="#i-wave" /></svg><span data-i18n="tabTranscribe">Transcribe</span></button>
+          <button type="button" data-view="live" id="tab-live"><svg class="i"><use href="#i-mic" /></svg><span data-i18n="tabLive">Live</span><b id="live-dot" class="live-dot" hidden></b></button>
           <button type="button" data-view="inbox"><svg class="i"><use href="#i-inbox" /></svg><span data-i18n="tabInbox">Messages</span><b id="unread-badge" class="count" hidden></b></button>
           <button type="button" data-view="settings"><svg class="i"><use href="#i-settings" /></svg><span data-i18n="tabSettings">Settings</span></button>
         </nav>
@@ -105,6 +106,8 @@
           <svg class="g" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3l5.7-5.7C34.1 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3l5.7-5.7C34.1 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
           <span data-i18n="continueGoogle"></span>
         </a>
+        <!-- Live transcription runs on the device: no account needed. -->
+        <button id="landing-live" class="btn landing-live" type="button"><svg class="i"><use href="#i-mic" /></svg><span data-i18n="liveNoSignIn"></span></button>
         <p class="fine" data-i18n="driveNote"></p>
         <p class="fine">
           <span data-i18n="consentBefore"></span><a href="https://www.ivrit.ai/en/privacy/" target="_blank" rel="noopener" data-i18n="consentLink"></a><span data-i18n="consentAfter"></span>
@@ -128,6 +131,11 @@
 
       <section id="view-search" class="view wide search-view" hidden></section>
 
+      <!-- Live transcription (web/transcription/live-view.js), signed in or not. -->
+      <section id="view-live" class="view" hidden>
+        <div id="live-mount"></div>
+      </section>
+
       <section id="view-transcribe" class="view wide" hidden>
         <button id="transcribe-back" class="btn quiet small" type="button" hidden data-i18n="back"></button>
         <!-- Transcribing keeps files in the user's Google Drive: this browser has to
@@ -149,8 +157,9 @@
 
       </section>
 
+      <!-- Signed out, only what needs no account shows here (body.signed-out). -->
       <section id="view-settings" class="view" hidden>
-        <div id="account" class="panel"></div>
+        <div id="account" class="panel account-only"></div>
 
         <div class="panel">
           <h3 data-i18n="languageTitle"></h3>
@@ -162,6 +171,15 @@
         </div>
 
         <div class="panel">
+          <h3 data-i18n="themeTitle"></h3>
+          <div class="seg wide" id="theme-setting" role="group">
+            <button type="button" data-theme-choice="system" data-i18n="themeSystem"></button>
+            <button type="button" data-theme-choice="light" data-i18n="themeLight"></button>
+            <button type="button" data-theme-choice="dark" data-i18n="themeDark"></button>
+          </div>
+        </div>
+
+        <div class="panel account-only">
           <h3 data-i18n="notificationsTitle"></h3>
           <p id="permission" class="muted"></p>
           <div id="permission-help"></div>
@@ -172,25 +190,25 @@
           <div id="popup-test" class="popup-test" hidden></div>
         </div>
 
-        <div class="panel">
+        <div class="panel account-only">
           <h3 data-i18n="devicesTitle"></h3>
           <div id="devices" class="list"></div>
         </div>
 
-        <div class="panel">
+        <div class="panel account-only">
           <h3 data-i18n="transcribeSettingsTitle"></h3>
           <div id="transcribe-settings-box"></div>
         </div>
-        <div id="watch-panel" class="panel" hidden>
+        <div id="watch-panel" class="panel account-only" hidden>
           <h3 data-i18n="watchTitle"></h3>
           <div id="watch-settings-box"></div>
         </div>
-        <div class="panel">
+        <div class="panel account-only">
           <h3 data-i18n="clipsTitle"></h3>
           <p class="muted" data-i18n="clipsBody"></p>
           <label class="row"><input id="clips-drive" type="checkbox" /> <span data-i18n="clipsToggle"></span></label>
         </div>
-        <div class="panel">
+        <div class="panel account-only">
           <h3 data-i18n="storageTitle"></h3>
           <p id="storage" class="muted"></p>
           <div class="row"><button id="clear-history" class="btn" type="button" data-i18n="clearHistory"></button></div>
@@ -206,13 +224,13 @@
           </div>
         </div>
 
-        <details class="panel diag">
+        <details class="panel diag account-only">
           <summary data-i18n="diagnostics"></summary>
           <dl id="diagnostics"></dl>
           <p><a href="/lab/" data-i18n="labLink"></a></p>
         </details>
 
-        <div class="row end">
+        <div class="row end account-only">
           <button id="signout" class="btn" type="button" data-i18n="signOut"></button>
           <button id="delete-account" class="btn danger" type="button" data-i18n="deleteAccount"></button>
         </div>

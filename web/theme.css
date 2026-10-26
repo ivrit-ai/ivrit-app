@@ -1,6 +1,11 @@
 /* ivrit.ai's look on top of the shared stylesheet: ink on white, like the
    mark, with no colour of its own. styles.css stays a plain copy of
-   Communicator's, so the two can be compared and kept in step. */
+   Communicator's, so the two can be compared and kept in step.
+
+   Light or dark is <html data-theme>, set by theme.js (the device's, or the
+   user's choice), not the media query alone: the dark colours styles.css gives
+   under prefers-color-scheme are undone here for a chosen light, and given
+   here for a chosen dark. */
 
 :root {
   --paper: #f7f6f3;
@@ -17,21 +22,45 @@
   --accent-soft: rgba(17, 17, 16, 0.07);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #111110;
-    --paper-2: #191917;
-    --card: #1d1d1b;
-    --ink: #f2f1ed;
-    --ink-2: #cfcdc7;
-    --muted: #94928b;
-    --line: #2f2e2b;
-    --line-soft: #262523;
-    --accent: #f2f1ed;
-    --accent-hover: #ffffff;
-    --accent-ink: #111110;
-    --accent-soft: rgba(242, 241, 237, 0.1);
-  }
+/* styles.css's light colours, over its dark ones when light is chosen. */
+:root[data-theme="light"] {
+  --ok: #2e7a4b;
+  --ok-soft: rgba(46, 122, 75, 0.12);
+  --danger: #b3261e;
+  --shadow-sm: 0 1px 0 rgba(28, 27, 23, 0.04), 0 2px 6px -3px rgba(28, 27, 23, 0.12);
+  --shadow: 0 1px 0 rgba(28, 27, 23, 0.04), 0 14px 32px -18px rgba(28, 27, 23, 0.32);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --paper: #111110;
+  --paper-2: #191917;
+  --card: #1d1d1b;
+  --ink: #f2f1ed;
+  --ink-2: #cfcdc7;
+  --muted: #94928b;
+  --line: #2f2e2b;
+  --line-soft: #262523;
+  --accent: #f2f1ed;
+  --accent-hover: #ffffff;
+  --accent-ink: #111110;
+  --accent-soft: rgba(242, 241, 237, 0.1);
+  --ok: #6cc58f;
+  --ok-soft: rgba(108, 197, 143, 0.14);
+  --danger: #ff8a80;
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.3);
+  --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.7);
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] .avatar.mono {
+  color: oklch(0.42 0.1 var(--hue));
+  background: oklch(0.93 0.04 var(--hue));
+}
+
+:root[data-theme="dark"] .avatar.mono {
+  color: oklch(0.86 0.08 var(--hue));
+  background: oklch(0.32 0.05 var(--hue));
 }
 
 /* The wordmark is a domain name: set it in the text face, not the serif. */
@@ -98,4 +127,41 @@
    layout allows. */
 main.wide {
   max-width: 960px;
+}
+
+/* Live transcription, from the landing: no account needed. */
+.btn.landing-live {
+  width: 100%;
+  min-height: 48px;
+}
+
+/* A live session running while another tab is shown. */
+.tabs .live-dot {
+  position: absolute;
+  top: 6px;
+  inset-inline-end: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e5484d;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@media (max-width: 719px) {
+  .tabs .live-dot {
+    top: 4px;
+    inset-inline-end: auto;
+    inset-inline-start: calc(50% + 8px);
+  }
+}
+
+@keyframes live-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Signed out: Settings holds only what needs no account. */
+body.signed-out .account-only {
+  display: none !important;
 }

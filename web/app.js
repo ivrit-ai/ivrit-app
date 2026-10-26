@@ -2,6 +2,7 @@ import { LOCALES, detectLocale, hebrewScript, localized, locale, setLocale, t } 
 import { ApiError, createCommunicator } from "./client/communicator.js";
 import * as transcribeApi from "./transcription/api.js";
 import * as transcription from "./transcription/view.js";
+import * as live from "./transcription/live-view.js";
 import * as transcriptionSettings from "./transcription/settings.js";
 import * as watches from "./transcription/watches.js";
 import { createLibrary } from "./search/library.js";
@@ -47,7 +48,7 @@ function nativePlugin(name) {
 }
 
 const shell = inShell
-  ? { ivrit: nativePlugin("IvritNative"), app: nativePlugin("App"), browser: nativePlugin("Browser") }
+  ? { ivrit: nativePlugin("IvritNative"), app: nativePlugin("App"), browser: nativePlugin("Browser"), systemBars: nativePlugin("SystemBars") }
   : null;
 
 // Google Analytics on the website only: the installed apps send nothing (their
@@ -997,6 +998,7 @@ function renderLocaleSwitches() {
 
 async function changeLocale(next) {
   transcription.relocalize(next);
+  live.relocalize(next);
   if (next === locale()) return;
   setLocale(next);
   renderLocaleSwitches();
@@ -1563,6 +1565,8 @@ const transcriptionHost = {
   canTranscribeOnPhone: () => canTranscribeOnPhone(),
   // The app's permissions page, where a refused microphone is allowed again.
   saveFile,
+  // The microphone is the Live tab's while it transcribes.
+  liveBusy: () => live.busy(),
   canOpenAppSettings: () => Boolean(shell && nativeStatus?.features?.includes("appSettings")),
   openAppSettings: () => shell?.ivrit.openAppSettings().catch(() => {}),
 };
@@ -1613,6 +1617,79 @@ $("connect-drive").addEventListener("click", async () => {
 async function renderTranscribe() {
   showTranscribeApp();
 }
+
+// ---------------------------------------------------------------- live
+
+// The Live tab. It needs no account; where its transcript can be kept does.
+const liveHooks = {
+  signedIn: () => Boolean(state.me),
+  async account() {
+    if (!state.me) return "signed-out";
+    return (await showTranscribeApp()) ? "ready" : "no-drive";
+  },
+  folderPicker: (selected) => transcription.folderPicker(selected),
+  folder: () => transcription.currentFolder(),
+  signIn: () => signInWithGoogle(),
+  async connect() {
+    if (!(await connectDrive())) return false;
+    if (shell) takeShared();
+    return Boolean(await showTranscribeApp());
+  },
+  saved(resultsId, folder) {
+    showView("transcribe");
+    transcription.openResults(resultsId, folder);
+  },
+  changed: (busy) => ($("live-dot").hidden = !busy),
+  recording: () => transcription.capturing(),
+};
+
+let liveMounted = null;
+
+function mountLive() {
+  if (!live.supported()) {
+    $("tab-live").hidden = true;
+    $("landing-live").hidden = true;
+    return Promise.resolve();
+  }
+  liveMounted ??= live.mount($("live-mount"), transcriptionHost, liveHooks).catch(() => {});
+  return liveMounted;
+}
+
+// Opened at #live (a link to it), or with a transcript kept across signing in.
+function liveFirst() {
+  if (location.hash === "#live") {
+    history.replaceState(null, "", location.pathname + location.search);
+    return true;
+  }
+  return live.hasResult();
+}
+
+$("landing-live").addEventListener("click", () => showView("live"));
+
+// ---------------------------------------------------------------- appearance
+
+// Light, dark, or the device's: theme.js keeps the choice and applies it.
+function renderThemeSwitch() {
+  const chosen = self.ivritTheme?.chosen() ?? "system";
+  for (const button of document.querySelectorAll("[data-theme-choice]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.themeChoice === chosen));
+  }
+}
+
+for (const button of document.querySelectorAll("[data-theme-choice]")) {
+  button.addEventListener("click", () => {
+    self.ivritTheme?.choose(button.dataset.themeChoice);
+    renderThemeSwitch();
+  });
+}
+
+// The phone's status and navigation bars follow: light icons on dark, dark on light.
+function themeSystemBars() {
+  shell?.systemBars.setStyle({ style: document.documentElement.dataset.theme === "dark" ? "DARK" : "LIGHT" }).catch(() => {});
+}
+
+addEventListener("themechange", themeSystemBars);
+themeSystemBars();
 
 // ---------------------------------------------------------------- clips in Drive
 
@@ -1703,11 +1780,13 @@ async function saveClips() {
 
 // ---------------------------------------------------------------- views
 
-const VIEWS = ["inbox", "transcribe", "sources", "settings", "search"];
+const VIEWS = ["inbox", "transcribe", "live", "sources", "settings", "search"];
 
 function showView(name) {
   if (!VIEWS.includes(name)) name = "inbox";
   state.view = name;
+  // Signed out, Live and Settings work (they need no account); the rest ask to sign in.
+  const signIn = !state.me && name !== "live" && name !== "settings";
   // Sources is reached from Messages, and counts as part of it.
   const tab = name === "sources" ? "inbox" : name;
   for (const button of document.querySelectorAll("#tabs button")) {
@@ -1715,7 +1794,8 @@ function showView(name) {
     if (button.dataset.view === tab) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   }
-  for (const view of VIEWS) $(`view-${view}`).hidden = view !== name;
+  for (const view of VIEWS) $(`view-${view}`).hidden = signIn || view !== name;
+  $("landing").hidden = !signIn;
   // Transcribing (files, the editor) and search want the width of the screen.
   $("main").classList.toggle("wide", name === "transcribe" || name === "search");
   window.scrollTo({ top: 0 });
@@ -1723,7 +1803,15 @@ function showView(name) {
 }
 
 function rerender() {
-  if (!state.me) return;
+  if (state.view === "live") live.show();
+  if (!state.me) {
+    if (state.view === "settings") {
+      renderLocaleSwitches();
+      renderThemeSwitch();
+      renderVersion().catch(() => {});
+    }
+    return;
+  }
   if (state.view === "inbox") renderInbox();
   if (state.view === "transcribe") renderTranscribe();
   if (state.view === "sources") {
@@ -1734,6 +1822,7 @@ function rerender() {
     renderAccount();
     renderVersion().catch(() => {});
     renderLocaleSwitches();
+    renderThemeSwitch();
     renderPermission();
     renderDevices().catch(() => {});
     renderStorage();
@@ -2054,7 +2143,7 @@ function openLaunchLink(url) {
 
 function goBack(canGoBack) {
   // A recording or a live session goes on until the user stops it.
-  if (transcription.capturing()) return toast(t("backWhileRecording"));
+  if (transcription.capturing() || live.busy()) return toast(t("backWhileRecording"));
   // An open sheet or dialog closes first, as if dismissed.
   const dialog = [...document.querySelectorAll("dialog[open]")].at(-1);
   if (dialog) {
@@ -2184,6 +2273,17 @@ function launchedOnce(url) {
   return true;
 }
 
+// Signed out: the tabs, with Live working (it needs no account) and the others
+// asking to sign in.
+async function showSignedOut() {
+  state.me = null;
+  document.body.classList.add("app", "signed-out");
+  document.body.dataset.started = "1";
+  $("tabs").hidden = false;
+  await mountLive();
+  showView(liveFirst() ? "live" : "transcribe");
+}
+
 async function start() {
   signInLink($("signin"));
   // The phone's notification settings (up to 3 s in the app) and the session,
@@ -2200,28 +2300,18 @@ async function start() {
   // now, while the account and the inbox load.
   if (session) transcribeApi.prefetch();
   await notifyKnown;
-  if (!session) {
-    $("landing").hidden = false;
-    document.body.dataset.started = "1";
-    return;
-  }
+  if (!session) return showSignedOut();
   try {
     state.me = await api("/api/me");
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       // A session no longer accepted (say, a new signing key): sign in again.
       writeSession(null);
-      $("landing").hidden = false;
-      document.body.dataset.started = "1";
-      return;
+      return showSignedOut();
     }
     // Offline with a session we cannot check: show what is on the device.
     const owner = await store.getMeta("owner").catch(() => null);
-    if (!owner) {
-      $("landing").hidden = false;
-      document.body.dataset.started = "1";
-      return;
-    }
+    if (!owner) return showSignedOut();
     state.me = { sub: owner, kind: "unknown", offline: true };
     toast(t("offline"));
   }
@@ -2245,8 +2335,9 @@ async function start() {
 
   state.catalog = (await store.getMeta("catalog")) ?? state.catalog;
   await loadMessages();
+  await mountLive();
   // Transcribing is the main screen; messages have their own tab.
-  showView("transcribe");
+  showView(liveFirst() ? "live" : "transcribe");
 
   if (location.hash === "#upgraded") {
     history.replaceState(null, "", location.pathname);

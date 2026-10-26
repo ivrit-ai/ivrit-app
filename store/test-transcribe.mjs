@@ -403,13 +403,22 @@ try {
   await onlyHere.uncheck().catch(() => null);
   await page.waitForTimeout(1000);
 
-  // --- live: the words as they are spoken, paused, then saved with the recording
-  await page.goto(`${origin}/?live=${Date.now()}#transcribe`);
-  await page.waitForSelector("#view-transcribe:not([hidden]) #tr-list:not([hidden]) button:has-text('תמלול חי')", { timeout: 30000 }).catch(() => null);
-  await page.click("#tr-list button:has-text('תמלול חי')", { timeout: 10000 });
+  // --- live, a tab of its own: the words as they are spoken, paused, then saved with the recording
+  await page.goto(`${origin}/?live=${Date.now()}#live`);
+  const liveTab = await page.waitForSelector("#view-live:not([hidden]) #tr-live-start", { timeout: 30000 }).catch(() => null);
+  check("live is a tab of its own (a link to #live opens it), and Transcribe has no live button", Boolean(liveTab)
+    && (await page.locator("#tabs button[data-view='live'].active").count()) === 1
+    && (await page.locator("#tr-list button:has-text('תמלול חי')").count()) === 0);
+  await page.click("#tr-live-start");
   const heardLive = await page.waitForSelector("#tr-live .tr-live-text p:has-text('בפרק')", { timeout: 60000 }).catch(() => null);
   check("live: the words appear as they are spoken", Boolean(heardLive), (await page.locator("#tr-live").textContent().catch(() => "")).slice(0, 160));
   await shot("8d-live");
+  await page.click("#tabs button[data-view='inbox']");
+  await page.waitForTimeout(1500);
+  const dotShown = await page.locator("#live-dot:not([hidden])").count();
+  await page.click("#tabs button[data-view='live']");
+  check("...it carries on while another tab is open, its tab marked", dotShown === 1
+    && (await page.locator("#tr-live .tr-live-controls button:has-text('השהיה')").count()) === 1);
   await page.click("#tr-live .tr-live-controls button:has-text('השהיה')");
   const pausedAt = await page.locator("#tr-live .tr-timer").textContent();
   await page.waitForTimeout(2500);
@@ -419,12 +428,43 @@ try {
   await page.waitForTimeout(2000);
   await page.click("#tr-live .tr-live-controls button:has-text('סיום')");
   const saveLive = await page.waitForSelector("#tr-live .tr-live-save button.primary", { timeout: 30000 }).catch(() => null);
-  check("...finishing offers to save it", Boolean(saveLive));
+  check("...finishing offers to save it, in My files or on this device", Boolean(saveLive)
+    && (await page.locator("#tr-live .tr-live-save select").count()) === 1
+    && (await page.locator("#tr-live .tr-live-save button:has-text('שמירה במכשיר')").count()) === 1
+    && (await page.locator("#live-dot:not([hidden])").count()) === 0);
   if (saveLive) await saveLive.click();
   const savedLive = await page.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 30000 }).catch(() => null);
   const liveToc = (await server("/appdata/toc")).body?.entries?.find((e) => e.origin === "live");
   check("...and it opens from My files, with its recording", Boolean(savedLive) && Boolean(liveToc)
-    && (await page.locator("#tr-text").textContent()).includes("בפרק") && (await page.locator("#tr-audio").count()) === 1);
+    && (await page.locator("#tr-text").textContent()).includes("בפרק") && (await page.locator("#tr-audio").count()) === 1
+    && (await page.locator("#tabs button[data-view='transcribe'].active").count()) === 1);
+
+  // --- light or dark: the device's, unless chosen in Settings
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto(`${origin}/#transcribe`);
+  await page.waitForSelector("#tr-list:not([hidden])", { timeout: 20000 }).catch(() => null);
+  const paper = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const themed = () => page.evaluate(() => document.documentElement.dataset.theme);
+  const systemDark = [await themed(), await paper()];
+  await page.click("#tabs button[data-view='settings']");
+  await page.click("#theme-setting button[data-theme-choice='light']");
+  const chosenLight = [await themed(), await paper()];
+  await page.reload();
+  await page.waitForSelector("#tabs:not([hidden])", { timeout: 20000 }).catch(() => null);
+  const keptLight = await themed();
+  check("the theme follows the device, and Settings can choose light (kept) or dark",
+    systemDark[0] === "dark" && systemDark[1] === "rgb(17, 17, 16)" && chosenLight[0] === "light" && chosenLight[1] === "rgb(247, 246, 243)" && keptLight === "light",
+    JSON.stringify({ systemDark, chosenLight, keptLight }));
+  await shot("8e-theme-light-chosen");
+  await page.click("#tabs button[data-view='settings']");
+  await page.click("#theme-setting button[data-theme-choice='dark']");
+  await page.emulateMedia({ colorScheme: "light" });
+  const chosenDark = await themed();
+  await shot("8f-theme-dark-settings");
+  await page.click("#theme-setting button[data-theme-choice='system']");
+  check("...dark too, whatever the device; and back to the device's", chosenDark === "dark" && (await themed()) === "light"
+    && (await page.locator("#theme-setting button[aria-pressed='true']").getAttribute("data-theme-choice")) === "system");
+  await page.emulateMedia({ colorScheme: null });
 
   // --- a phone
   await page.setViewportSize({ width: 412, height: 860 });
@@ -455,7 +495,7 @@ try {
     const preloaded = new Set([...document.querySelectorAll("link[rel=modulepreload]")].map((l) => new URL(l.href).pathname));
     return performance.getEntriesByType("resource")
       .map((e) => new URL(e.name))
-      .filter((u) => u.origin === location.origin && u.pathname.endsWith(".js") && !["/config.js", "/client/store.js", "/sw.js"].includes(u.pathname))
+      .filter((u) => u.origin === location.origin && u.pathname.endsWith(".js") && !["/config.js", "/client/store.js", "/theme.js", "/sw.js"].includes(u.pathname))
       .map((u) => u.pathname)
       .filter((path) => !preloaded.has(path));
   });
@@ -508,6 +548,53 @@ try {
   await landing.setViewportSize({ width: 1280, height: 800 });
   await landing.screenshot({ path: path.join(OUT, "bt-0-landing-1280.png") });
   await guest.close();
+
+  // --- signed out: live transcription needs no account
+  const anon = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "he-IL", acceptDownloads: true, permissions: ["microphone"] });
+  const guestPage = await anon.newPage();
+  guestPage.on("pageerror", (e) => errors.push(`signed out: ${e}`));
+  anon.on("page", (popup) => popup !== guestPage && popup.close().catch(() => {}));
+  await guestPage.goto(`${origin}/`);
+  await guestPage.waitForSelector("#landing:not([hidden]) #landing-live", { timeout: 15000 }).catch(() => null);
+  await guestPage.click("#tabs button[data-view='settings']");
+  await guestPage.waitForTimeout(300);
+  const guestSettings = {
+    theme: await guestPage.locator("#theme-setting:visible").count(),
+    language: await guestPage.locator("#lang-setting:visible").count(),
+    account: await guestPage.locator("#signout:visible, #permission:visible, #devices:visible").count(),
+  };
+  check("signed out, the tabs show: Settings holds the language and the theme, nothing of an account's",
+    guestSettings.theme === 1 && guestSettings.language === 1 && guestSettings.account === 0, JSON.stringify(guestSettings));
+  await guestPage.click("#tabs button[data-view='transcribe']");
+  await guestPage.click("#landing-live");
+  await guestPage.click("#view-live:not([hidden]) #tr-live-start", { timeout: 10000 });
+  const guestHeard = await guestPage.waitForSelector("#tr-live .tr-live-text p:has-text('בפרק')", { timeout: 60000 }).catch(() => null);
+  check("...and from the landing, live transcription works without signing in", Boolean(guestHeard));
+  await guestPage.waitForTimeout(1500);
+  await guestPage.click("#tr-live .tr-live-controls button:has-text('סיום')");
+  await guestPage.waitForSelector("#tr-live .tr-live-save button.primary", { timeout: 30000 }).catch(() => null);
+  const guestOffered = await guestPage.locator("#tr-live .tr-live-save").textContent().catch(() => "");
+  const [guestDownload] = await Promise.all([
+    guestPage.waitForEvent("download", { timeout: 10000 }).catch(() => null),
+    guestPage.click("#tr-live .tr-live-save button:has-text('שמירה במכשיר')"),
+  ]);
+  const downloaded = guestDownload ? (await import("node:fs")).readFileSync(await guestDownload.path(), "utf8") : "";
+  check("...saved to the device as text, or kept to sign in and save in My files", guestOffered.includes("כניסה ושמירה בקבצים שלי")
+    && /\.txt$/.test(guestDownload?.suggestedFilename() ?? "") && downloaded.includes("בפרק"), `${guestOffered.slice(0, 80)} ${guestDownload?.suggestedFilename()}`);
+  await guestPage.screenshot({ path: path.join(OUT, "bt-8g-live-signed-out.png") });
+  const liveBefore = ((await server("/appdata/toc")).body?.entries ?? []).filter((e) => e.origin === "live").length;
+  await guestPage.click("#tr-live .tr-live-save button.primary");
+  await guestPage.waitForTimeout(1000);
+  // Google's sign-in, as the server's test login stands in for it: the page starts again, signed in.
+  await guestPage.evaluate((session) => localStorage.setItem("app_session", JSON.stringify({ ...session, renewed_at: Date.now() })), info.session);
+  await guestPage.goto(`${origin}/__test/login?email=dana@example.com&sub=dana-sub&to=/`);
+  const askedAgain = await guestPage.waitForSelector("dialog[open] #confirm-ok", { timeout: 8000 }).catch(() => null);
+  if (askedAgain) await askedAgain.click();
+  const guestSaved = await guestPage.waitForSelector("#view-transcribe:not([hidden]) #tr-reader #tr-text .tr-seg", { timeout: 40000 }).catch(() => null);
+  const liveAfter = ((await server("/appdata/toc")).body?.entries ?? []).filter((e) => e.origin === "live").length;
+  check("...and once signed in, it is saved to My files by itself, and opens", Boolean(guestSaved) && liveAfter === liveBefore + 1,
+    `${liveBefore} → ${liveAfter}`);
+  await anon.close();
 
   // --- a recording, sent with a single "transcribe"
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -578,6 +665,7 @@ try {
         saveStaged: async ({ id, name, type }) => ((fake.saved = { name, type, size: fake.staged[id] }), { saved: "downloads" }),
         addListener: on("IvritNative"),
       },
+      SystemBars: { setStyle: async ({ style }) => void (fake.bars = style) },
       App: {
         getInfo: async () => ({ version: "1.0", build: "999" }),
         getLaunchUrl: async () => ({}),
@@ -608,7 +696,8 @@ try {
     banner: document.querySelectorAll("#notify-banner, #preprompt").length,
   }));
   check("in the app, Sources is not a tab (it is reached from Messages), and no notifications banner asks",
-    !bar.tabs.includes("sources") && bar.tabs.length === 3 && bar.banner === 0 && (await fake(() => window.__fake.asked)) === 0, JSON.stringify(bar));
+    !bar.tabs.includes("sources") && bar.tabs.join() === "transcribe,live,inbox,settings" && bar.banner === 0 && (await fake(() => window.__fake.asked)) === 0, JSON.stringify(bar));
+  check("the phone's status bar follows the theme (dark icons on the light one)", (await fake(() => window.__fake.bars)) === "LIGHT");
 
   await pressBack();
   check("back on the main screen sends the app to the background, as any app's first screen", (await fake(() => window.__fake.minimized)) === 1);
