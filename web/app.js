@@ -135,6 +135,8 @@ function ask(message, { ok = t("continue"), danger = false } = {}) {
   const button = $("confirm-ok");
   button.textContent = ok;
   button.className = `btn ${danger ? "danger" : "primary"}`;
+  // Not the last answer: dismissing this one (Esc, back) is a no.
+  dialog.returnValue = "";
   dialog.showModal();
   return new Promise((resolve) =>
     dialog.addEventListener("close", () => resolve(dialog.returnValue === "yes"), { once: true })
@@ -309,27 +311,18 @@ async function reconcile() {
   } catch {
     state.pushFailed = true;
   }
-  renderNotifyBanner();
 }
 
-// Soft prompt, then the real one. Resolves to what happened: "granted" once
-// this device is registered, "dismissed" when the user said not now, or the
-// trouble that stopped it (see notificationTrouble).
+// The phone's own question, straight away (only the app has notifications).
+// Resolves to what happened: "granted" once this device is registered,
+// "dismissed" when the user closed the phone's dialog, or the trouble that
+// stopped it (see notificationTrouble).
 async function enableNotifications() {
   if (!notify.supported()) return troubleWithoutPush();
   if (notify.permission() === "denied") return "denied";
   if (notify.permission() !== "granted") {
-    const dialog = $("preprompt");
-    dialog.showModal();
-    await new Promise((resolve) => dialog.addEventListener("close", resolve, { once: true }));
-    if (dialog.returnValue !== "yes") return "dismissed";
-    // Safari ignores requestPermission outside a user gesture, and a denial is
-    // permanent, so this only ever runs from a deliberate click.
     const permission = await notify.request();
-    // Still "default" means the browser answered for the user without asking:
-    // Chrome's quiet prompt, or a request dismissed too often before. In the
-    // app it means the user closed Android's dialog.
-    if (permission !== "granted") return permission === "denied" ? "denied" : shell ? "dismissed" : "hidden";
+    if (permission !== "granted") return permission === "denied" ? "denied" : "dismissed";
   }
   try {
     await registerThisDevice();
@@ -337,11 +330,26 @@ async function enableNotifications() {
     toast(t("registered"));
     return "granted";
   } catch {
-    // Allowed, yet the browser could not subscribe: Brave with Google push
-    // messaging off, some private windows, a push service that is down.
+    // Allowed, yet no push token: no Google Play services, or the push service
+    // is down.
     state.pushFailed = true;
     return "failed";
   }
+}
+
+// Asked once, when there is first something to tell the user about: a
+// transcription sent, a service linked. Never in the way of either; after that,
+// Settings has the switch.
+async function askNotificationsOnce() {
+  if (!shell || !notify.supported() || notify.permission() !== "default") return;
+  try {
+    if (localStorage.getItem("notify_asked")) return;
+    localStorage.setItem("notify_asked", "1");
+  } catch {
+    return;
+  }
+  await enableNotifications();
+  if (state.view === "settings") renderPermission();
 }
 
 // ---------------------------------------------------------------- notification trouble
@@ -387,7 +395,7 @@ function helpSteps(trouble) {
 }
 
 // Steps for this phone, and what to do once they are done.
-function helpPanel(trouble, { retry, skip } = {}) {
+function helpPanel(trouble, { retry } = {}) {
   const actions = [];
   // In the app, the right settings screen is one tap away.
   if (shell && (trouble === "denied" || trouble === "nopopup")) {
@@ -398,7 +406,6 @@ function helpPanel(trouble, { retry, skip } = {}) {
   if (retry && trouble !== "unsupported" && trouble !== "nopopup") {
     actions.push(el("button", { class: "btn primary", type: "button", text: t("helpRetry"), onclick: retry }));
   }
-  if (skip) actions.push(el("button", { class: "btn quiet", type: "button", text: t("linkAnyway"), onclick: skip }));
   return el("div", { class: "help" }, [
     el("h3", { text: t(`helpTitle_${trouble}`) }),
     el("p", { class: "muted", text: t(trouble === "nopopup" ? "helpLeadPopup" : "helpLead") }),
@@ -417,46 +424,6 @@ async function recheckNotifications() {
     return trouble;
   }
   return enableNotifications();
-}
-
-function renderNotifyBanner() {
-  const box = $("notify-banner");
-  const trouble = notificationTrouble();
-  const ask = !trouble && notify.supported() && notify.permission() === "default";
-  let dismissed = 0;
-  try {
-    dismissed = Number(localStorage.getItem("notify_banner_dismissed") ?? 0);
-  } catch {}
-  if ((!trouble && !ask) || Date.now() - dismissed < 7 * DAY_MS) {
-    box.hidden = true;
-    return;
-  }
-  box.replaceChildren(
-    icon("bell"),
-    el("span", { class: "grow", text: ask ? t("bannerAsk") : trouble === "nopopup" ? t("bannerNoPopup") : t("bannerOff") }),
-    el("button", {
-      class: "btn small primary",
-      type: "button",
-      text: ask ? t("bannerTurnOn") : t("bannerFix"),
-      onclick: async () => {
-        if (!ask) return showView("settings");
-        await enableNotifications();
-        renderNotifyBanner();
-      },
-    }),
-    el("button", {
-      class: "icon-btn",
-      type: "button",
-      "aria-label": t("dismiss"),
-      onclick: () => {
-        try {
-          localStorage.setItem("notify_banner_dismissed", String(Date.now()));
-        } catch {}
-        box.hidden = true;
-      },
-    }, [icon("close")])
-  );
-  box.hidden = false;
 }
 
 // ---------------------------------------------------------------- sync
@@ -748,6 +715,8 @@ function ownLink(href) {
 
 async function openOwnLink(href) {
   const target = new URL(href, location.href);
+  // A transcript's link by ?results= is read as the page starts: start there.
+  if (target.search && target.search !== location.search) return location.assign(target.href);
   location.hash = target.hash || "#transcribe";
   showView("transcribe");
 }
@@ -787,8 +756,9 @@ function subscriptionsOf(sourceId) {
 
 function renderSources() {
   const box = $("sources");
-  // The app's own server messages the account with no link: not one to offer.
-  const linkable = state.catalog.sources.filter((s) => s.linkable !== false);
+  // The app's own server messages the account with no link: not one to offer;
+  // nor is a source with no way to send it the code.
+  const linkable = state.catalog.sources.filter((s) => s.linkable !== false && s.methods?.length !== 0);
   if (!linkable.length) {
     box.replaceChildren(el("p", { class: "muted", text: t("noSources") }));
     return;
@@ -860,15 +830,14 @@ async function openLinkSheet(source) {
   const name = localized(source, "name");
   $("sheet-title").textContent = t("sheetTitle", name);
   $("sheet-avatar").replaceChildren(avatar({ icon: source.icon, name }));
+  // Never the last sheet's code, even for a moment: it is no longer good.
+  $("sheet-body").replaceChildren();
   dialog.showModal();
-  const trouble = notificationTrouble();
-  if (trouble) return renderHelpStep(source, trouble);
-  if (notify.supported() && notify.permission() === "default") return renderNotifyStep(source);
-  // Allowed, but this device may never have subscribed (or lost it): make
-  // sure before the user links, since a link with no device reaches no one.
-  if (notify.supported() && !localStorage.getItem("device_id")) {
-    const result = await enableNotifications();
-    if (result !== "granted") return renderHelpStep(source, result);
+  // Linking does not wait for notifications (messages land in the inbox either
+  // way). A phone already allowed but never registered (or that lost it) is
+  // registered quietly, so the link reaches it.
+  if (notify.supported() && notify.permission() === "granted" && !localStorage.getItem("device_id")) {
+    await registerThisDevice().catch(() => {});
   }
   mintCode(source);
 }
@@ -876,39 +845,6 @@ async function openLinkSheet(source) {
 function closeSheet() {
   clearSheetTimers();
   if ($("sheet").open) $("sheet").close();
-}
-
-function renderNotifyStep(source) {
-  $("sheet-body").replaceChildren(
-    el("p", { class: "step-label", text: t("stepNotify") }),
-    el("div", { class: "row" }, [
-      el("button", {
-        class: "btn primary",
-        type: "button",
-        onclick: async () => {
-          const result = await enableNotifications();
-          if (result === "granted" || result === "dismissed") mintCode(source);
-          else renderHelpStep(source, result);
-        },
-      }, [icon("bell"), el("span", { text: t("enableHere") })]),
-      el("button", { class: "btn quiet", type: "button", text: t("notNow"), onclick: () => mintCode(source) }),
-    ])
-  );
-}
-
-// Linking still works without notifications (messages wait in the app), so
-// the user can always go on; but they should know why nothing will pop up.
-function renderHelpStep(source, trouble) {
-  $("sheet-body").replaceChildren(
-    helpPanel(trouble, {
-      retry: async () => {
-        const result = await recheckNotifications();
-        if (result === "granted") mintCode(source);
-        else if (result !== "denied") renderHelpStep(source, result === "dismissed" ? trouble : result);
-      },
-      skip: () => mintCode(source),
-    })
-  );
 }
 
 async function mintCode(source) {
@@ -1007,6 +943,7 @@ async function renderLinked(source, subscription) {
   renderSources();
   // The source's welcome message is on its way; pick it up.
   setTimeout(() => refreshInbox(), 2500);
+  askNotificationsOnce();
 }
 
 function renderExpired(source, state_) {
@@ -1082,21 +1019,28 @@ function renderPermission() {
   const trouble = notificationTrouble();
   const copy = { unsupported: "permUnsupported", default: "permDefault", granted: "permGranted", denied: "permDenied" };
   $("permission").textContent = t(copy[permission]);
-  $("permission").hidden = Boolean(trouble);
+  // Arriving without popping up is the phone's choice, and not a fault: a line
+  // and a way to the setting, which is looked at again on coming back.
+  const quiet = trouble === "nopopup";
+  $("permission").hidden = Boolean(trouble) && !quiet;
   $("permission-help").replaceChildren(
-    trouble
+    quiet
+      ? el("div", { class: "quiet-note" }, [
+          el("p", { class: "muted", text: t("popupQuiet") }),
+          el("button", { class: "btn small", type: "button", text: t("openSettings"), onclick: () => shell.ivrit.openNotificationSettings() }),
+        ])
+      : trouble
       ? helpPanel(trouble, {
           retry: async () => {
             await recheckNotifications();
             renderPermission();
-            renderNotifyBanner();
             renderDevices().catch(() => {});
           },
         })
       : ""
   );
   $("enable").hidden = permission !== "default";
-  $("test").hidden = permission !== "granted" || Boolean(trouble);
+  $("test").hidden = permission !== "granted" || (Boolean(trouble) && !quiet);
 }
 
 async function renderDevices() {
@@ -1482,6 +1426,7 @@ async function takeShared() {
       await shell.ivrit.transcribeShared({ id: file.key, folder: "", saveAudio: true, origin: file.origin || "app" }).catch(() => {});
     }
     toast(t("transcribingOnPhone"));
+    askNotificationsOnce();
     showView("transcribe");
     return;
   }
@@ -1493,7 +1438,10 @@ async function takeShared() {
   }
   await loadMessages();
   if (longer.length && (await sendToFiles(longer))) return;
-  if (sent) toast(t("transcribing"));
+  if (sent) {
+    toast(t("transcribing"));
+    askNotificationsOnce();
+  }
   showView("inbox");
   watchJobs();
 }
@@ -1568,6 +1516,8 @@ const transcriptionHost = {
   icon,
   toast: (message) => toast(message),
   ask,
+  // A transcription is on its way: the moment to ask about notifications, once.
+  sent: () => askNotificationsOnce(),
   locale: () => locale(),
   sheet: {
     open(title, body, onClose) {
@@ -1612,6 +1562,7 @@ const transcriptionHost = {
   transcribeOnPhone: (file, options, onHanded) => (canTranscribeOnPhone() ? transcribeOnPhone(file, options, onHanded) : null),
   canTranscribeOnPhone: () => canTranscribeOnPhone(),
   // The app's permissions page, where a refused microphone is allowed again.
+  saveFile,
   canOpenAppSettings: () => Boolean(shell && nativeStatus?.features?.includes("appSettings")),
   openAppSettings: () => shell?.ivrit.openAppSettings().catch(() => {}),
 };
@@ -1757,9 +1708,11 @@ const VIEWS = ["inbox", "transcribe", "sources", "settings", "search"];
 function showView(name) {
   if (!VIEWS.includes(name)) name = "inbox";
   state.view = name;
+  // Sources is reached from Messages, and counts as part of it.
+  const tab = name === "sources" ? "inbox" : name;
   for (const button of document.querySelectorAll("#tabs button")) {
-    button.classList.toggle("active", button.dataset.view === name);
-    if (button.dataset.view === name) button.setAttribute("aria-current", "page");
+    button.classList.toggle("active", button.dataset.view === tab);
+    if (button.dataset.view === tab) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   }
   for (const view of VIEWS) $(`view-${view}`).hidden = view !== name;
@@ -1802,7 +1755,9 @@ const canTranscribeOnPhone = () => Boolean(shell && nativeStatus?.features?.incl
 
 // A file picked in the app, handed to the phone in pieces and transcribed there,
 // in the background. The phone's progress comes back as "localTranscription".
-async function transcribeOnPhone(file, { folder, saveAudio, origin }, onHanded) {
+// A file handed to the phone in pieces (a page cannot pass one otherwise): its
+// id there, for transcribeStaged or saveStaged.
+async function stageOnPhone(file, onHanded) {
   const { id } = await shell.ivrit.stageFile();
   const CHUNK = 512 * 1024;
   try {
@@ -1813,10 +1768,55 @@ async function transcribeOnPhone(file, { folder, saveAudio, origin }, onHanded) 
       await shell.ivrit.appendStaged({ id, data: btoa(binary) });
       onHanded?.(Math.min(1, (at + CHUNK) / file.size));
     }
+    return id;
+  } catch (err) {
+    shell.ivrit.discardStaged({ id }).catch(() => {});
+    throw err;
+  }
+}
+
+async function transcribeOnPhone(file, { folder, saveAudio, origin }, onHanded) {
+  const id = await stageOnPhone(file, onHanded);
+  try {
     return await shell.ivrit.transcribeStaged({ id, name: file.name, type: file.type || "", folder: folder || "", saveAudio, origin: origin || "upload" });
   } catch (err) {
     shell.ivrit.discardStaged({ id }).catch(() => {});
     throw err;
+  }
+}
+
+// Saving a file (an export, a recording). A browser downloads it; the app cannot,
+// so the phone saves it: into Downloads on Android, through the share sheet on
+// iPhone. Resolves to where it went ("downloaded", "downloads", "shared"), or
+// null when it could not be saved (the user was told).
+async function saveFile(blob, name) {
+  if (!shell) {
+    const url = URL.createObjectURL(blob);
+    const a = el("a", { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return "downloaded";
+  }
+  try {
+    if (!nativeStatus?.features?.includes("saveFiles")) {
+      // An app from before saving: the page's own share sheet, where there is one.
+      const file = new File([blob], name, { type: blob.type });
+      if (!navigator.canShare?.({ files: [file] })) {
+        toast(t("saveNeedsUpdate"));
+        return null;
+      }
+      await navigator.share({ files: [file] });
+      return "shared";
+    }
+    const id = await stageOnPhone(blob);
+    const { saved } = await shell.ivrit.saveStaged({ id, name, type: blob.type || "application/octet-stream" });
+    if (saved === "downloads") toast(t("savedToDownloads", name));
+    return saved;
+  } catch (err) {
+    if (err?.name !== "AbortError") toast(t("saveFailed"));
+    return null;
   }
 }
 
@@ -1844,12 +1844,13 @@ $("search").addEventListener("input", (event) => {
   if (query.trim()) openSearch({ query, where: ["message"] });
 });
 
+$("open-sources").addEventListener("click", () => showView("sources"));
+$("sources-back").addEventListener("click", () => showView("inbox"));
 $("mark-all").addEventListener("click", () => read(state.messages.filter((m) => !m.read).map((m) => m.id)));
 
 $("enable").addEventListener("click", async () => {
   await enableNotifications();
   renderPermission();
-  renderNotifyBanner();
   renderDevices().catch(() => {});
   renderDiagnostics();
 });
@@ -2031,11 +2032,48 @@ if (shell) {
     localStorage.removeItem("reconciled_at");
     if (state.me) reconcile();
   });
-  // A link to this site opened in the app (iPhone's universal links): go there.
-  shell.app.addListener("appUrlOpen", ({ url }) => {
-    const target = new URL(url, location.href);
-    if (target.origin === location.origin && target.href !== location.href) location.assign(target.href);
-  });
+  // A link to this site opened in the app (Android's app links, iPhone's
+  // universal links): go there.
+  shell.app.addListener("appUrlOpen", ({ url }) => openLaunchLink(url));
+  // Android's back button: back a step in the app, never out of it by surprise.
+  shell.app.addListener("backButton", ({ canGoBack }) => goBack(canGoBack));
+}
+
+function openLaunchLink(url) {
+  let target;
+  try {
+    target = new URL(url, location.href);
+  } catch {
+    return;
+  }
+  if (target.origin !== location.origin || target.href === location.href) return;
+  if (target.search && target.search !== location.search) return location.assign(target.href);
+  if (target.hash.startsWith("#m/")) location.hash = target.hash;
+  else openOwnLink(target.href);
+}
+
+function goBack(canGoBack) {
+  // A recording or a live session goes on until the user stops it.
+  if (transcription.capturing()) return toast(t("backWhileRecording"));
+  // An open sheet or dialog closes first, as if dismissed.
+  const dialog = [...document.querySelectorAll("dialog[open]")].at(-1);
+  if (dialog) {
+    const cancel = new Event("cancel", { cancelable: true });
+    dialog.dispatchEvent(cancel);
+    if (!cancel.defaultPrevented && dialog.open) dialog.close("");
+    return;
+  }
+  if (state.view === "search") return showView(searchFrom);
+  if (state.view === "sources") return showView("inbox");
+  if (state.view !== "transcribe") return showView("transcribe");
+  // In Transcribe: a transcript or a folder goes back to where it was opened from.
+  if (location.hash) {
+    if (canGoBack) history.back();
+    else location.hash = "";
+    return;
+  }
+  // The main screen: the app goes to the background, as from any app's first screen.
+  shell.app.minimizeApp().catch(() => {});
 }
 
 // A push that arrives while the app is open lands in the store via the
@@ -2052,8 +2090,7 @@ document.addEventListener("visibilitychange", async () => {
   // Back from Android's settings, perhaps having changed exactly this.
   if (shell) {
     await notify.refresh();
-    renderNotifyBanner();
-    if (state.view === "settings") renderPermission();
+      if (state.view === "settings") renderPermission();
     watchJobs();
   }
   reconcile();
@@ -2138,6 +2175,15 @@ function dropAskedLocale() {
   history.replaceState(null, "", location.pathname + (query ? `?${query}` : "") + location.hash);
 }
 
+// The link the app was opened with stays the activity's: not again on a reload.
+function launchedOnce(url) {
+  try {
+    if (sessionStorage.getItem("launch_url") === url) return false;
+    sessionStorage.setItem("launch_url", url);
+  } catch {}
+  return true;
+}
+
 async function start() {
   signInLink($("signin"));
   // The phone's notification settings (up to 3 s in the app) and the session,
@@ -2201,7 +2247,6 @@ async function start() {
   await loadMessages();
   // Transcribing is the main screen; messages have their own tab.
   showView("transcribe");
-  renderNotifyBanner();
 
   if (location.hash === "#upgraded") {
     history.replaceState(null, "", location.pathname);
@@ -2219,6 +2264,12 @@ async function start() {
   const opened = await shell?.ivrit.takeOpened().catch(() => null);
   if (opened?.id) history.replaceState(null, "", `/#m/${encodeURIComponent(opened.id)}`);
   if (opened?.link) history.replaceState(null, "", `/${opened.link}`);
+  // Opened by a link to this site (Android's app links): there, once.
+  const launch = await withTimeout(shell?.app.getLaunchUrl().catch(() => null) ?? Promise.resolve(null), 2000, null);
+  if (launch?.url && launchedOnce(launch.url)) {
+    const target = new URL(launch.url, location.href);
+    if (target.origin === location.origin) history.replaceState(null, "", target.pathname + target.search + target.hash);
+  }
   // Recordings the phone is still transcribing (begun while the page was closed).
   if (canTranscribeOnPhone()) {
     shell.ivrit.localTranscriptions().then(({ items }) => items.forEach((item) => transcription.deviceJob(item))).catch(() => {});

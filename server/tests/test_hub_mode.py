@@ -80,6 +80,8 @@ class FakeRunPod:
         self.runs = 0
         self.fetches = []
         self.delay = 1.0
+        # Too little speech to tell voices apart: a run asked for speakers fails, as RunPod's does.
+        self.no_speakers = False
         self.lock = threading.Lock()
 
     def submit(self, payload):
@@ -99,7 +101,8 @@ class FakeRunPod:
         job_id = "rp-" + uuid.uuid4().hex[:8]
         with self.lock:
             self.runs += 1
-            self.jobs[job_id] = {"status": "IN_QUEUE", "url": url, "streamed": False, "size": 0}
+            diarize = bool(((payload.get("input") or {}).get("transcribe_args") or {}).get("diarize"))
+            self.jobs[job_id] = {"status": "IN_QUEUE", "url": url, "streamed": False, "size": 0, "diarize": diarize}
         threading.Thread(target=self._work, args=(job_id, self.delay), daemon=True).start()
         return job_id
 
@@ -116,11 +119,19 @@ class FakeRunPod:
             job["error"] = f"download {e.code}"
             return
         time.sleep(delay)
-        if job["status"] == "IN_PROGRESS":
+        if job["status"] == "IN_PROGRESS" and self.no_speakers and job["diarize"]:
+            job["status"] = "FAILED"
+            job["error"] = "handler: Diarization failed: No segments meet minimum duration for clustering"
+        elif job["status"] == "IN_PROGRESS":
             job["status"] = "COMPLETED"
 
     def output(self, job_id):
         n = self.jobs[job_id]["size"]
+        if not self.jobs[job_id]["diarize"]:
+            return [[{"type": "segments", "data": [{
+                "text": f"תמלול של {n} בתים", "start": 0.0, "end": 2.0,
+                "words": [{"word": "תמלול", "start": 0.0, "end": 1.0, "probability": 0.9}],
+            }]}]]
         return [[{"type": "segments", "data": [{
             "text": f"תמלול של {n} בתים", "start": 0.0, "end": 2.0, "speakers": ["SPEAKER_00"],
             "words": [{"word": "תמלול", "start": 0.0, "end": 1.0, "probability": 0.9, "speaker": "SPEAKER_00"}],
@@ -498,6 +509,15 @@ def main():
         if w:
             doc = wait_until(lambda: (search_shard(api, "ada@example.com")[0] or {}).get(w["results_id"]), 10)
             check("...in search too", doc and doc.get("origin") == "watch", doc)
+
+        # --- too little speech to tell the speakers apart: the words, without speakers
+        rp.no_speakers = True
+        runs_before = rp.runs
+        status, events, raw = api.upload("ada@example.com", make_audio("hello.ogg", 3), "hello.ogg")
+        quiet = wait_until(lambda: ready(api, "ada@example.com", "hello.ogg"), 60)
+        rp.no_speakers = False
+        check("a recording too short to tell speakers apart is still transcribed, without them",
+              status == 200 and quiet and quiet.get("status") == "Ready" and rp.runs == runs_before + 2, (status, quiet, rp.runs - runs_before))
 
         # --- one RunPod slot: a second user's file waits its turn, and says so
         rp.delay = 6.0

@@ -85,7 +85,12 @@ function keepDraft() {
 // ------------------------------------------------------------------ opening
 
 export async function open(id, entry, folder = null, at = null) {
-  if (doc?.id === id && doc.folder === folder && document.getElementById("tr-reader")) return showAt(at);
+  // The same transcript again: as it was left (back to the list hides it, keeping it).
+  const shown = document.getElementById("tr-reader");
+  if (doc?.id === id && doc.folder === folder && shown) {
+    if (shown.closest("[hidden]")) showScreen(shown);
+    return showAt(at);
+  }
   const { el } = host;
   editing = false;
   mode = "new";
@@ -345,14 +350,9 @@ async function copyText() {
   }
 }
 
-function save(blob, name) {
-  const url = URL.createObjectURL(blob);
-  const a = host.el("a", { href: url, download: name });
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  host.toast(tr("filesDownloadSuccess"));
+// A download in a browser; in the app, the phone saves it (host.saveFile).
+async function save(blob, name) {
+  if ((await host.saveFile(blob, name)) === "downloaded") host.toast(tr("filesDownloadSuccess"));
 }
 
 function loadScript(src) {

@@ -90,7 +90,6 @@
         <nav id="tabs" class="tabs" hidden>
           <button type="button" data-view="transcribe"><svg class="i"><use href="#i-wave" /></svg><span data-i18n="tabTranscribe">Transcribe</span></button>
           <button type="button" data-view="inbox"><svg class="i"><use href="#i-inbox" /></svg><span data-i18n="tabInbox">Messages</span><b id="unread-badge" class="count" hidden></b></button>
-          <button type="button" data-view="sources"><svg class="i"><use href="#i-sources" /></svg><span data-i18n="tabSources">Sources</span></button>
           <button type="button" data-view="settings"><svg class="i"><use href="#i-settings" /></svg><span data-i18n="tabSettings">Settings</span></button>
         </nav>
       </div>
@@ -114,13 +113,14 @@
       </section>
 
       <section id="view-inbox" class="view" hidden>
-        <div id="notify-banner" class="notify-banner" role="status" hidden></div>
         <div class="toolbar">
           <label class="search">
             <svg class="i"><use href="#i-search" /></svg>
             <input id="search" type="search" autocomplete="off" data-i18n-placeholder="search" />
           </label>
           <button id="mark-all" class="btn quiet small" type="button" data-i18n="markAllRead"></button>
+          <!-- Linking services (Eliezer…) is for messages, so it lives here, not in the tabs. -->
+          <button id="open-sources" class="btn quiet small" type="button"><svg class="i"><use href="#i-sources" /></svg><span data-i18n="sourcesButton"></span></button>
         </div>
         <div id="chips" class="chips" role="tablist"></div>
         <div id="feed" class="feed" aria-live="polite"></div>
@@ -142,6 +142,7 @@
       </section>
 
       <section id="view-sources" class="view" hidden>
+        <button id="sources-back" class="btn quiet small" type="button" data-i18n="back"></button>
         <h2 class="title" data-i18n="sourcesTitle"></h2>
         <p class="lede" data-i18n="sourcesLede"></p>
         <div id="sources" class="stack"></div>
@@ -219,17 +220,6 @@
 
       <p class="footer-links"><a href="/privacy" data-i18n="privacy"></a></p>
     </main>
-
-    <!-- A soft prompt first: "Not now" is free, but a native "Block" is forever
-         and there is no API to ask again. -->
-    <dialog id="preprompt" class="dialog">
-      <h2 data-i18n="prepromptTitle"></h2>
-      <p data-i18n="prepromptBody"></p>
-      <form method="dialog" class="row end">
-        <button value="no" class="btn quiet" data-i18n="notNow"></button>
-        <button value="yes" class="btn primary" data-i18n="continue"></button>
-      </form>
-    </dialog>
 
     <dialog id="confirm" class="dialog">
       <p id="confirm-text"></p>

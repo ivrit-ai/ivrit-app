@@ -180,13 +180,18 @@ final class Notifications {
         }
     }
 
-    static void showLocalFailed(Context context, String key, String name) {
+    static void showLocalFailed(Context context, String key, String name, String why) {
         if (!allowed(context)) return;
         ensureChannel(context);
+        // A full Drive is the user's to fix, and says so (the text may be in Downloads).
+        String text = LocalTranscribeWorker.DRIVE_FULL_KEPT.equals(why)
+            ? context.getString(R.string.local_drive_full_kept)
+            : LocalTranscribeWorker.DRIVE_FULL.equals(why) ? context.getString(R.string.local_drive_full) : null;
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_ivrit)
-            .setContentTitle(context.getString(R.string.local_failed))
-            .setContentText(name)
+            .setContentTitle(text != null ? name : context.getString(R.string.local_failed))
+            .setContentText(text != null ? text : name)
+            .setStyle(text != null ? new NotificationCompat.BigTextStyle().bigText(text) : null)
             .setAutoCancel(true)
             .setContentIntent(linkIntent(context, "#transcribe"));
         try {

@@ -10,7 +10,7 @@
         "popup": "boolean: messages show on screen (Android: the channel's importance; iPhone: banners allowed)",
         "platform": "\"android\" | \"ios\": for wording only (which settings to describe), never for behaviour",
         "importance": "number, Android only: the channel's importance",
-        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\")"
+        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\", \"localTranscription\", \"appSettings\", \"saveFiles\")"
       }
     },
     "requestPermission": {
@@ -227,21 +227,13 @@
       }
     },
     "stageFile": {
-      "platforms": [
-        "android"
-      ],
-      "feature": "localTranscription",
-      "note": "A file picked in the app, handed over in pieces (appendStaged), then transcribeStaged.",
+      "note": "A file from the page, handed over in pieces (appendStaged), then transcribeStaged or saveStaged. Older shells lack these: the web app asks only where \"localTranscription\" or \"saveFiles\" is listed.",
       "options": {},
       "result": {
         "id": "string"
       }
     },
     "appendStaged": {
-      "platforms": [
-        "android"
-      ],
-      "feature": "localTranscription",
       "options": {
         "id": "string",
         "data": "base64"
@@ -249,14 +241,30 @@
       "result": {}
     },
     "discardStaged": {
-      "platforms": [
-        "android"
-      ],
-      "feature": "localTranscription",
       "options": {
         "id": "string"
       },
       "result": {}
+    },
+    "saveStaged": {
+      "feature": "saveFiles",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "note": "A staged file saved where the user keeps files (a web page's download does nothing in the app): Android puts it in Downloads (before Android 10, the share sheet); iPhone opens the share sheet.",
+      "options": {
+        "id": "string",
+        "name": "the file's name",
+        "type": "its MIME type"
+      },
+      "result": {
+        "saved": "\"downloads\" | \"shared\""
+      },
+      "rejects": [
+        "not_found",
+        "io"
+      ]
     },
     "transcribeStaged": {
       "platforms": [

@@ -152,16 +152,22 @@ export async function open(hostApi, { folder, folderPicker, hooks }) {
       save.textContent = tr("statusLocalSaving");
       try {
         const to = destination.value || null;
-        const saved = await api.saveLocal(
+        const saved = await api.saveLocalFitting(
           { filename: audio.name, language: LANGUAGE, duration_seconds: seconds, folder: to, origin: "live", engine: ENGINE },
           segments,
           keep.checked ? audio : null
         );
         localStorage.setItem("tr_save_audio", String(keep.checked));
-        host.toast(tr("localSaved"));
+        host.toast(tr(saved.withoutAudio ? "savedWithoutAudio" : "localSaved"));
         hooks.saved(saved.results_id, to);
       } catch (err) {
-        host.toast(serverError(err?.data, "errorLocalSaveFailed"));
+        // No room in Drive even for the words: they are kept on this device, and
+        // the session stays here to save again once there is room.
+        if (api.driveFull(err) && (await host.saveFile(api.plainTextFile(segments), audio.name.replace(/\.[^.]{1,5}$/, ".txt")))) {
+          host.toast(tr("driveFullKeptHere"));
+        } else {
+          host.toast(serverError(err?.data, "errorLocalSaveFailed"));
+        }
         save.disabled = false;
         discard.disabled = false;
         save.textContent = tr("liveSave");

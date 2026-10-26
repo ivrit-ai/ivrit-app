@@ -819,6 +819,8 @@ async function send(files, options) {
   }
   if (queued) host.toast(queued > 1 ? tr("batchQueued", { count: queued }) : tr("fileQueued"));
   if (saved) host.toast(tr("localSaved"));
+  // Something to be told about when it is done: the app may ask about notifications.
+  if (queued || saved) host.sent?.();
   renderQuota();
   refresh();
 }
@@ -830,7 +832,10 @@ export function deviceJob(item) {
   const id = `device:${item.key}`;
   if (item.phase === "done" || item.phase === "failed") {
     pending.delete(id);
-    if (item.phase === "failed" && item.error && item.error !== "gone") host?.toast(`${item.name}: ${tr("localFailed", { details: item.error })}`);
+    if (item.phase === "failed" && item.error && item.error !== "gone") {
+      const why = item.error === "driveFullKept" ? tr("driveFullKept") : item.error === "errorDriveStorageFull" ? tr("errorDriveStorageFull") : tr("localFailed", { details: item.error });
+      host?.toast(`${item.name}: ${why}`);
+    }
     draw();
     refresh();
     return;
@@ -906,11 +911,19 @@ async function sendLocally(file, options, id) {
       },
     });
     card({ phase: "saving", percent: 100 });
-    await api.saveLocal(
-      { filename: file.name, language: local.LANGUAGE, duration_seconds: duration, folder: options.folder, origin: options.origin, engine: local.ENGINE },
-      segments,
-      options.saveAudio ? file : null
-    );
+    try {
+      const saved = await api.saveLocalFitting(
+        { filename: file.name, language: local.LANGUAGE, duration_seconds: duration, folder: options.folder, origin: options.origin, engine: local.ENGINE },
+        segments,
+        options.saveAudio ? file : null
+      );
+      if (saved.withoutAudio) host.toast(`${file.name}: ${tr("savedWithoutAudio")}`);
+    } catch (err) {
+      if (!api.driveFull(err)) throw err;
+      // No room even for the words: they stay on this device, not lost.
+      if (await host.saveFile(api.plainTextFile(segments), `${file.name.replace(/\.[^.]{1,5}$/, "")}.txt`)) host.toast(`${file.name}: ${tr("driveFullKeptHere")}`);
+      return false;
+    }
     recorder.sent(file);
     return true;
   } catch (err) {
@@ -996,3 +1009,6 @@ async function locate(id) {
 }
 
 export const openResults = (id, inFolder, at) => reader.navigate(id, inFolder, at);
+
+// Recording, or transcribing live: the app must not be left (it would cut it off).
+export const capturing = () => recorder.busy() || liveView.busy();

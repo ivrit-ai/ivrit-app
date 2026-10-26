@@ -114,6 +114,24 @@ export async function saveLocal(meta, segments, audio) {
   return res.json();
 }
 
+export const driveFull = (err) => err?.data?.i18n_key === "errorDriveStorageFull";
+
+// The user's Drive is full: then without the recording, which is nearly all of
+// the room, before giving up. {results_id, withoutAudio}.
+export async function saveLocalFitting(meta, segments, audio) {
+  try {
+    return { ...(await saveLocal(meta, segments, audio)), withoutAudio: false };
+  } catch (err) {
+    if (!audio || !driveFull(err)) throw err;
+    return { ...(await saveLocal(meta, segments, null)), withoutAudio: true };
+  }
+}
+
+// The words alone, as a file on this device: where a transcript goes when Drive
+// has no room even for them.
+export const plainTextFile = (segments) =>
+  new Blob([segments.map((s) => (s.text || "").trim()).filter(Boolean).join("\n") + "\n"], { type: "text/plain" });
+
 // Transcribing on the user's devices only (the server then refuses their audio).
 export const setLocalOnly = (on) => call("/settings", { method: "POST", body: { localOnly: on } });
 

@@ -185,7 +185,7 @@ await screen("inbox-dark", dana, { messages: sampleMessages, dark: true });
 const fresh = await createUser(pool, { email: "new@example.com", locale: "he" });
 await screen("link", fresh, {
   act: async (page) => {
-    await page.click('#tabs [data-view="sources"]');
+    await page.click('#open-sources');
     await page.waitForTimeout(600);
     await page.click("#sources .btn.primary");
     await page.waitForTimeout(1200);

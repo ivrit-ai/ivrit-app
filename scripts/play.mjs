@@ -7,6 +7,7 @@
 //   node scripts/play.mjs graphics                feature graphic and screenshots from store/
 //   node scripts/play.mjs bundle <file.aab>       into the bundle library only, on no track
 //   node scripts/play.mjs share <file.aab>        a private install link (internal app sharing)
+//   node scripts/play.mjs signing <versionCode>   the certificate (SHA-256) Play signed it with
 //   node scripts/play.mjs upload <file.aab> [track] [notes]
 //   node scripts/play.mjs promote <versionCode> <track> [notes]   e.g. promote 12 alpha
 //
@@ -122,6 +123,13 @@ try {
       type: "application/octet-stream",
     });
     console.log(shared.downloadUrl);
+    // The key internal sharing signs with (not the store's): shared/assetlinks.json lists it too.
+    console.log(`signed with ${shared.certificateFingerprint}`);
+  } else if (command === "signing") {
+    // The certificate Play signs a released version with, for shared/assetlinks.json.
+    await call("DELETE", `${API}/edits/${edit.id}`).catch(() => {});
+    const { generatedApks } = await call("GET", `${API}/generatedApks/${file}`);
+    for (const apk of generatedApks ?? []) console.log(apk.certificateSha256Hash);
   } else if (command === "bundle") {
     // Into the app bundle library only, on no track: for the Play Console to see
     // it (declarations that need a bundle), and to release by hand from there.

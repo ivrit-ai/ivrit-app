@@ -17,4 +17,6 @@
     <string name="local_stop">Stop</string>
     <string name="local_ready">Transcript ready</string>
     <string name="local_failed">Transcribing on the phone did not work</string>
+    <string name="local_drive_full">Your Google Drive is full, so the transcript could not be saved. Free up space and try again.</string>
+    <string name="local_drive_full_kept">Your Google Drive is full: the text is saved in the phone’s Downloads instead.</string>
 </resources>

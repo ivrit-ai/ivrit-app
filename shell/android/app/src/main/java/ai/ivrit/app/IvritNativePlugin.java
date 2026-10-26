@@ -114,7 +114,7 @@ public class IvritNativePlugin extends Plugin {
             .put("popup", importance >= NotificationManager.IMPORTANCE_HIGH)
             .put("importance", importance)
             .put("platform", "android")
-            .put("features", new JSArray().put("watchFolders").put("localTranscription").put("appSettings"));
+            .put("features", new JSArray().put("watchFolders").put("localTranscription").put("appSettings").put("saveFiles"));
     }
 
     @PluginMethod
@@ -528,6 +528,42 @@ public class IvritNativePlugin extends Plugin {
         call.resolve();
     }
 
+    /**
+     * {id, name, type}: the staged file, saved where the user keeps downloads (a
+     * web page's download does nothing in the app): into Downloads, or, before
+     * Android 10, offered to other apps. Answers {saved: "downloads" | "shared"}.
+     */
+    @PluginMethod
+    public void saveStaged(PluginCall call) {
+        java.io.File file = staged(call.getString("id"));
+        if (file == null || !file.isFile()) {
+            call.reject("not found", "not_found");
+            return;
+        }
+        String name = Downloads.safeName(call.getString("name", "file"));
+        String type = call.getString("type", "application/octet-stream");
+        if (!Downloads.available()) {
+            java.io.File named = new java.io.File(file.getParentFile(), "out-" + name);
+            if (named.exists() || !file.renameTo(named)) named = file;
+            Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", named);
+            Intent send = new Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            getActivity().startActivity(Intent.createChooser(send, name));
+            call.resolve(new JSObject().put("saved", "shared"));
+            return;
+        }
+        SAVES.execute(() -> {
+            try (InputStream in = new FileInputStream(file)) {
+                Downloads.save(getContext(), name, type, in);
+                call.resolve(new JSObject().put("saved", "downloads"));
+            } catch (Exception e) {
+                call.reject("could not save", "io");
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            }
+        });
+    }
+
     /** {id, name, type, folder, saveAudio, origin}: the staged file, transcribed on the phone. */
     @PluginMethod
     public void transcribeStaged(PluginCall call) {
@@ -578,6 +614,7 @@ public class IvritNativePlugin extends Plugin {
     // --- shared files ------------------------------------------------------
 
     private static final ExecutorService UPLOADS = Executors.newSingleThreadExecutor();
+    private static final ExecutorService SAVES = Executors.newSingleThreadExecutor();
 
     /**
      * Sends a shared file to url as the request body, with its type, its name in

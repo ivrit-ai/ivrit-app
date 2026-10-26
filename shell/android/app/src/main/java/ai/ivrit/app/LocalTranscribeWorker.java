@@ -121,7 +121,13 @@ public class LocalTranscribeWorker extends Worker {
             JSONArray segments = transcribe(context, source, duration);
             if (isStopped()) return Result.success();
             progress("saving", 1, null);
-            String resultsId = save(context, input, source, segments, duration);
+            String resultsId;
+            try {
+                resultsId = save(context, input, source, segments, duration, input.getBoolean("saveAudio", true));
+            } catch (Refused e) {
+                if (!DRIVE_FULL.equals(e.getMessage())) throw e;
+                resultsId = saveWithoutRoom(context, input, source, segments, duration);
+            }
             Notifications.showLocalReady(context, key, name, resultsId, folder);
             return done(kind, input, resultsId, null);
         } catch (AudioDecoder.NoAudio e) {
@@ -256,7 +262,35 @@ public class LocalTranscribeWorker extends Worker {
         }
     }
 
-    private String save(Context context, Data input, Uri source, JSONArray segments, double duration) throws Exception {
+    static final String DRIVE_FULL = "errorDriveStorageFull";
+    /** Drive was full even for the text, which waits in the phone's Downloads instead. */
+    static final String DRIVE_FULL_KEPT = "driveFullKept";
+
+    /**
+     * The user's Drive is full. The words matter more than the recording and take
+     * almost no room: without the recording, then, failing that, the text into the
+     * phone's Downloads, so the work is never lost.
+     */
+    private String saveWithoutRoom(Context context, Data input, Uri source, JSONArray segments, double duration) throws Exception {
+        if (input.getBoolean("saveAudio", true)) {
+            try {
+                return save(context, input, source, segments, duration, false);
+            } catch (Refused e) {
+                if (!DRIVE_FULL.equals(e.getMessage())) throw e;
+            }
+        }
+        if (!Downloads.available()) throw new Refused(DRIVE_FULL);
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < segments.length(); i++) {
+            String line = segments.getJSONObject(i).optString("text").trim();
+            if (!line.isEmpty()) text.append(line).append('\n');
+        }
+        String base = name.replaceFirst("\\.[^.]{1,5}$", "");
+        Downloads.save(context, base + ".txt", "text/plain", new java.io.ByteArrayInputStream(text.toString().getBytes(StandardCharsets.UTF_8)));
+        throw new Refused(DRIVE_FULL_KEPT);
+    }
+
+    private String save(Context context, Data input, Uri source, JSONArray segments, double duration, boolean withAudio) throws Exception {
         String token = Store.appToken(context);
         if (token.isEmpty()) throw new Refused("signin");
         String site = Store.site(context);
@@ -289,7 +323,7 @@ public class LocalTranscribeWorker extends Worker {
                     + "Content-Type: application/gzip\r\n\r\n").getBytes(StandardCharsets.UTF_8));
                 packed.writeTo(out);
                 out.write("\r\n".getBytes(StandardCharsets.UTF_8));
-                if (input.getBoolean("saveAudio", true)) {
+                if (withAudio) {
                     out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"audio\"; filename=\""
                         + name.replace("\"", "'") + "\"\r\nContent-Type: " + input.getString("type") + "\r\n\r\n")
                         .getBytes(StandardCharsets.UTF_8));
@@ -305,7 +339,8 @@ public class LocalTranscribeWorker extends Worker {
             }
             int status = connection.getResponseCode();
             if (status == 401) throw new Refused("signin");
-            if (status >= 500) throw new java.io.IOException("server " + status);
+            // 507: the user's Drive is full, which trying again will not fix.
+            if (status >= 500 && status != 507) throw new java.io.IOException("server " + status);
             String body = read(status == 200 ? connection.getInputStream() : connection.getErrorStream());
             JSONObject answer = body.isEmpty() ? new JSONObject() : new JSONObject(body);
             if (status != 200) throw new Refused(answer.optString("i18n_key", "failed"));
@@ -348,7 +383,7 @@ public class LocalTranscribeWorker extends Worker {
             });
             IvritNativePlugin.watchChanged(watchId);
         }
-        if (resultsId == null && why != null && !"gone".equals(why)) Notifications.showLocalFailed(context, key, name);
+        if (resultsId == null && why != null && !"gone".equals(why)) Notifications.showLocalFailed(context, key, name, why);
         IvritNativePlugin.localTranscription(key, name, folder, resultsId != null ? "done" : "failed", 1, resultsId, why);
         return Result.success();
     }

@@ -31,6 +31,16 @@
                 <data android:scheme="ai.ivrit.app" android:host="auth" />
             </intent-filter>
 
+            <!-- Links to app.ivrit.ai (a transcript, a message) open in the app; Android
+                 checks /.well-known/assetlinks.json (shared/assetlinks.json). Only the page
+                 itself: downloads, the lab and Google's sign-in stay in the browser. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="app.ivrit.ai" android:path="/" />
+            </intent-filter>
+
             <!-- Voice messages and recordings shared into the app. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

@@ -1506,25 +1506,12 @@ h4.field {
   margin-bottom: 12px;
 }
 
-.notify-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 14px;
-  padding: 8px 8px 8px 14px;
-  padding-inline: 14px 8px;
-  border-radius: 14px;
-  background: var(--accent-soft);
-  color: var(--ink);
-  font-size: 14px;
-}
-
-.notify-banner .i {
-  color: var(--accent);
-}
-
-.notify-banner .grow {
-  flex: 1;
+/* Settings: notifications that arrive without popping up, and the way to change it. */
+.quiet-note {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin-top: 8px;
 }
 
 /* Brand, support and the language switch share one row on a phone. */

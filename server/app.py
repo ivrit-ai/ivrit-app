@@ -5160,6 +5160,9 @@ async def transcribe_job(job_desc, hub_entry=None):
         # Resolve model by language from config
         lang_cfg = APP_CONFIG["languages"][job_desc.language]
 
+        # Without speakers, when telling them apart fails (set for RunPod below).
+        plain = None
+
         # Select appropriate model based on mode (local vs server)
         if in_local_mode:
             # Use ggml_model for local mode
@@ -5222,6 +5225,16 @@ async def transcribe_job(job_desc, hub_entry=None):
 
             m = ivrit.load_model(engine='runpod', model=selected_model, api_key=api_key, endpoint_id=endpoint_id, core_engine='stable-whisper')
 
+            def transcribe(diarize):
+                if in_dev:
+                    # In dev mode, use the local file
+                    return m.transcribe_async(path=temp_file_path, diarize=diarize, on_progress=progress_callback)
+                # In production mode, send file as URL
+                download_url = urljoin(os.environ["BASE_URL"], f"/download/{job_id}")
+                if HUB_MODE:
+                    download_url += "?t=" + hub.media_token(job_id)
+                return m.transcribe_async(url=download_url, diarize=diarize, on_progress=progress_callback)
+
             attach = None
             if hub_entry is not None:
                 previous = hub_entry.get("runpod") or {}
@@ -5250,25 +5263,29 @@ async def transcribe_job(job_desc, hub_entry=None):
                         if job_id not in temp_files:
                             raise
                         log_message(f"{job_desc.user_email}: reattaching {job_id} failed ({e}), transcribing again")
-                    base_url = os.environ["BASE_URL"]
-                    url = urljoin(base_url, f"/download/{job_id}") + "?t=" + hub.media_token(job_id)
-                    async for segment in m.transcribe_async(url=url, diarize=True, on_progress=progress_callback):
+                    async for segment in transcribe(diarize=True):
                         yield segment
                 segs = reattached()
-            elif in_dev:
-                # In dev mode, use the local file
-                segs = m.transcribe_async(path=temp_file_path, diarize=True, on_progress=progress_callback)
             else:
-                # In production mode, send file as URL
-                base_url = os.environ["BASE_URL"]
-                download_url = urljoin(base_url, f"/download/{job_id}")
-                if HUB_MODE:
-                    download_url += "?t=" + hub.media_token(job_id)
-                segs = m.transcribe_async(url=download_url, diarize=True, on_progress=progress_callback)
+                segs = transcribe(diarize=True)
+            plain = lambda: transcribe(diarize=False)
         
         try:
-            async for segment in segs:
-                await process_segment(job_id, segment, duration)
+            received = 0
+            try:
+                async for segment in segs:
+                    received += 1
+                    await process_segment(job_id, segment, duration)
+            except Exception as e:
+                # Too little speech to tell voices apart (a short or quiet
+                # recording) fails the whole RunPod job; its words are still
+                # worth having, without speakers.
+                if received or plain is None or "Diarization failed" not in str(e):
+                    raise
+                log_message(f"{job_desc.user_email}: no speakers for job {job_id} ({e}); transcribing without them")
+                await db.incr_stat("jobs_without_speakers", 1)
+                async for segment in plain():
+                    await process_segment(job_id, segment, duration)
 
         except Exception as e:
             log_message(f"Exception during transcription: {e}")

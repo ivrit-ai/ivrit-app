@@ -18,17 +18,26 @@ const SAMPLE = path.join(OUT, "sample.ogg");
 const MIC = path.join(OUT, "hebrew-mic.wav");
 (await import("node:child_process")).execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", path.join(ROOT, "store/fixtures/hebrew-12s.ogg"), "-ac", "1", "-ar", "48000", MIC]);
 const COMMUNICATOR = path.resolve(process.env.COMMUNICATOR_DIR ?? path.join(ROOT, "../notifier"));
-const { ADMIN_EMAIL, createUser, freshDatabase, startApp } = await import(path.join(COMMUNICATOR, "test/harness.js"));
+const { ADMIN_EMAIL, createUser, freshDatabase, startApp, startFcmService } = await import(path.join(COMMUNICATOR, "test/harness.js"));
 const CHROME = process.env.CHROME ?? `${process.env.HOME}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`;
 
 const appPort = 33000 + Math.floor(Math.random() * 2000);
 const origin = `http://localhost:${appPort}`;
 const pool = await freshDatabase();
-const comm = await startApp({ APP_ORIGINS: origin, APP_TOKEN_ISSUER: origin });
+// Firebase, faked: the phone app's device registers through it.
+const fcm = await startFcmService();
+const comm = await startApp({ APP_ORIGINS: origin, APP_TOKEN_ISSUER: origin, FCM_SERVICE_ACCOUNT: JSON.stringify(fcm.account), FCM_API_BASE: fcm.origin });
 // The app's own source at Communicator, which tells the user a transcript is ready.
 const admin = await createUser(pool, { email: ADMIN_EMAIL });
 const created = await comm.call("POST", "/api/admin/sources", { cookie: admin.cookie, body: { id: "ivrit-app-server", name: "ivrit.ai", link_methods: [] } });
 await comm.call("PATCH", "/api/admin/sources/ivrit-app-server", { cookie: admin.cookie, body: { addresses_accounts: true } });
+// Eliezer, which the user links with a code (Sources).
+const eliezer = await comm.call("POST", "/api/admin/sources", {
+  cookie: admin.cookie,
+  body: { id: "eliezer", name: "Eliezer", name_he: "אליעזר", link_methods: [{ label: "Open WhatsApp", label_he: "פתיחת וואטסאפ", url_template: "https://wa.me/972559571223?text=link%20{code}", text_template: "link {code}" }] },
+});
+// ...and one that was registered with no way to send it a code: never offered.
+await comm.call("POST", "/api/admin/sources", { cookie: admin.cookie, body: { id: "codeless", name: "Codeless", link_methods: [] } });
 await pool.end();
 const stack = spawn(PYTHON, ["-u", path.join(ROOT, "server/tests/stack.py"), String(appPort), comm.origin], {
   stdio: ["ignore", "pipe", "inherit"],
@@ -467,11 +476,12 @@ try {
   const readyMessage = await page.waitForSelector(".msg:has(.msg-title:text-is('התמלול מוכן'))", { timeout: 20000 }).catch(() => null);
   check("a finished transcript arrives in the inbox, by the file's name", Boolean(readyMessage)
     && (await readyMessage.textContent()).includes("sample.ogg"));
-  await page.click("#tabs button[data-view='sources']");
+  await page.click("#open-sources");
   await page.waitForSelector("#sources .source-card, #sources p", { timeout: 10000 }).catch(() => null);
   await page.waitForTimeout(800);
   const offered = await page.locator("#sources .source-card h3").allTextContents();
   check("...from the app itself, which Sources does not offer to link", !offered.some((name) => name.includes("ivrit.ai")), offered.join(", "));
+  check("...nor a source with no way to send it a code", offered.length > 0 && !offered.some((name) => name.includes("Codeless")), offered.join(", "));
   await page.click("#tabs button[data-view='inbox']");
   // The first upload's (still there); the one made in a folder went with the folder.
   const again = await page.waitForSelector(".msg:has(.msg-title:text-is('התמלול מוכן')) .msg-actions a.act:not([href*='?f='])", { timeout: 10000 }).catch(() => null);
@@ -537,6 +547,130 @@ try {
   }
   check("two files sent together both wait their turn, neither refused", listedTwo === 2 && both.length === 2, `${listedTwo} ${JSON.stringify(both.map((e) => e.status))}`);
 
+  // --- in the phone app (the native shell faked): notifications, Sources, back, saving
+  const phone = await browser.newContext({ viewport: { width: 390, height: 800 }, locale: "he-IL", isMobile: true, hasTouch: true });
+  await phone.addInitScript((session) => {
+    if (!localStorage.getItem("app_session")) localStorage.setItem("app_session", JSON.stringify({ ...session, renewed_at: Date.now() }));
+    const fake = (window.__fake = { asked: 0, minimized: 0, saved: null, staged: {}, settings: 0, listeners: {} });
+    fake.status = { available: true, permission: "default", popup: true, importance: 4, platform: "android", features: ["saveFiles", "appSettings"] };
+    const on = (plugin) => (event, fn) => ((fake.listeners[`${plugin}:${event}`] ||= []).push(fn), Promise.resolve({ remove() {} }));
+    fake.fire = (plugin, event, data) => (fake.listeners[`${plugin}:${event}`] || []).forEach((fn) => fn(data));
+    const plugins = {
+      IvritNative: {
+        notificationStatus: async () => fake.status,
+        requestPermission: async () => {
+          fake.asked++;
+          fake.status = { ...fake.status, permission: "granted" };
+          return fake.status;
+        },
+        pushRegistration: async () => ({ transport: "fcm", token: "phone-token-0123456789abcdef", key: "A".repeat(43) }),
+        openNotificationSettings: async () => void fake.settings++,
+        configure: async () => ({}),
+        takeOpened: async () => ({}),
+        sharedFiles: async () => ({ files: [] }),
+        stageFile: async () => {
+          const id = crypto.randomUUID();
+          fake.staged[id] = 0;
+          return { id };
+        },
+        appendStaged: async ({ id, data }) => void (fake.staged[id] += atob(data).length),
+        discardStaged: async () => ({}),
+        saveStaged: async ({ id, name, type }) => ((fake.saved = { name, type, size: fake.staged[id] }), { saved: "downloads" }),
+        addListener: on("IvritNative"),
+      },
+      App: {
+        getInfo: async () => ({ version: "1.0", build: "999" }),
+        getLaunchUrl: async () => ({}),
+        minimizeApp: async () => void fake.minimized++,
+        addListener: on("App"),
+      },
+    };
+    window.Capacitor = {
+      isNativePlatform: () => true,
+      nativePromise: (plugin, method, options) =>
+        method === "addListener" || !plugins[plugin]?.[method]
+          ? Promise.reject(Object.assign(new Error(`${plugin}.${method} not implemented`), { code: "UNIMPLEMENTED" }))
+          : Promise.resolve(plugins[plugin][method](options)),
+      addListener: (plugin, event, callback) => (plugins[plugin].addListener(event, callback), { remove() {} }),
+    };
+  }, info.session);
+  const app = await phone.newPage();
+  app.on("pageerror", (e) => errors.push(`app: ${e}`));
+  const fake = (expr) => app.evaluate(expr);
+  const pressBack = (canGoBack = false) => app.evaluate((canGoBack) => window.__fake.fire("App", "backButton", { canGoBack }), canGoBack);
+  // Drive, as the app connects it (the server's sign-in for this phone).
+  await app.goto(`${origin}/__test/login?email=dana@example.com&sub=dana-sub&to=/`);
+  await app.waitForSelector("#tr-list:not([hidden])", { timeout: 20000 }).catch(() => null);
+  if (await app.locator("#confirm[open]").count()) await app.click("#confirm-ok");
+  await app.waitForTimeout(800);
+  const bar = await app.evaluate(() => ({
+    tabs: [...document.querySelectorAll("#tabs button")].map((b) => b.dataset.view),
+    banner: document.querySelectorAll("#notify-banner, #preprompt").length,
+  }));
+  check("in the app, Sources is not a tab (it is reached from Messages), and no notifications banner asks",
+    !bar.tabs.includes("sources") && bar.tabs.length === 3 && bar.banner === 0 && (await fake(() => window.__fake.asked)) === 0, JSON.stringify(bar));
+
+  await pressBack();
+  check("back on the main screen sends the app to the background, as any app's first screen", (await fake(() => window.__fake.minimized)) === 1);
+  await app.click("#tabs button[data-view='settings']");
+  await pressBack();
+  check("back elsewhere returns to the main screen", await app.locator("#view-transcribe").isVisible() && (await fake(() => window.__fake.minimized)) === 1);
+
+  await app.click("#tabs button[data-view='inbox']");
+  await app.click("#open-sources");
+  await app.waitForSelector("#sources .source-card", { timeout: 10000 }).catch(() => null);
+  check("Messages opens Sources, with the Messages tab still lit", await app.locator("#view-sources").isVisible()
+    && (await app.locator("#tabs button.active").getAttribute("data-view")) === "inbox");
+  await app.click("#sources .source-card .btn.primary");
+  const code = await app.waitForSelector("#sheet[open] .code-box .code", { timeout: 8000 }).catch(() => null);
+  check("linking goes straight to the code: no notifications step in the way", Boolean(code) && (await fake(() => window.__fake.asked)) === 0);
+  await pressBack();
+  check("back closes an open sheet first", (await app.locator("#sheet[open]").count()) === 0 && await app.locator("#view-sources").isVisible());
+  await app.click("#sources .source-card .btn.primary");
+  const linkCode = await (await app.waitForSelector("#sheet[open] .code-box .code", { timeout: 8000 })).textContent();
+  const linking = await comm.call("POST", "/api/source/v1/links", { bearer: eliezer.json.key, origin: null, body: { code: linkCode.replace(/[^0-9A-Z]/gi, ""), subject: "972500000000", label: "WhatsApp +972…000" } });
+  await app.waitForSelector("#sheet[open] .success", { timeout: 15000 }).catch(() => null);
+  await app.waitForTimeout(1500);
+  check("once linked, the phone's own question about notifications, asked once", (await fake(() => window.__fake.asked)) === 1
+    && (await fake(() => localStorage.getItem("device_id"))) !== null, JSON.stringify([linking.status, linking.json, await fake(() => window.__fake.asked)]));
+  if (await app.locator("#sheet[open]").count()) await pressBack();
+  await pressBack();
+  check("back from Sources returns to Messages", await app.locator("#view-inbox").isVisible());
+
+  await app.evaluate(() => (window.__fake.status = { ...window.__fake.status, popup: false, importance: 3 }));
+  await app.click("#tabs button[data-view='settings']");
+  // As on coming back from the phone's settings, where it was changed.
+  await app.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await app.waitForSelector("#permission-help .quiet-note", { timeout: 8000 }).catch(() => null);
+  const quiet = await app.evaluate(() => ({
+    note: document.querySelector("#permission-help .quiet-note p")?.textContent ?? "",
+    warning: document.querySelectorAll("#permission-help .help h3").length,
+    permission: document.querySelector("#permission")?.hidden,
+  }));
+  await app.click("#permission-help .quiet-note button", { timeout: 5000 }).catch(() => null);
+  check("notifications that arrive without popping up: a quiet line in Settings, with the way to the phone's setting",
+    quiet.note.includes("בשקט") && quiet.warning === 0 && quiet.permission === false && (await fake(() => window.__fake.settings)) === 1, JSON.stringify(quiet));
+
+  // (A new address, not only a new #: the page loads again.)
+  await app.goto(`${origin}/?phone=1#t/${ready?.results_id}`);
+  await app.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 20000 }).catch(() => null);
+  await app.screenshot({ path: path.join(OUT, "bt-9-app-transcript.png") });
+  await app.click(".tr-toolbar button:has(use[href='#i-download'])", { timeout: 8000 }).catch(() => null);
+  await app.click("#sheet .tr-choice:has-text('SRT')", { timeout: 5000 }).catch(() => null);
+  await app.waitForFunction(() => window.__fake.saved, null, { timeout: 8000 }).catch(() => null);
+  const savedFile = await fake(() => window.__fake.saved);
+  const toastText = await app.locator("#toast").textContent().catch(() => "");
+  check("export in the app: the phone saves the file (Downloads), and says so", savedFile?.name === "sample.srt" && savedFile.size > 20
+    && toastText.includes("נשמר בהורדות"), JSON.stringify([savedFile, toastText]));
+  await pressBack(false);
+  await app.waitForTimeout(600);
+  check("back from a transcript returns to the list", await app.locator("#tr-list").isVisible() && !app.url().includes("#t/"), app.url());
+  await app.evaluate((url) => window.__fake.fire("App", "appUrlOpen", { url }), `${origin}/#t/${ready?.results_id}`);
+  const linked = await app.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 20000 }).catch(() => null);
+  await app.screenshot({ path: path.join(OUT, "bt-10-app-link.png") });
+  check("a link to app.ivrit.ai opened by the phone opens the transcript in the app", Boolean(linked), app.url());
+  await phone.close();
+
   // --- deleting the account: this server forgets it too, and the browser is signed out here
   const deletedHere = await server("/account/delete", { method: "POST" });
   const bootAfter = await server("/transcribe/boot");
@@ -549,6 +683,7 @@ try {
   await browser.close();
   stack.kill();
   await comm.stop?.();
+  await fcm.close?.();
 }
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
 process.exit(results.every(Boolean) ? 0 : 1);

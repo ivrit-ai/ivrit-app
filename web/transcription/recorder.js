@@ -15,6 +15,9 @@ let host = null;
 let hooks = null;
 let dbPromise = null;
 let session = null; // the take being recorded
+
+// A take is being recorded (stopping it is the user's call, never a back button's).
+export const busy = () => Boolean(session);
 const taken = new Map(); // File -> recording id, until it is sent
 
 export function init(hostApi, viewHooks) {
@@ -281,13 +284,9 @@ export async function discard(file) {
   if (id) await forget(id).catch(() => {});
 }
 
-export function download(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = host.el("a", { href: url, download: filename });
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+// A download in a browser; in the app, the phone saves it (host.saveFile).
+export async function download(blob, filename) {
+  if ((await host.saveFile(blob, filename)) === "downloaded") host.toast(tr("recordingDownloaded"));
 }
 
 // Sent for transcription: the device's copy can go.

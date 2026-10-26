@@ -26,6 +26,10 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "sharedFiles", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "discardShared", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "shareOn", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stageFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "appendStaged", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "discardStaged", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "saveStaged", returnType: CAPPluginReturnPromise),
     ]
 
     private static weak var current: IvritNativePlugin?
@@ -85,7 +89,7 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
         }
         // Allowed, yet set to show only in Notification Centre: no banner pops up.
         let popup = settings.alertSetting == .enabled && settings.alertStyle != .none
-        return ["available": true, "permission": permission, "popup": popup, "platform": "ios"]
+        return ["available": true, "permission": permission, "popup": popup, "platform": "ios", "features": ["saveFiles"]]
     }
 
     @objc func notificationStatus(_ call: CAPPluginCall) {
@@ -260,6 +264,73 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
             sheet.popoverPresentationController?.sourceView = presenter.view
             presenter.present(sheet, animated: true)
             call.resolve()
+        }
+    }
+
+    // MARK: saving files
+
+    /// A file from the page, handed over in pieces (the page cannot pass a file
+    /// otherwise), then offered to the share sheet, which saves to Files: a web
+    /// page's download does nothing in the app.
+    private static func staged(_ id: String?) -> URL? {
+        guard let id, id.range(of: "^[0-9a-f-]{36}$", options: .regularExpression) != nil else { return nil }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("staged", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent(id)
+    }
+
+    @objc func stageFile(_ call: CAPPluginCall) {
+        let id = UUID().uuidString.lowercased()
+        guard let url = Self.staged(id), FileManager.default.createFile(atPath: url.path, contents: nil) else {
+            return call.reject("no room", "io")
+        }
+        call.resolve(["id": id])
+    }
+
+    /// {id, data: base64} appended.
+    @objc func appendStaged(_ call: CAPPluginCall) {
+        guard let url = Self.staged(call.getString("id")), FileManager.default.fileExists(atPath: url.path) else {
+            return call.reject("not found", "not_found")
+        }
+        guard let data = Data(base64Encoded: call.getString("data") ?? "", options: .ignoreUnknownCharacters),
+              let handle = try? FileHandle(forWritingTo: url) else {
+            return call.reject("could not write", "io")
+        }
+        defer { try? handle.close() }
+        do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            call.resolve()
+        } catch {
+            call.reject("could not write", "io")
+        }
+    }
+
+    @objc func discardStaged(_ call: CAPPluginCall) {
+        if let url = Self.staged(call.getString("id")) { try? FileManager.default.removeItem(at: url) }
+        call.resolve()
+    }
+
+    /// {id, name, type}: the staged file in the share sheet, under its own name.
+    @objc func saveStaged(_ call: CAPPluginCall) {
+        guard let url = Self.staged(call.getString("id")), FileManager.default.fileExists(atPath: url.path) else {
+            return call.reject("not found", "not_found")
+        }
+        let name = (call.getString("name") ?? "file").replacingOccurrences(of: "/", with: "_")
+        let dir = url.deletingLastPathComponent().appendingPathComponent("out-" + url.lastPathComponent, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let named = dir.appendingPathComponent(name.isEmpty ? "file" : name)
+        try? FileManager.default.removeItem(at: named)
+        guard (try? FileManager.default.moveItem(at: url, to: named)) != nil else {
+            return call.reject("could not save", "io")
+        }
+        DispatchQueue.main.async {
+            guard let presenter = self.bridge?.viewController else { return call.reject("no screen", "io") }
+            let sheet = UIActivityViewController(activityItems: [named], applicationActivities: nil)
+            sheet.popoverPresentationController?.sourceView = presenter.view
+            sheet.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: dir) }
+            presenter.present(sheet, animated: true)
+            call.resolve(["saved": "shared"])
         }
     }
 }
