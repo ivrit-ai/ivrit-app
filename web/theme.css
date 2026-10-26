@@ -190,3 +190,17 @@ body.signed-out .account-only {
     padding-top: calc(12px + env(safe-area-inset-top, 0px));
   }
 }
+
+/* The mark at its size whatever the browser makes of the <img>'s own width and
+   height (a phone's WebView drew the bar's 30 px one several times larger). */
+.brand img {
+  flex: none;
+  width: 30px;
+  height: 30px;
+}
+
+.landing-mark {
+  flex: none;
+  width: 56px;
+  height: 56px;
+}
