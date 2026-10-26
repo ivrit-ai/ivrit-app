@@ -165,3 +165,28 @@ main.wide {
 body.signed-out .account-only {
   display: none !important;
 }
+
+/* On a phone the tabs are at the bottom and the languages in Settings, which would
+   leave the bar holding only the mark: it folds away (its tabs stay, fixed at the
+   bottom), keeping only the status bar's room above the page. Support is in
+   Settings. */
+@media (max-width: 719px) {
+  body.app {
+    --bar-h: env(safe-area-inset-top, 0px);
+  }
+
+  body.app .bar {
+    height: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  body.app .bar .brand,
+  body.app .bar .support {
+    display: none;
+  }
+
+  body.app main {
+    padding-top: calc(12px + env(safe-area-inset-top, 0px));
+  }
+}

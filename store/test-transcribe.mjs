@@ -790,6 +790,15 @@ try {
   await pressBack(false);
   await app.waitForTimeout(600);
   check("back from a transcript returns to the list", await app.locator("#tr-list").isVisible() && !app.url().includes("#t/"), app.url());
+  const top = await app.evaluate(() => ({
+    bar: document.querySelector(".bar").getBoundingClientRect().height,
+    brand: Boolean(document.querySelector(".bar .brand").offsetParent),
+    title: document.querySelector("#tr-list h2").getBoundingClientRect().top,
+    tabs: document.getElementById("tabs").getBoundingClientRect().height,
+  }));
+  check("on a phone, no bar above the page holding only the mark: the page starts at the top, the tabs at the bottom",
+    top.bar === 0 && !top.brand && top.title < 40 && top.tabs > 0, JSON.stringify(top));
+  await app.screenshot({ path: path.join(OUT, "bt-9b-app-list.png") });
   await app.evaluate((url) => window.__fake.fire("App", "appUrlOpen", { url }), `${origin}/#t/${ready?.results_id}`);
   const linked = await app.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 20000 }).catch(() => null);
   await app.screenshot({ path: path.join(OUT, "bt-10-app-link.png") });
