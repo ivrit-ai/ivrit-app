@@ -319,14 +319,34 @@ async function reconcile() {
 
 // The phone's own question, straight away (only the app has notifications).
 // Resolves to what happened: "granted" once this device is registered,
-// "dismissed" when the user closed the phone's dialog, or the trouble that
-// stopped it (see notificationTrouble).
-async function enableNotifications() {
+// "dismissed" when the user closed the phone's dialog, "settings" when the
+// phone would not ask and its settings were opened instead (not when unasked:
+// the app's own first question), or the trouble that stopped it (see
+// notificationTrouble).
+async function enableNotifications({ unasked = false } = {}) {
   if (!notify.supported()) return troubleWithoutPush();
   if (notify.permission() === "denied") return "denied";
   if (notify.permission() !== "granted") {
-    const permission = await notify.request();
-    if (permission !== "granted") return permission === "denied" ? "denied" : "dismissed";
+    const before = nativeStatus;
+    const asked = Date.now();
+    const permission = await notify.request().catch((err) => `error: ${err?.message || err}`);
+    // What the phone answered, to the log (as the lab's reports are): when it
+    // will not ask, nothing on the screen says why.
+    fetch("/lab/report?kind=notify-ask", {
+      method: "POST",
+      body: JSON.stringify({ before, after: nativeStatus, permission, ms: Date.now() - asked }),
+    }).catch(() => {});
+    if (permission === "denied") return "denied";
+    if (permission !== "granted") {
+      // Answered at once, no dialog shown: the phone will not ask (it was
+      // turned down before), so its settings are where they are turned on.
+      if (Date.now() - asked < 700 && !unasked) {
+        state.inNotificationSettings = true;
+        shell.ivrit.openNotificationSettings().catch(() => {});
+        return "settings";
+      }
+      return "dismissed";
+    }
   }
   try {
     await registerThisDevice();
@@ -352,7 +372,7 @@ async function askNotificationsOnce() {
   } catch {
     return;
   }
-  await enableNotifications();
+  await enableNotifications({ unasked: true });
   if (state.view === "settings") renderPermission();
 }
 
@@ -2207,7 +2227,13 @@ document.addEventListener("visibilitychange", async () => {
   // Back from Android's settings, perhaps having changed exactly this.
   if (shell) {
     await notify.refresh();
-      if (state.view === "settings") renderPermission();
+    // Turned on there, as Enable sent the user to do: this device is registered.
+    if (state.inNotificationSettings && notify.permission() === "granted") await enableNotifications();
+    state.inNotificationSettings = false;
+    if (state.view === "settings") {
+      renderPermission();
+      renderDevices().catch(() => {});
+    }
     watchJobs();
   }
   reconcile();

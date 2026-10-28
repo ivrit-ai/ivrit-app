@@ -683,10 +683,11 @@ try {
         notificationStatus: async () => fake.status,
         requestPermission: async () => {
           fake.asked++;
-          fake.status = { ...fake.status, permission: "granted" };
+          // A phone that will no longer ask answers at once, nothing granted.
+          if (!fake.wontAsk) fake.status = { ...fake.status, permission: "granted" };
           return fake.status;
         },
-        pushRegistration: async () => ({ transport: "fcm", token: "phone-token-0123456789abcdef", key: "A".repeat(43) }),
+        pushRegistration: async () => (fake.registrations = (fake.registrations || 0) + 1, { transport: "fcm", token: "phone-token-0123456789abcdef", key: "A".repeat(43) }),
         openNotificationSettings: async () => void fake.settings++,
         configure: async () => ({}),
         takeOpened: async () => ({}),
@@ -775,6 +776,29 @@ try {
   await app.click("#permission-help .quiet-note button", { timeout: 5000 }).catch(() => null);
   check("notifications that arrive without popping up: a quiet line in Settings, with the way to the phone's setting",
     quiet.note.includes("בשקט") && quiet.warning === 0 && quiet.permission === false && (await fake(() => window.__fake.settings)) === 1, JSON.stringify(quiet));
+
+  // Asked again, and the phone answers at once without asking (turned down
+  // before): Enable opens its settings, and once allowed there, coming back
+  // registers this phone.
+  await app.evaluate(() => {
+    window.__fake.status = { ...window.__fake.status, permission: "default", popup: true, importance: 4 };
+    window.__fake.wontAsk = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await app.waitForSelector("#enable:not([hidden])", { timeout: 8000 }).catch(() => null);
+  const registeredBefore = await fake(() => window.__fake.registrations || 0);
+  await app.click("#enable", { timeout: 5000 }).catch(() => null);
+  await app.waitForFunction(() => window.__fake.settings === 2, null, { timeout: 5000 }).catch(() => null);
+  const sentToSettings = await fake(() => window.__fake.settings);
+  await app.evaluate(() => {
+    window.__fake.status = { ...window.__fake.status, permission: "granted" };
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await app.waitForFunction((n) => (window.__fake.registrations || 0) > n, registeredBefore, { timeout: 8000 }).catch(() => null);
+  await app.waitForSelector("#enable[hidden]", { state: "attached", timeout: 5000 }).catch(() => null);
+  const allowed = await app.evaluate(() => ({ registrations: window.__fake.registrations || 0, enable: document.getElementById("enable").hidden }));
+  check("when the phone will not ask, Enable opens its notification settings; allowed there, this phone is registered",
+    sentToSettings === 2 && allowed.registrations > registeredBefore && allowed.enable, JSON.stringify([sentToSettings, registeredBefore, allowed]));
 
   // (A new address, not only a new #: the page loads again.)
   await app.goto(`${origin}/?phone=1#t/${ready?.results_id}`);
