@@ -792,14 +792,15 @@ try {
   await app.click("#enable", { timeout: 5000 }).catch(() => null);
   await app.waitForFunction(() => window.__fake.settings === 2, null, { timeout: 5000 }).catch(() => null);
   const sentToSettings = await fake(() => window.__fake.settings);
+  // Back in the app: the WebView is not told (no visibilitychange), the app's resume is.
   await app.evaluate(() => {
     window.__fake.status = { ...window.__fake.status, permission: "granted" };
-    document.dispatchEvent(new Event("visibilitychange"));
+    window.__fake.fire("App", "resume", {});
   });
   await app.waitForFunction((n) => (window.__fake.registrations || 0) > n, registeredBefore, { timeout: 8000 }).catch(() => null);
   await app.waitForSelector("#enable[hidden]", { state: "attached", timeout: 5000 }).catch(() => null);
   const allowed = await app.evaluate(() => ({ registrations: window.__fake.registrations || 0, enable: document.getElementById("enable").hidden }));
-  check("when the phone will not ask, Enable opens its notification settings; allowed there, this phone is registered",
+  check("when the phone will not ask, Enable opens its notification settings; allowed there, back in the app this phone is registered",
     sentToSettings === 2 && allowed.registrations > registeredBefore && allowed.enable, JSON.stringify([sentToSettings, registeredBefore, allowed]));
   await app.evaluate(() => {
     window.__fake.status = { ...window.__fake.status, permission: "default" };

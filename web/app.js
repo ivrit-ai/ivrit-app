@@ -328,6 +328,8 @@ async function enableNotifications({ unasked = false } = {}) {
   // not ask, nothing on the screen says why.
   const report = (stage, body) =>
     fetch(`/lab/report?kind=notify-${stage}`, { method: "POST", body: JSON.stringify({ status: nativeStatus, unasked, ...body }) }).catch(() => {});
+  // As the phone has it now: it may have been changed in its settings unseen.
+  await notify.refresh();
   report("press");
   if (!notify.supported()) return troubleWithoutPush();
   if (notify.permission() === "denied") return "denied";
@@ -2175,6 +2177,7 @@ if (shell) {
   shell.app.addListener("appUrlOpen", ({ url }) => openLaunchLink(url));
   // Android's back button: back a step in the app, never out of it by surprise.
   shell.app.addListener("backButton", ({ canGoBack }) => goBack(canGoBack));
+  shell.app.addListener("resume", () => backInFront());
 }
 
 function openLaunchLink(url) {
@@ -2226,11 +2229,20 @@ navigator.serviceWorker?.addEventListener("message", (event) => {
 
 addEventListener("hashchange", openFromHash);
 
-document.addEventListener("visibilitychange", async () => {
-  if (document.visibilityState !== "visible" || !state.me) return;
-  // Back from Android's settings, perhaps having changed exactly this.
+// Back in front: from Android's settings perhaps, having changed exactly this.
+// The WebView is not always told (no visibilitychange), so the app's own
+// resume says it too; one look serves both.
+let lookingAgain = null;
+async function backInFront() {
+  if (!state.me || lookingAgain) return;
+  lookingAgain = lookAgain().finally(() => (lookingAgain = null));
+}
+async function lookAgain() {
   if (shell) {
     await notify.refresh();
+    if (state.inNotificationSettings) {
+      fetch("/lab/report?kind=notify-back", { method: "POST", body: JSON.stringify({ status: nativeStatus }) }).catch(() => {});
+    }
     // Turned on there, as Enable sent the user to do: this device is registered.
     if (state.inNotificationSettings && notify.permission() === "granted") await enableNotifications();
     state.inNotificationSettings = false;
@@ -2242,7 +2254,8 @@ document.addEventListener("visibilitychange", async () => {
   }
   reconcile();
   refreshInbox();
-});
+}
+document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && backInFront());
 
 // A different account on this browser must never see the previous one's
 // messages.
