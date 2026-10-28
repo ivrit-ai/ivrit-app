@@ -683,6 +683,8 @@ try {
         notificationStatus: async () => fake.status,
         requestPermission: async () => {
           fake.asked++;
+          // Or never answers at all.
+          if (fake.hang) return new Promise(() => {});
           // A phone that will no longer ask answers at once, nothing granted.
           if (!fake.wontAsk) fake.status = { ...fake.status, permission: "granted" };
           return fake.status;
@@ -799,6 +801,20 @@ try {
   const allowed = await app.evaluate(() => ({ registrations: window.__fake.registrations || 0, enable: document.getElementById("enable").hidden }));
   check("when the phone will not ask, Enable opens its notification settings; allowed there, this phone is registered",
     sentToSettings === 2 && allowed.registrations > registeredBefore && allowed.enable, JSON.stringify([sentToSettings, registeredBefore, allowed]));
+  await app.evaluate(() => {
+    window.__fake.status = { ...window.__fake.status, permission: "default" };
+    window.__fake.hang = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await app.waitForSelector("#enable:not([hidden])", { timeout: 8000 }).catch(() => null);
+  await app.click("#enable", { timeout: 5000 }).catch(() => null);
+  await app.waitForFunction(() => window.__fake.settings === 3, null, { timeout: 6000 }).catch(() => null);
+  check("...and when it never answers, the same", (await fake(() => window.__fake.settings)) === 3, String(await fake(() => window.__fake.settings)));
+  await app.evaluate(() => {
+    window.__fake.status = { ...window.__fake.status, permission: "granted" };
+    window.__fake.hang = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
 
   // (A new address, not only a new #: the page loads again.)
   await app.goto(`${origin}/?phone=1#t/${ready?.results_id}`);

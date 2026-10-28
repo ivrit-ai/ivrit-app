@@ -324,23 +324,27 @@ async function reconcile() {
 // the app's own first question), or the trouble that stopped it (see
 // notificationTrouble).
 async function enableNotifications({ unasked = false } = {}) {
+  // What the phone says, to the log (as the lab's reports are): when it will
+  // not ask, nothing on the screen says why.
+  const report = (stage, body) =>
+    fetch(`/lab/report?kind=notify-${stage}`, { method: "POST", body: JSON.stringify({ status: nativeStatus, unasked, ...body }) }).catch(() => {});
+  report("press");
   if (!notify.supported()) return troubleWithoutPush();
   if (notify.permission() === "denied") return "denied";
   if (notify.permission() !== "granted") {
-    const before = nativeStatus;
     const asked = Date.now();
-    const permission = await notify.request().catch((err) => `error: ${err?.message || err}`);
-    // What the phone answered, to the log (as the lab's reports are): when it
-    // will not ask, nothing on the screen says why.
-    fetch("/lab/report?kind=notify-ask", {
-      method: "POST",
-      body: JSON.stringify({ before, after: nativeStatus, permission, ms: Date.now() - asked }),
-    }).catch(() => {});
+    const answer = notify.request().catch((err) => `error: ${err?.message || err}`);
+    // A phone that will not ask may answer at once, or never: either way, with
+    // no dialog over the page (it still has the focus), its settings are where
+    // notifications are turned on. A dialog that is up is waited for.
+    const permission = await Promise.race([
+      answer,
+      new Promise((resolve) => setTimeout(() => resolve(document.hasFocus() ? "unanswered" : answer), 1500)),
+    ]);
+    report("ask", { permission, ms: Date.now() - asked, focus: document.hasFocus() });
     if (permission === "denied") return "denied";
     if (permission !== "granted") {
-      // Answered at once, no dialog shown: the phone will not ask (it was
-      // turned down before), so its settings are where they are turned on.
-      if (Date.now() - asked < 700 && !unasked) {
+      if ((permission === "unanswered" || Date.now() - asked < 700) && !unasked) {
         state.inNotificationSettings = true;
         shell.ivrit.openNotificationSettings().catch(() => {});
         return "settings";
