@@ -260,7 +260,7 @@ def prepare() -> None:
         # overrides and the kids' band are not questions.
         skip = {"kidsAgeBand", "ageRatingOverride", "ageRatingOverrideV2", "koreaAgeRatingOverride"}
         none = {k: False if isinstance(v, bool) else "NONE" for k, v in rating["data"]["attributes"].items()
-                if k not in skip and (isinstance(v, (bool, str)) or v is None)}
+                if k not in skip and not k.lower().endswith("url") and (isinstance(v, (bool, str)) or v is None)}
         # A question never answered reads as null, yes/no or not: Apple's refusal
         # says which are yes/no, and those become no.
         for _ in range(3):
@@ -296,7 +296,10 @@ def prepare() -> None:
 
     detail = soft("review notes", lambda: call("GET", f"/appStoreVersions/{version['id']}/appStoreReviewDetail"))
     notes = {"notes": LISTING["reviewNotes"]}
-    if detail and detail.get("data"):
+    if detail and detail.get("data") and not detail["data"]["attributes"].get("contactEmail"):
+        # Saved only with the contact, which is filled in by hand: then again.
+        print("  review notes: once the review contact is filled in, run prepare again")
+    elif detail and detail.get("data"):
         soft("review notes", lambda: call("PATCH", f"/appStoreReviewDetails/{detail['data']['id']}", {"data": {
             "type": "appStoreReviewDetails", "id": detail["data"]["id"], "attributes": notes}}))
     else:
