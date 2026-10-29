@@ -120,7 +120,16 @@ def status() -> None:
 
 
 def editable_version(app_id: str) -> dict:
-    """This version, made if it is not there yet; the one waiting to be sent if it is."""
+    """This version, made if it is not there yet; the one waiting to be sent if it is.
+    A version waiting under another number (App Store Connect's first is "1.0")
+    takes this one's: a build's version must match it."""
+    for v in versions(app_id):
+        va = v["attributes"]
+        state = va.get("appStoreState") or va.get("appVersionState")
+        if va["versionString"] != VERSION and state == "PREPARE_FOR_SUBMISSION":
+            print(f"  version {va['versionString']} → {VERSION}")
+            return call("PATCH", f"/appStoreVersions/{v['id']}", {"data": {
+                "type": "appStoreVersions", "id": v["id"], "attributes": {"versionString": VERSION}}})["data"]
     for v in versions(app_id):
         va = v["attributes"]
         if va["versionString"] == VERSION:
@@ -205,6 +214,25 @@ def free_everywhere(app_id: str) -> None:
     print("  price: free")
 
 
+def everywhere(app_id: str) -> None:
+    """Available in every territory, and in new ones as they come, if not set yet."""
+    try:
+        call("GET", f"/apps/{app_id}/appAvailabilityV2")
+        return
+    except Refused:
+        pass
+    territories = [t["id"] for t in call("GET", "/territories?limit=200")["data"]]
+    soft("availability", lambda: call("POST", "https://api.appstoreconnect.apple.com/v2/appAvailabilities", {
+        "data": {"type": "appAvailabilities", "attributes": {"availableInNewTerritories": True}, "relationships": {
+            "app": {"data": {"type": "apps", "id": app_id}},
+            "territoryAvailabilities": {"data": [{"type": "territoryAvailabilities", "id": f"${{{t}}}"} for t in territories]},
+        }},
+        "included": [{"type": "territoryAvailabilities", "id": f"${{{t}}}", "attributes": {"available": True},
+                      "relationships": {"territory": {"data": {"type": "territories", "id": t}}}} for t in territories],
+    }))
+    print(f"  available in {len(territories)} territories")
+
+
 def prepare() -> None:
     a = app()
     app_id = a["id"]
@@ -236,6 +264,7 @@ def prepare() -> None:
             "type": "ageRatingDeclarations", "id": rating["data"]["id"], "attributes": none}}))
 
     free_everywhere(app_id)
+    everywhere(app_id)
 
     files = sorted((ROOT / LISTING["screenshots"]).glob("*.png"))
     for locale, loc_id in locs.items():
