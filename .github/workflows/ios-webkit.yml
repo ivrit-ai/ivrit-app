@@ -1,0 +1,27 @@
+# On-device transcription in the iPhone's WebKit, in the iOS Simulator's Safari
+# (scripts/ios-webkit-probe.mjs). Run by hand, or when the on-device code changes.
+name: iPhone WebKit probe
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "web/transcription/local/**"
+      - "scripts/ios-webkit-probe.mjs"
+      - ".github/workflows/ios-webkit.yml"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The newest Xcode on the runner
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+      - run: node scripts/ios-webkit-probe.mjs
