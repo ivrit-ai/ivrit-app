@@ -31,6 +31,8 @@ instance, so the page never has to know which push service is behind it.
 | `sharedFiles`, `discardShared`, `shareOn`, event `shared` | share intents | `ShareExtension`: audio and video (and WhatsApp's Opus voice notes) into an App Group folder; the app takes them when it is next open |
 | `enqueueTranscription`, `uploadToTranscribe`, events `transcription`, `fileUpload` | WorkManager | a background `URLSession`, which iOS carries on with the app closed; transcripts are awaited while the app runs, then in background refreshes |
 | `configure` | SharedPreferences | the App Group, which the notification extension reads |
+| `openAppSettings` (feature `appSettings`) | the app's details page | the app's page in Settings (the microphone) |
+| on-device transcription (Live, files) | native, sherpa-onnx, in the background (`localTranscription`) | in the page (WebAssembly), while the app is open; `readShared` (feature `readShared`) hands it shared recordings in pieces when the user transcribes on the device only |
 
 How it differs from Android, because iOS works differently:
 - **A share cannot open the app.** The share extension saves the recording,
@@ -93,7 +95,22 @@ files.
 The listing, the privacy answers and the review notes are drafted in
 `store/app-store.md`.
 
+On-device transcription in the iPhone's WebKit is checked in the iOS
+Simulator's Safari by `scripts/ios-webkit-probe.mjs` (`.github/workflows/ios-webkit.yml`):
+on iOS 26.2 it transcribes the Hebrew fixture as AAC and as Ogg Opus (WhatsApp's
+voice notes), on one thread (the page is not cross-origin isolated), and has
+what Live needs (getUserMedia, AudioWorklet, MediaRecorder).
+
+## Releasing
+
+`.github/workflows/app-store.yml` runs `scripts/app-store.py` with the same
+App Store Connect key: `status`; `prepare` (the version from `shared/app.json`,
+the texts in `store/app-store.json`, categories, age rating, price, the
+screenshots in `store/iphone/`, the newest processed build, the review notes);
+`submit`. App Privacy and the review contact and sign-in are filled in by hand.
+The build itself comes first, from `ios.yml` run with *testflight*.
+
 ## Later
 
-On-device transcription on iPhone (WebGPU in WKWebView from iOS 26, or
-WhisperKit on the Neural Engine), from what the Android lab shows.
+On-device transcription natively (sherpa-onnx, as on Android), or ivrit.ai's
+Turbo model (whisper.cpp on Metal).

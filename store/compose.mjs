@@ -12,7 +12,12 @@ import { chromium } from "playwright-core";
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const CHROME = process.env.CHROME ?? `${process.env.HOME}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`;
-mkdirSync(path.join(HERE, "phone"), { recursive: true });
+// Google Play's (phone/, 1080×1920, and the feature graphic), or the App Store's
+// (DEVICE=iphone: iphone/, 1290×2796, from raw/iphone/).
+const IPHONE = process.env.DEVICE === "iphone";
+const DIR = IPHONE ? "iphone" : "phone";
+const SIZE = IPHONE ? { width: 1290, height: 2796 } : { width: 1080, height: 1920 };
+mkdirSync(path.join(HERE, DIR), { recursive: true });
 
 // Hebrew, the listing's language. Each says one thing the app does.
 const SCREENS = [
@@ -64,8 +69,14 @@ async function render(file, { width, height }, out) {
 
 for (const s of SCREENS) {
   const query = new URLSearchParams({ shot: s.shot, title: s.title, sub: s.sub });
-  await render(`screen.html?${query}`, { width: 1080, height: 1920 }, path.join(HERE, "phone", `${s.file}.png`));
+  if (IPHONE) {
+    // Drawn as Android shows it: not for the App Store.
+    if (s.shot === "notification") continue;
+    query.set("device", "iphone");
+    query.set("shot", `iphone/${s.shot}`);
+  }
+  await render(`screen.html?${query}`, SIZE, path.join(HERE, DIR, `${s.file}.png`));
 }
-await render("feature.html", { width: 1024, height: 500 }, path.join(HERE, "feature-graphic.png"));
+if (!IPHONE) await render("feature.html", { width: 1024, height: 500 }, path.join(HERE, "feature-graphic.png"));
 await browser.close();
 server.close();

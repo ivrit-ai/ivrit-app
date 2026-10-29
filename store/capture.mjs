@@ -5,6 +5,7 @@
 // transcripts and messages are invented, and saved the way the app saves them.
 //
 //   SERVER_PYTHON=... ELIEZER_PYTHON=... node capture.mjs   → raw/*.png, 1080×2160
+//   DEVICE=iphone ... node capture.mjs                       → raw/iphone/*.png, 1179×2556
 //
 // Needs what the browser test needs: a Communicator checkout (COMMUNICATOR_DIR,
 // default ../../notifier), Docker for the test databases, Chromium (CHROME,
@@ -25,7 +26,9 @@ const COMMUNICATOR = path.resolve(process.env.COMMUNICATOR_DIR ?? path.join(ROOT
 const CHROME = process.env.CHROME ?? `${process.env.HOME}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`;
 const PYTHON = process.env.SERVER_PYTHON ?? "python3";
 const CACHE = process.env.MODEL_CACHE ?? path.join(tmpdir(), "ivrit-store-cache");
-const OUT = path.join(HERE, "raw");
+// Android's shape and shell, or the iPhone's (in points, at 3×).
+const DEVICE = process.env.DEVICE === "iphone" ? { name: "iphone", width: 393, height: 852 } : { name: "android", width: 360, height: 720 };
+const OUT = path.join(HERE, "raw", DEVICE.name === "iphone" ? "iphone" : "");
 mkdirSync(OUT, { recursive: true });
 mkdirSync(CACHE, { recursive: true });
 
@@ -191,14 +194,15 @@ const SAMPLES = [
 
 // --- the phone
 
-function fakeShell(session) {
+function fakeShell([session, platform]) {
   if (!localStorage.getItem("app_session")) localStorage.setItem("app_session", JSON.stringify({ ...session, renewed_at: Date.now() }));
   // Asked already, and answered: no first-run questions over the screens.
   localStorage.setItem("device_id", "1");
   localStorage.setItem("reconciled_at", String(Date.now()));
   localStorage.setItem("notify_asked", "1");
   localStorage.setItem("notify_announced", "1");
-  const status = { available: true, permission: "granted", popup: true, importance: 4, platform: "android", features: ["saveFiles", "appSettings", "localTranscription"] };
+  const features = platform === "ios" ? ["saveFiles", "appSettings", "readShared"] : ["saveFiles", "appSettings", "localTranscription"];
+  const status = { available: true, permission: "granted", popup: true, importance: 4, platform, features };
   const listeners = {};
   const on = (plugin) => (event, fn) => ((listeners[`${plugin}:${event}`] ||= []).push(fn), Promise.resolve({ remove() {} }));
   const plugins = {
@@ -246,7 +250,7 @@ const browser = await chromium.launch({
 
 async function phone({ dark = false } = {}) {
   const context = await browser.newContext({
-    viewport: { width: 360, height: 720 },
+    viewport: { width: DEVICE.width, height: DEVICE.height },
     deviceScaleFactor: 3,
     isMobile: true,
     hasTouch: true,
@@ -255,7 +259,7 @@ async function phone({ dark = false } = {}) {
     permissions: ["microphone"],
   });
   await cached(context);
-  await context.addInitScript(fakeShell, info.session);
+  await context.addInitScript(fakeShell, [info.session, DEVICE.name === "iphone" ? "ios" : "android"]);
   const page = (current = await context.newPage());
   page.on("pageerror", (e) => console.error("page error:", String(e)));
   // Drive, as the app connects it (the server's sign-in for this phone).

@@ -10,7 +10,7 @@
         "popup": "boolean: messages show on screen (Android: the channel's importance; iPhone: banners allowed)",
         "platform": "\"android\" | \"ios\": for wording only (which settings to describe), never for behaviour",
         "importance": "number, Android only: the channel's importance",
-        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\", \"localTranscription\", \"appSettings\", \"saveFiles\")"
+        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\", \"localTranscription\", \"appSettings\", \"saveFiles\", \"readShared\")"
       }
     },
     "requestPermission": {
@@ -148,6 +148,25 @@
       "result": {},
       "rejects": [
         "not_found"
+      ]
+    },
+    "readShared": {
+      "platforms": [
+        "ios"
+      ],
+      "feature": "readShared",
+      "note": "A piece of a shared file, for the page to transcribe it on the device itself (a shell without localTranscription). Read in pieces of at most 4 MB, from offset 0 until a piece comes back short.",
+      "options": {
+        "id": "the shared file's id",
+        "offset": "number: the byte to start at",
+        "length": "number: how many bytes, at most 4 MB"
+      },
+      "result": {
+        "data": "base64 of the bytes read; fewer than asked at the end of the file"
+      },
+      "rejects": [
+        "not_found",
+        "io"
       ]
     },
     "watches": {
@@ -295,7 +314,8 @@
     },
     "openAppSettings": {
       "platforms": [
-        "android"
+        "android",
+        "ios"
       ],
       "feature": "appSettings",
       "note": "The app's page in the phone's settings, for its permissions (the microphone).",

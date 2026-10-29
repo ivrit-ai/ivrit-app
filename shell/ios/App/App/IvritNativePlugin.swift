@@ -30,6 +30,8 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "appendStaged", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "discardStaged", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "saveStaged", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "readShared", returnType: CAPPluginReturnPromise),
     ]
 
     private static weak var current: IvritNativePlugin?
@@ -89,7 +91,7 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
         }
         // Allowed, yet set to show only in Notification Centre: no banner pops up.
         let popup = settings.alertSetting == .enabled && settings.alertStyle != .none
-        return ["available": true, "permission": permission, "popup": popup, "platform": "ios", "features": ["saveFiles"]]
+        return ["available": true, "permission": permission, "popup": popup, "platform": "ios", "features": ["saveFiles", "appSettings", "readShared"]]
     }
 
     @objc func notificationStatus(_ call: CAPPluginCall) {
@@ -113,6 +115,14 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
                 target = UIApplication.openSettingsURLString
             }
             if let url = URL(string: target) { UIApplication.shared.open(url) }
+            call.resolve()
+        }
+    }
+
+    /// This app's page in Settings, where a refused microphone is allowed again.
+    @objc func openAppSettings(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             call.resolve()
         }
     }
@@ -244,6 +254,25 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func discardShared(_ call: CAPPluginCall) {
         Shares.discard(call.getString("id") ?? "")
         call.resolve()
+    }
+
+    /// A piece of a shared file (base64), for the page to transcribe it itself on
+    /// the device: this shell cannot, as Android's does.
+    @objc func readShared(_ call: CAPPluginCall) {
+        guard let entry = Shares.find(call.getString("id") ?? ""),
+              let handle = try? FileHandle(forReadingFrom: entry.url) else {
+            return call.reject("not found", "not_found")
+        }
+        defer { try? handle.close() }
+        let offset = UInt64(max(0, call.getInt("offset") ?? 0))
+        let length = min(max(0, call.getInt("length") ?? 0), 4 << 20)
+        do {
+            try handle.seek(toOffset: offset)
+            let data = try handle.read(upToCount: length) ?? Data()
+            call.resolve(["data": data.base64EncodedString()])
+        } catch {
+            call.reject("could not read", "io")
+        }
     }
 
     /// Offers a shared file to other apps, under its own name.

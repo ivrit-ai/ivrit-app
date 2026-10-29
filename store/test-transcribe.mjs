@@ -152,7 +152,7 @@ try {
   check("...and show: the new name, marked edited", (await page.locator("#tr-text .tr-who").first().textContent()) === "דנה"
     && (await page.locator(".tr-edited").count()) === 1);
   await page.click(".tr-modes button:nth-child(3)");
-  await page.waitForTimeout(800);
+  await page.waitForSelector("#tr-text ins", { timeout: 5000 }).catch(() => null);
   check("comparing shows what changed", (await page.locator("#tr-text ins").count()) > 0);
   await shot("6-compare");
   await page.click(".tr-modes button:nth-child(1)");
@@ -844,6 +844,55 @@ try {
   await app.screenshot({ path: path.join(OUT, "bt-10-app-link.png") });
   check("a link to app.ivrit.ai opened by the phone opens the transcript in the app", Boolean(linked), app.url());
   await phone.close();
+
+  // --- the iPhone's app, which cannot transcribe a shared recording itself: with
+  // transcribing on the device only, the page reads it from the phone in pieces
+  // and transcribes it here, into My files, and the phone lets it go.
+  await server("/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ localOnly: true }) });
+  const iphone = await browser.newContext({ viewport: { width: 390, height: 800 }, locale: "he-IL", isMobile: true, hasTouch: true });
+  const shared = (await import("node:fs")).readFileSync(path.join(ROOT, "store/fixtures/hebrew-12s.ogg")).toString("base64");
+  await iphone.addInitScript(([session, shared]) => {
+    if (!localStorage.getItem("app_session")) localStorage.setItem("app_session", JSON.stringify({ ...session, renewed_at: Date.now() }));
+    const bytes = atob(shared);
+    const fake = (window.__fake = { discarded: [], reads: 0 });
+    const status = { available: true, permission: "granted", popup: true, platform: "ios", features: ["saveFiles", "appSettings", "readShared"] };
+    const files = [{ id: "share-1", name: "voice-note.ogg", type: "audio/ogg", size: bytes.length, durationMs: 12000, origin: "whatsapp", uploadId: "" }];
+    const on = () => () => Promise.resolve({ remove() {} });
+    const plugins = {
+      IvritNative: {
+        notificationStatus: async () => status,
+        requestPermission: async () => status,
+        pushRegistration: async () => ({ transport: "apns", token: "ab".repeat(32), key: "A".repeat(43), environment: "sandbox" }),
+        configure: async () => ({}),
+        takeOpened: async () => ({}),
+        sharedFiles: async () => ({ files: files.filter((f) => !fake.discarded.includes(f.id)) }),
+        discardShared: async ({ id }) => void fake.discarded.push(id),
+        readShared: async ({ offset, length }) => (fake.reads++, { data: btoa(bytes.slice(offset, offset + length)) }),
+        addListener: on(),
+      },
+      SystemBars: { setStyle: async () => {} },
+      App: { getInfo: async () => ({ version: "1.0", build: "999" }), getLaunchUrl: async () => ({}), addListener: on() },
+    };
+    window.Capacitor = {
+      isNativePlatform: () => true,
+      nativePromise: (plugin, method, options) =>
+        method === "addListener" || !plugins[plugin]?.[method]
+          ? Promise.reject(Object.assign(new Error(`${plugin}.${method} not implemented`), { code: "UNIMPLEMENTED" }))
+          : Promise.resolve(plugins[plugin][method](options)),
+      addListener: () => ({ remove() {} }),
+    };
+  }, [info.session, shared]);
+  const ios = await iphone.newPage();
+  ios.on("pageerror", (e) => errors.push(`iphone: ${e}`));
+  await ios.goto(`${origin}/__test/login?email=dana@example.com&sub=dana-sub&to=/`);
+  const fromShare = await ios.waitForSelector("#tr-feed .tr-file.openable .msg-title:text-is('voice-note.ogg')", { timeout: 240000 }).catch(() => null);
+  await ios.waitForFunction(() => window.__fake.discarded.length > 0, null, { timeout: 10000 }).catch(() => null);
+  const iosFake = await ios.evaluate(() => window.__fake);
+  await ios.screenshot({ path: path.join(OUT, "bt-11-iphone-shared.png") });
+  check("on iPhone, a recording shared with transcribing on the device only is transcribed in the page, into My files, and let go",
+    Boolean(fromShare) && iosFake.reads > 0 && iosFake.discarded.includes("share-1"), JSON.stringify(iosFake));
+  await iphone.close();
+  await server("/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ localOnly: false }) });
 
   // --- deleting the account: this server forgets it too, and the browser is signed out here
   const deletedHere = await server("/account/delete", { method: "POST" });

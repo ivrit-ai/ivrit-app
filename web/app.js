@@ -1472,7 +1472,12 @@ async function takeShared() {
   // until then they wait, kept on the phone.
   const transcribing = await transcribeApi.boot().catch(() => null);
   if (transcribing?.localOnly) {
-    // Older app builds cannot transcribe on the phone: the files wait.
+    // The iPhone's app cannot transcribe them itself: the page does, reading them
+    // from it, while the app is open. Older app builds cannot do either: they wait.
+    if (!canTranscribeOnPhone() && nativeStatus?.features?.includes("readShared")) {
+      transcribeSharedHere(files);
+      return;
+    }
     if (!canTranscribeOnPhone()) return toast(t("localSharedWaiting"));
     for (const file of files) {
       await shell.ivrit.transcribeShared({ id: file.key, folder: "", saveAudio: true, origin: file.origin || "app" }).catch(() => {});
@@ -1501,6 +1506,30 @@ async function takeShared() {
 // Longer than a clip: transcribed as a file, with speakers, into My files (the
 // Transcribe view), which needs Drive. Uploaded natively in the background. True
 // when the Transcribe view is what the user should see now.
+// Shared recordings, read from the phone in pieces and transcribed in the page,
+// one at a time, into My files; each leaves the phone once saved. Not awaited by
+// the app's start: a long one takes a while.
+const SHARED_PIECE = 4 << 20;
+async function transcribeSharedHere(files) {
+  showView("transcribe");
+  if (!(await showFiles())) return;
+  for (const file of files) {
+    const parts = [];
+    try {
+      for (let offset = 0; ; offset += SHARED_PIECE) {
+        const { data } = await shell.ivrit.readShared({ id: file.key, offset, length: SHARED_PIECE });
+        const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+        parts.push(bytes);
+        if (bytes.length < SHARED_PIECE) break;
+      }
+    } catch {
+      continue;
+    }
+    const audio = new File(parts, file.name, { type: file.type || "audio/mp4" });
+    if (await transcription.transcribeHere(audio, { origin: file.origin || "app" })) await discardShared(file.key).catch(() => {});
+  }
+}
+
 async function sendToFiles(files) {
   if (!shell) {
     for (const file of files) await refuseShared(file);

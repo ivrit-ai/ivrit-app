@@ -51,6 +51,15 @@
       .note-body { font-size: 27px; line-height: 1.42; color: #303036; margin-top: 4px; }
       .note-pic { width: 76px; height: 76px; border-radius: 50%; object-fit: cover; grid-row: 2 / span 2; grid-column: 2; }
       .note-text { grid-row: 2; grid-column: 1; }
+
+      /* The App Store's, 1290×2796 (?device=iphone): the iPhone's taller screen. */
+      html.iphone, html.iphone body { width: 1290px; height: 2796px; }
+      html.iphone .caption { top: 150px; inset-inline: 90px; }
+      html.iphone h1 { font-size: 92px; }
+      html.iphone p { font-size: 44px; margin-top: 26px; }
+      html.iphone .phone { top: 620px; width: 944px; height: 1997px; padding: 22px; border-radius: 120px; }
+      html.iphone .screen { width: 900px; height: 1953px; border-radius: 100px; }
+      html.iphone .screen > img { width: 900px; height: 1953px; }
     </style>
   </head>
   <body>
@@ -58,6 +67,7 @@
     <div class="phone"><div class="screen" id="screen"></div></div>
     <script>
       const q = new URLSearchParams(location.search);
+      if (q.get("device") === "iphone") document.documentElement.classList.add("iphone");
       document.getElementById("title").textContent = q.get("title");
       document.getElementById("sub").textContent = q.get("sub");
       const screen = document.getElementById("screen");

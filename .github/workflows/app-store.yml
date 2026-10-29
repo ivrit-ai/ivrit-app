@@ -1,0 +1,33 @@
+# The App Store release (scripts/app-store.py), with the App Store Connect key in
+# this repository's secrets: "status" reads, "prepare" fills the version in,
+# "submit" sends it to App Review.
+name: App Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "status, prepare or submit"
+        type: choice
+        options: [status, prepare, submit]
+        default: status
+
+jobs:
+  app-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pyjwt cryptography
+      - name: ${{ inputs.command }}
+        env:
+          ASC_KEY: ${{ secrets.ASC_KEY }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          export ASC_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s\n' "$ASC_KEY" > "$ASC_KEY_PATH"
+          python scripts/app-store.py ${{ inputs.command }}

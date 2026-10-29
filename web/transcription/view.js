@@ -1015,6 +1015,15 @@ async function sendLocally(file, options, id) {
   }
 }
 
+// A file from outside the page, transcribed here on the device into My files (at
+// the top): a recording shared into an app that cannot transcribe it itself (the
+// iPhone's). True once it is saved.
+export async function transcribeHere(file, { saveAudio = true, origin = "app" } = {}) {
+  const saved = await sendLocally(file, { folder: null, saveAudio, origin, language: local.LANGUAGE }, `here-${crypto.randomUUID()}`);
+  if (saved) await refresh();
+  return saved;
+}
+
 // ------------------------------------------------------------------ screens
 
 // Back to a folder's list (the one shown, unless named), as from a transcript.

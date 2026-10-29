@@ -1,0 +1,32 @@
+{
+  "about": "The App Store listing's texts (store/app-store.md, as data), which scripts/app-store.py sets in App Store Connect. Locales as App Store Connect names them.",
+  "bundleId": "ai.ivrit",
+  "primaryCategory": "PRODUCTIVITY",
+  "secondaryCategory": "UTILITIES",
+  "copyright": "© 2026 ivrit.ai",
+  "screenshots": "store/iphone",
+  "screenshotDisplayType": "APP_IPHONE_67",
+  "reviewNotes": "ivrit.ai transcribes Hebrew audio. To try it:\n1. Without signing in: the \"Live\" tab transcribes speech as it is spoken, on the phone itself.\n2. Sign in with Google with the test account given here.\n3. \"Transcribe\" tab: upload a file or record a few seconds. The transcript appears in My files (kept in the account's Google Drive).\n4. Share an audio file from Files or Voice Memos to \"ivrit.ai\": it is transcribed and appears in My files.\n5. Settings → \"Send a test notification\".\n\nSign in with Apple is not offered: the account exists to reach the user's transcripts in their own Google Drive (guideline 4.8's exception for an account that accesses content on that service).\nAccount deletion: Settings → Delete account.",
+  "locales": {
+    "he": {
+      "name": "ivrit.ai",
+      "subtitle": "תמלול עברית, גם במכשיר",
+      "privacyPolicyUrl": "https://app.ivrit.ai/privacy",
+      "supportUrl": "https://app.ivrit.ai/",
+      "marketingUrl": "https://www.ivrit.ai/",
+      "keywords": "תמלול,עברית,הקלטה,וואטסאפ,הודעה קולית,כתוביות,דיבור לטקסט,תמלול חי,אליעזר",
+      "promotionalText": "תמלול עברית מדויק – חי, מקבצים ומהודעות קוליות בוואטסאפ. נשמר ב-Drive שלכם, עם חיפוש בכל מילה.",
+      "description": "ivrit.ai מתמללת עברית: הקלטות, הודעות קוליות מוואטסאפ, הרצאות, פגישות וראיונות.\n\n• תמלול חי, תוך כדי דיבור, על הטלפון עצמו – גם בלי חשבון.\n• העלו או הקליטו קבצים ארוכים: תמלול מדויק עם זיהוי דוברים, או בטלפון עצמו, בלי שהשמע יוצא ממנו.\n• הכול נשמר ב-Google Drive שלכם, בתיקיות, עם חיפוש בכל מילה שנאמרה.\n• עריכה, האזנה וייצוא ל-Word, ‏SRT, ‏VTT ו-JSON.\n• שתפו הודעה קולית מוואטסאפ ל-ivrit.ai, וקבלו את התמלול.\n• התראות מהשירותים של ivrit.ai, כמו אליעזר – בוט התמלול בוואטסאפ ובטלגרם – מוצפנות עד המכשיר.\n\nivrit.ai הוא מיזם ללא מטרות רווח לקידום טכנולוגיית דיבור בעברית. בלי פרסומות."
+    },
+    "en-US": {
+      "name": "ivrit.ai",
+      "subtitle": "Hebrew transcription",
+      "privacyPolicyUrl": "https://app.ivrit.ai/privacy",
+      "supportUrl": "https://app.ivrit.ai/",
+      "marketingUrl": "https://www.ivrit.ai/",
+      "keywords": "transcription,hebrew,whatsapp,voice message,speech to text,subtitles,srt,recording,live",
+      "promotionalText": "Accurate Hebrew transcription – live, from files and from WhatsApp voice messages. Kept in your Drive, with search across every word.",
+      "description": "ivrit.ai transcribes Hebrew: recordings, WhatsApp voice messages, lectures, meetings and interviews.\n\n• Live transcription as you speak, on the phone itself – even without an account.\n• Upload or record long files: accurate transcripts with speakers told apart, or on the phone itself, without the audio leaving it.\n• Everything is kept in your own Google Drive, in folders, with search across every word said.\n• Edit, listen, and export to Word, SRT, VTT and JSON.\n• Share a WhatsApp voice message to ivrit.ai and get the transcript.\n• Notifications from ivrit.ai's services, such as Eliezer – the transcription bot on WhatsApp and Telegram – encrypted all the way to your phone.\n\nivrit.ai is a non-profit project advancing Hebrew speech technology. No ads."
+    }
+  }
+}
