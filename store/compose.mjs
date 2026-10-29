@@ -1,6 +1,6 @@
 // Turns the captured screens into Play's listing graphics:
 //
-//   phone/01-…png … 06-…png   1080×1920 screenshots, captioned, in a phone
+//   phone/01-…png … 07-…png   1080×1920 screenshots, captioned, in a phone
 //   feature-graphic.png        1024×500
 //
 // Both without transparency, as Play requires. Run capture.mjs first.
@@ -16,12 +16,13 @@ mkdirSync(path.join(HERE, "phone"), { recursive: true });
 
 // Hebrew, the listing's language. Each says one thing the app does.
 const SCREENS = [
-  { file: "01-inbox", shot: "inbox", title: "התמלולים של אליעזר, ישר לטלפון", sub: "ההודעות הקוליות שלכם מוואטסאפ, כטקסט" },
-  { file: "02-notification", shot: "notification", title: "קופצות על המסך, גם כשהאפליקציה סגורה", sub: "כל תמלול מגיע כהתראה, ברגע שהוא מוכן" },
-  { file: "03-link", shot: "link", title: "מקשרים בקוד אחד", sub: "שולחים לאליעזר קוד קצר, וזהו. בלי סיסמה" },
-  { file: "04-share", shot: "share", title: "משתפים הקלטה, ומתמללים", sub: "הודעות קוליות והקלטות, ישר ל-transcribe.ivrit.ai" },
-  { file: "05-settings", shot: "settings", title: "יודעת כשההתראות לא קופצות", sub: "ומראה בדיוק איפה מתקנים" },
-  { file: "06-dark", shot: "inbox-dark", title: "גם במצב כהה", sub: "בעברית ובאנגלית, בהיר וכהה" },
+  { file: "01-files", shot: "files", title: "כל התמלולים שלכם, בתיקיות", sub: "שמורים ב-Google Drive שלכם, ובכל מכשיר" },
+  { file: "02-reader", shot: "reader", title: "תמלול מדויק בעברית, עם דוברים", sub: "מאזינים, עורכים, ומייצאים ל-Word או לכתוביות" },
+  { file: "03-live", shot: "live", title: "תמלול חי, תוך כדי דיבור", sub: "על הטלפון עצמו, גם בלי חשבון" },
+  { file: "04-search", shot: "search", title: "מוצאים כל מילה שנאמרה", sub: "חיפוש בכל התמלולים וההודעות" },
+  { file: "05-inbox", shot: "inbox", title: "ההודעות הקוליות מוואטסאפ, כטקסט", sub: "שולחים לאליעזר, והתמלול מגיע לכאן" },
+  { file: "06-notification", shot: "notification", title: "קופצות על המסך, גם כשהאפליקציה סגורה", sub: "כל תמלול מגיע כהתראה, ברגע שהוא מוכן" },
+  { file: "07-dark", shot: "files-dark", title: "גם במצב כהה", sub: "בעברית, באנגלית וביידיש, בהיר או כהה" },
 ];
 
 // The app's status-bar icon, white, for the lock-screen mock-up.

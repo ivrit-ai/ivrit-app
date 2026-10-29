@@ -5,6 +5,10 @@ Prints one JSON line, then runs until killed.
     python server_stack.py <app port> <communicator origin>
 """
 import json, os, subprocess, sys, tempfile, threading, time
+import signal
+# Stopped by the test with SIGTERM: as an exit, so the finally below stops the
+# hub, the app server and the database rather than leaving them running.
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
