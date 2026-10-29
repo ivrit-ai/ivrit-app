@@ -19,6 +19,7 @@
     <string name="local_failed">Transcribing on the phone did not work</string>
     <string name="local_drive_full">Your Google Drive is full, so the transcript could not be saved. Free up space and try again.</string>
     <string name="local_drive_full_kept">Your Google Drive is full: the text is saved in the phone’s Downloads instead.</string>
-    <string name="notifications_work_title">Notifications work now</string>
-    <string name="notifications_work_text">Transcripts and messages now pop up on this phone as they arrive. Open the app to finish turning them on.</string>
+    <!-- In Hebrew on every phone: the users this apology is for read Hebrew. -->
+    <string name="notifications_work_title">ההתראות עובדות שוב</string>
+    <string name="notifications_work_text">סליחה על התקלה: התראות על הודעות ותמלולים לא הגיעו לטלפון. עכשיו הן עובדות שוב. פתחו את האפליקציה כדי להשלים את ההפעלה.</string>
 </resources>
