@@ -257,10 +257,10 @@ def prepare() -> None:
     rating = soft("age rating", lambda: call("GET", f"/appInfos/{info['id']}/ageRatingDeclaration"))
     if rating and rating.get("data"):
         # Each question: no (a yes/no one), or none at all (a how-much one). The
-        # overrides and the kids' band are not questions.
+        # overrides, the kids' band, links and rating numbers are not questions.
         skip = {"kidsAgeBand", "ageRatingOverride", "ageRatingOverrideV2", "koreaAgeRatingOverride"}
         none = {k: False if isinstance(v, bool) else "NONE" for k, v in rating["data"]["attributes"].items()
-                if k not in skip and not k.lower().endswith("url") and (isinstance(v, (bool, str)) or v is None)}
+                if k not in skip and not re.search(r"url$|override|classificationnumber", k.lower()) and (isinstance(v, (bool, str)) or v is None)}
         # A question never answered reads as null, yes/no or not: Apple's refusal
         # says which are yes/no, and those become no.
         for _ in range(3):
