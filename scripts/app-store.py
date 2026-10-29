@@ -23,6 +23,7 @@ Needs ASC_KEY_PATH, ASC_KEY_ID, ASC_ISSUER_ID, and pyjwt and cryptography.
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -260,8 +261,21 @@ def prepare() -> None:
         skip = {"kidsAgeBand", "ageRatingOverride", "ageRatingOverrideV2", "koreaAgeRatingOverride"}
         none = {k: False if isinstance(v, bool) else "NONE" for k, v in rating["data"]["attributes"].items()
                 if k not in skip and (isinstance(v, (bool, str)) or v is None)}
-        soft("age rating", lambda: call("PATCH", f"/ageRatingDeclarations/{rating['data']['id']}", {"data": {
-            "type": "ageRatingDeclarations", "id": rating["data"]["id"], "attributes": none}}))
+        # A question never answered reads as null, yes/no or not: Apple's refusal
+        # says which are yes/no, and those become no.
+        for _ in range(3):
+            try:
+                call("PATCH", f"/ageRatingDeclarations/{rating['data']['id']}", {"data": {
+                    "type": "ageRatingDeclarations", "id": rating["data"]["id"], "attributes": none}})
+                print("  age rating: 4+")
+                break
+            except Refused as e:
+                booleans = re.findall(r"attribute '(\w+)'\. Expected a BOOLEAN", str(e))
+                if not booleans:
+                    problems.append(f"age rating: {e}")
+                    print(f"  ! age rating: {e}")
+                    break
+                none.update({k: False for k in booleans})
 
     free_everywhere(app_id)
     everywhere(app_id)
