@@ -28,3 +28,11 @@
 # sherpa-onnx's native code reads its config classes' fields and builds its
 # result class by name.
 -keep class com.k2fsa.sherpa.onnx.** { *; }
+
+# Capacitor reads its plugins' @CapacitorPlugin annotation once, in PluginHandle,
+# and keeps it in a field for every permission check. R8 dropped that field's
+# write and folded the reads to null, so every permission was "missing": the
+# notification status always "default" and asking for it did nothing at all.
+# Its core is small and works by reflection throughout: kept whole.
+-keep class com.getcapacitor.** { *; }
+-keep @interface com.getcapacitor.annotation.** { *; }
