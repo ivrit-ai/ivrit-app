@@ -15,4 +15,6 @@
     <string name="local_failed">התמלול בטלפון לא הצליח</string>
     <string name="local_drive_full">ה-Google Drive שלך מלא, ולכן לא ניתן היה לשמור את התמלול. פנו מקום ונסו שוב.</string>
     <string name="local_drive_full_kept">ה-Google Drive שלך מלא: הטקסט נשמר במקום זאת בתיקיית ההורדות בטלפון.</string>
+    <string name="notifications_work_title">ההתראות עובדות עכשיו</string>
+    <string name="notifications_work_text">תמלולים והודעות יקפצו עכשיו בטלפון הזה כשהם מגיעים. פתחו את האפליקציה כדי להשלים את ההפעלה.</string>
 </resources>

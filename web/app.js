@@ -335,18 +335,13 @@ async function enableNotifications({ unasked = false } = {}) {
   if (notify.permission() === "denied") return "denied";
   if (notify.permission() !== "granted") {
     const asked = Date.now();
-    const answer = notify.request().catch((err) => `error: ${err?.message || err}`);
-    // A phone that will not ask may answer at once, or never: either way, with
-    // no dialog over the page (it still has the focus), its settings are where
-    // notifications are turned on. A dialog that is up is waited for.
-    const permission = await Promise.race([
-      answer,
-      new Promise((resolve) => setTimeout(() => resolve(document.hasFocus() ? "unanswered" : answer), 1500)),
-    ]);
-    report("ask", { permission, ms: Date.now() - asked, focus: document.hasFocus() });
+    const permission = await notify.request().catch((err) => `error: ${err?.message || err}`);
+    report("ask", { permission, ms: Date.now() - asked });
     if (permission === "denied") return "denied";
     if (permission !== "granted") {
-      if ((permission === "unanswered" || Date.now() - asked < 700) && !unasked) {
+      // Answered at once, no dialog shown: the phone will not ask (it was
+      // turned down before), so its settings are where they are turned on.
+      if (Date.now() - asked < 700 && !unasked) {
         state.inNotificationSettings = true;
         shell.ivrit.openNotificationSettings().catch(() => {});
         return "settings";
@@ -380,6 +375,32 @@ async function askNotificationsOnce() {
   }
   await enableNotifications({ unasked: true });
   if (state.view === "settings") renderPermission();
+}
+
+// The Android app could not ask for notifications before build 234 (R8 had
+// broken Capacitor's permission lookup). Opened updated, by someone it asked
+// then in vain: once, say they work now, and ask.
+const ASKS_FROM_BUILD = 234;
+async function announceNotifications() {
+  if (!shell || nativeStatus?.platform !== "android" || !state.me) return false;
+  try {
+    if (!localStorage.getItem("notify_asked") || localStorage.getItem("notify_announced")) return false;
+  } catch {
+    return false;
+  }
+  const info = await withTimeout(shell.app.getInfo().catch(() => null), 2000, null);
+  if (!(Number(info?.build) >= ASKS_FROM_BUILD)) return false;
+  localStorage.setItem("notify_announced", "1");
+  if (notify.permission() === "granted") {
+    // Allowed in the phone's settings meanwhile: only this device's registration was missing.
+    await enableNotifications();
+    return false;
+  }
+  if (notify.permission() !== "default") return false;
+  if (!(await ask(t("notifyNowWork"), { ok: t("enable") }))) return true;
+  await enableNotifications();
+  if (state.view === "settings") renderPermission();
+  return true;
 }
 
 // ---------------------------------------------------------------- notification trouble
@@ -2446,7 +2467,7 @@ async function start() {
   // A transcript's link (a notification, or a link from transcribe.ivrit.ai).
   if (new URLSearchParams(location.search).has("results")) showView("transcribe");
   reconcile();
-  askClips();
+  if (!(await announceNotifications())) askClips();
 }
 
 start();

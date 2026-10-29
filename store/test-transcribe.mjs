@@ -683,8 +683,6 @@ try {
         notificationStatus: async () => fake.status,
         requestPermission: async () => {
           fake.asked++;
-          // Or never answers at all.
-          if (fake.hang) return new Promise(() => {});
           // A phone that will no longer ask answers at once, nothing granted.
           if (!fake.wontAsk) fake.status = { ...fake.status, permission: "granted" };
           return fake.status;
@@ -802,20 +800,21 @@ try {
   const allowed = await app.evaluate(() => ({ registrations: window.__fake.registrations || 0, enable: document.getElementById("enable").hidden }));
   check("when the phone will not ask, Enable opens its notification settings; allowed there, back in the app this phone is registered",
     sentToSettings === 2 && allowed.registrations > registeredBefore && allowed.enable, JSON.stringify([sentToSettings, registeredBefore, allowed]));
-  await app.evaluate(() => {
-    window.__fake.status = { ...window.__fake.status, permission: "default" };
-    window.__fake.hang = true;
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  await app.waitForSelector("#enable:not([hidden])", { timeout: 8000 }).catch(() => null);
-  await app.click("#enable", { timeout: 5000 }).catch(() => null);
-  await app.waitForFunction(() => window.__fake.settings === 3, null, { timeout: 6000 }).catch(() => null);
-  check("...and when it never answers, the same", (await fake(() => window.__fake.settings)) === 3, String(await fake(() => window.__fake.settings)));
-  await app.evaluate(() => {
-    window.__fake.status = { ...window.__fake.status, permission: "granted" };
-    window.__fake.hang = false;
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
+
+  // Opened updated (asked before, in vain, by an app that could not ask): once,
+  // a word that notifications work now, and the phone's question.
+  await app.reload();
+  await app.waitForSelector("#confirm[open]", { timeout: 15000 }).catch(() => null);
+  const announced = await app.locator("#confirm-text").textContent().catch(() => "");
+  const askedBefore = await fake(() => window.__fake.asked);
+  await app.click("#confirm-ok", { timeout: 5000 }).catch(() => null);
+  await app.waitForFunction(() => (window.__fake.registrations || 0) > 0, null, { timeout: 8000 }).catch(() => null);
+  const afterAnnounce = await fake(() => [window.__fake.asked, window.__fake.registrations || 0]);
+  await app.reload();
+  await app.waitForTimeout(2500);
+  const announcedAgain = await app.locator("#confirm[open]").count();
+  check("updated, the app says once that notifications work now, and asks", announced.includes("ההתראות עובדות עכשיו")
+    && afterAnnounce[0] === askedBefore + 1 && afterAnnounce[1] > 0 && announcedAgain === 0, JSON.stringify([announced, askedBefore, afterAnnounce, announcedAgain]));
 
   // (A new address, not only a new #: the page loads again.)
   await app.goto(`${origin}/?phone=1#t/${ready?.results_id}`);

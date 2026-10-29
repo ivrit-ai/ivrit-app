@@ -114,6 +114,31 @@ final class Notifications {
         }
     }
 
+    /** Once, after the update that made asking for notifications work (UpdatedReceiver): opens the app. */
+    static void showNotificationsWork(Context context) {
+        if (!allowed(context)) return;
+        ensureChannel(context);
+        Intent intent = new Intent(context, MainActivity.class)
+            .setAction(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_LAUNCHER)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        String text = context.getString(R.string.notifications_work_text);
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_ivrit)
+            .setContentTitle(context.getString(R.string.notifications_work_title))
+            .setContentText(text)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(PendingIntent.getActivity(
+                context, "notifications-work".hashCode(), intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+        try {
+            NotificationManagerCompat.from(context).notify("notifications-work".hashCode(), builder.build());
+        } catch (SecurityException ignored) {
+            // Permission withdrawn between the check and here.
+        }
+    }
+
     // --- transcribing on the phone (LocalTranscribeWorker) -----------------------
 
     static final String WORK_CHANNEL = "work";
