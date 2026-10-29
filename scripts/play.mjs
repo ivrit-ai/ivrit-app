@@ -14,7 +14,24 @@
 // The key is ~/keys/ivrit-app-play-publisher.json, or PLAY_SERVICE_ACCOUNT.
 import { createSign } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { request as httpsRequest } from "node:https";
 import { homedir } from "node:os";
+
+// Requests over IPv4 and without a deadline for Play's answer: fetch gives a
+// connection 250 ms per address (then IPv6, unreachable from some networks) and
+// a reply 300 s, and a bundle's upload and processing on a slow line take longer.
+function send(method, url, { headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = httpsRequest(url, { method, headers: body ? { ...headers, "content-length": Buffer.byteLength(body) } : headers, family: 4 }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, text: Buffer.concat(chunks).toString("utf8") }));
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
 
 const PACKAGE = JSON.parse(readFileSync(new URL("../shared/app.json", import.meta.url))).packageId;
 const API = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${PACKAGE}`;
@@ -32,12 +49,12 @@ async function accessToken() {
     exp: now + 3600,
   })}`;
   const assertion = `${unsigned}.${createSign("RSA-SHA256").update(unsigned).sign(account.private_key, "base64url")}`;
-  const res = await fetch(account.token_uri, {
-    method: "POST",
-    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion }),
+  const res = await send("POST", account.token_uri, {
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion }).toString(),
   });
-  if (!res.ok) throw new Error(`token: ${res.status} ${await res.text()}`);
-  return (await res.json()).access_token;
+  if (!res.ok) throw new Error(`token: ${res.status} ${res.text}`);
+  return JSON.parse(res.text).access_token;
 }
 
 const token = await accessToken();
@@ -45,8 +62,8 @@ async function call(method, url, { json, body, type } = {}) {
   const headers = { authorization: `Bearer ${token}` };
   if (json) headers["content-type"] = "application/json";
   if (type) headers["content-type"] = type;
-  const res = await fetch(url, { method, headers, body: json ? JSON.stringify(json) : body });
-  const text = await res.text();
+  const res = await send(method, url, { headers, body: json ? JSON.stringify(json) : body });
+  const { text } = res;
   if (!res.ok) throw new Error(`${method} ${url.replace(/\?.*/, "")}: ${res.status} ${text.slice(0, 600)}`);
   return text ? JSON.parse(text) : null;
 }
