@@ -1643,6 +1643,8 @@ const transcriptionHost = {
   // In the app: hand a file to the phone, which transcribes it in the background.
   transcribeOnPhone: (file, options, onHanded) => (canTranscribeOnPhone() ? transcribeOnPhone(file, options, onHanded) : null),
   canTranscribeOnPhone: () => canTranscribeOnPhone(),
+  // The account's own RunPod key, as the server holds it: {has_key, load_failed}.
+  runpodKey: () => transcription.runpodKey(),
   // The app's permissions page, where a refused microphone is allowed again.
   saveFile,
   // The microphone is the Live tab's while it transcribes.

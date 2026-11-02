@@ -49,7 +49,7 @@ function ago(ms) {
 
 function state(w) {
   if (w.paused) return tr("watchPaused");
-  const errors = { signin: "watchErrorSignin", quota: "watchErrorQuota", access: "watchErrorAccess", failed: "watchErrorFailed" };
+  const errors = { signin: "watchErrorSignin", quota: "watchErrorQuota", access: "watchErrorAccess", failed: "watchErrorFailed", errorRunpodKeyUnreadable: "watchErrorRunpodKey" };
   if (w.lastError) return errors[w.lastError] ? tr(errors[w.lastError]) : serverError({ i18n_key: w.lastError }, "watchErrorFailed");
   const parts = [w.lastChecked ? tr("watchChecked", { when: ago(w.lastChecked) }) : tr("watchStarting")];
   if (w.waiting) parts.push(tr("watchWaiting", { n: w.waiting }));
@@ -128,8 +128,15 @@ async function addSheet(existing) {
   ]);
   where.value = existing?.where || "auto";
   const whereField = el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("whereTitle") }), where]);
-  const showWhere = () => (whereField.hidden = !phone || language.value !== "he");
+  // On the servers, the account's own RunPod key is what transcribes, when it has one.
+  const key = host.runpodKey?.() || {};
+  const keyNote = el("p", { class: key.load_failed ? "notice" : "muted", text: key.load_failed ? tr("runpodKeyLoadFailed") : tr("watchOwnKey") });
+  const showWhere = () => {
+    whereField.hidden = !phone || language.value !== "he";
+    keyNote.hidden = !(key.has_key || key.load_failed) || (!whereField.hidden && where.value === "device");
+  };
   language.addEventListener("change", showWhere);
+  where.addEventListener("change", showWhere);
   showWhere();
   const go = el("button", { class: "btn primary", type: "submit", text: existing ? tr("save") : tr("watchChoose") });
   const disclose = !existing && !localStorage.getItem(DISCLOSED);
@@ -137,6 +144,7 @@ async function addSheet(existing) {
     el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("watchInto") }), folder]),
     el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("transcribeLanguage") }), language]),
     whereField,
+    keyNote,
     el("div", { class: "row" }, [
       el("label", { class: "tr-field grow" }, [el("span", { class: "muted", text: tr("watchMinSeconds") }), minSeconds]),
       el("label", { class: "tr-field grow" }, [el("span", { class: "muted", text: tr("watchMaxMinutes") }), maxMinutes]),

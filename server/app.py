@@ -4024,6 +4024,15 @@ async def upload_file(
                 json.dumps({"type": "transcoding_complete", "job_id": earlier, "duplicate": True}) + "\n",
                 media_type="application/x-ndjson")
 
+    # A watched folder's upload while the account's saved RunPod key cannot be read:
+    # refused, so the phone keeps the file and says why, rather than spending the
+    # free time on what the user meant for their own key. 503, which phones from
+    # before this retry later too.
+    session = get_session(request)
+    if origin == "watch" and session and session.get("runpod_key_load_failed"):
+        log_message(f"{user_email}: Watched upload refused: the saved RunPod key cannot be read (job_id={job_id})")
+        return JSONResponse({"error": "errorRunpodKeyUnreadable", "i18n_key": "errorRunpodKeyUnreadable"}, status_code=503)
+
     log_message(f"{user_email}: Validating upload metadata (job_id={job_id}, content_length={content_length})")
     metadata, error_response = await validate_upload_request_metadata(
         request,

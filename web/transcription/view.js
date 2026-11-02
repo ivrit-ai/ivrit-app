@@ -1089,6 +1089,7 @@ export const openResults = (id, inFolder, at) => reader.navigate(id, inFolder, a
 
 // The folder shown in My files (null: the top folder).
 export const currentFolder = () => folder;
+export const runpodKey = () => boot?.runpodKeyStatus || {};
 
 // Recording: the app must not be left (it would cut it off).
 export const capturing = () => recorder.busy();

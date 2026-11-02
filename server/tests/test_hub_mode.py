@@ -79,6 +79,7 @@ class FakeRunPod:
         self.jobs = {}
         self.runs = 0
         self.fetches = []
+        self.submitted = []  # (endpoint, the key it was sent with)
         self.delay = 1.0
         # Too little speech to tell voices apart: a run asked for speakers fails, as RunPod's does.
         self.no_speakers = False
@@ -155,6 +156,7 @@ class RunPodHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
         if parts[2] == "run":
+            rp.submitted.append((parts[1], self.headers.get("Authorization", "")))
             return self._send({"id": rp.submit(body), "status": "IN_QUEUE"})
         if parts[2] == "cancel":
             rp.jobs[parts[3]]["status"] = "CANCELLED"
@@ -295,11 +297,12 @@ def main():
 
     data = os.path.join(WORK, "drive")
     tmp = os.path.join(WORK, "tmp")
+    RUNPOD_KEY_KEY = Fernet.generate_key().decode()
     os.makedirs(tmp)
     app_env = dict(
         os.environ, TS_XHOST_MODE="1", DATABASE_URL=app_db, BASE_URL=f"http://127.0.0.1:{app_port}",
         GOOGLE_CLIENT_ID="test-client", GOOGLE_CLIENT_SECRET="test-secret", SESSION_ENCRYPTION_KEY=SESSION_KEY,
-        RUNPOD_API_KEY="rp-key", RUNPOD_ENDPOINT_ID="ep-shared", RUNPOD_KEY_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        RUNPOD_API_KEY="rp-key", RUNPOD_ENDPOINT_ID="ep-shared", RUNPOD_KEY_ENCRYPTION_KEY=RUNPOD_KEY_KEY,
         HUB_URL=f"http://127.0.0.1:{hub_port}", APP_SERVER_TOKEN=TOKEN, HARNESS_DATA=data,
         HARNESS_RUNPOD_URL=f"http://127.0.0.1:{rp_port}", TMPDIR=tmp, APP_SESSION_KEY=APP_SESSION_KEY,
         DOC_REFRESH_DELAY_SECONDS="0.3",
@@ -509,6 +512,27 @@ def main():
         if w:
             doc = wait_until(lambda: (search_shard(api, "ada@example.com")[0] or {}).get(w["results_id"]), 10)
             check("...in search too", doc and doc.get("origin") == "watch", doc)
+
+        # --- a watched folder with the account's own RunPod key: that key, its own lane;
+        # a saved key that cannot be read refuses the upload (503), rather than the free time
+        key_file = os.path.join(ada, "runpod_key.enc")
+        with open(key_file, "wb") as f:
+            f.write(b"not a fernet token")
+        status, events, raw = api.upload(None, make_audio("own-key.ogg", 12), "own-key.ogg", token=ada_token,
+                                         extra=(("origin", "watch"), ("upload_id", "watch-" + uuid.uuid4().hex)))
+        check("a watched upload while the saved RunPod key cannot be read is refused, saying so",
+              status == 503 and b"errorRunpodKeyUnreadable" in raw, (status, raw[:200]))
+        with open(key_file, "wb") as f:
+            f.write(Fernet(RUNPOD_KEY_KEY).encrypt(b"rp-ada-own"))
+        status, events, raw = api.upload(None, make_audio("own-key.ogg", 12), "own-key.ogg", token=ada_token,
+                                         extra=(("origin", "watch"), ("upload_id", "watch-" + uuid.uuid4().hex)))
+        own_job = next((e.get("job_id") for e in events if e.get("type") == "transcoding_complete"), None)
+        lane = wait_until(lambda: (hubq.execute("SELECT lane FROM credit_jobs WHERE job_id = %s", (own_job,)).fetchone() or [None])[0], 10)
+        check("...and with a readable key, it runs in the own-key lane", status == 200 and lane == "byok", (status, lane, raw[:200]))
+        own = wait_until(lambda: ready(api, "ada@example.com", "own-key.ogg"), 60)
+        check("...and is transcribed, on the user's own endpoint with their key", bool(own)
+              and any(endpoint == "ep-own" and "rp-ada-own" in auth for endpoint, auth in rp.submitted), (own, rp.submitted[-3:]))
+        os.remove(key_file)
 
         # --- too little speech to tell the speakers apart: the words, without speakers
         rp.no_speakers = True

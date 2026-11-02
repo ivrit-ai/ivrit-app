@@ -147,7 +147,13 @@ public class WatchUploadWorker extends Worker {
             }
             int status = connection.getResponseCode();
             if (status == 401) return lookAgainLater(context, watchId, docId, "signin");
-            if (status == 429 || status >= 500) return retry(context, watchId, docId);
+            if (status >= 500) {
+                // The saved RunPod key cannot be read: wait (the file kept) and say so.
+                String why = readError(connection.getErrorStream());
+                if (why != null && why.contains("RunpodKey")) return lookAgainLater(context, watchId, docId, why);
+                return retry(context, watchId, docId);
+            }
+            if (status == 429) return retry(context, watchId, docId);
             if (status != 200) return refused(context, watchId, docId, readError(connection.getErrorStream()));
             // The server answers as it goes: transcoding, then queued (or why not).
             String error = null;

@@ -1,6 +1,7 @@
 """Runs the server for test_hub_mode.py: the real app, with two things swapped out -
 Google Drive becomes a local directory (HARNESS_DATA, one folder per refresh token),
-and RunPod's API is HARNESS_RUNPOD_URL (the test's fake). Everything else - sessions,
+and RunPod's API is HARNESS_RUNPOD_URL (the test's fake), a user's own endpoint
+taken as ready. Everything else - sessions,
 uploads, transcoding, the hub, signed media links, Drive writes - runs for real.
 
     python tests/hub_harness.py <port>
@@ -37,6 +38,19 @@ from local_file_utils import LocalFileStorageBackend  # noqa: E402
 app.file_storage_backend = LocalFileStorageBackend(base_dir=os.environ["HARNESS_DATA"])
 app.clips_storage_backend = LocalFileStorageBackend(base_dir=os.path.join(os.environ["HARNESS_DATA"], "clips"))
 app.runpod_key_store.backend = app.file_storage_backend
+
+
+# A user's own RunPod key: its endpoint taken as ready (RunPod's endpoint API is not faked).
+async def _own_endpoint(runpod_token):
+    return {"success": True, "action": "up_to_date", "endpoint_id": "ep-own", "endpoint_name": "ivrit-ai", "needs_wait": False}
+
+
+async def _find_own_endpoint(runpod_token):
+    return {"id": "ep-own", "name": "ivrit-ai"}
+
+
+app.check_runpod_endpoint = _own_endpoint
+app.find_runpod_endpoint = _find_own_endpoint
 
 # For browser tests: sign this browser in as the server's sign-in would (no Google).
 if os.environ.get("HARNESS_TEST_LOGIN"):
