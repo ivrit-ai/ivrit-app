@@ -108,6 +108,16 @@ async function addSheet(existing) {
   const minSeconds = el("input", { class: "tr-input", type: "number", min: 0, max: 3600, value: existing?.minSeconds ?? 5, dir: "ltr" });
   const maxMinutes = el("input", { class: "tr-input", type: "number", min: 0, max: 1200, value: existing ? Math.round((existing.maxSeconds || 0) / 60) : 0, dir: "ltr" });
   const wifi = el("input", { type: "checkbox", checked: existing?.wifiOnly ?? false });
+  // The recordings already there: none (only new ones, the default), or back to a
+  // week, a month, or all of them. On a watch already made, "none" leaves it as is.
+  const backfill = el("select", { class: "tr-select", "aria-label": tr("watchBackfill") }, [
+    el("option", { value: "", text: tr("watchBackfillNone") }),
+    el("option", { value: "7", text: tr("watchBackfillWeek") }),
+    el("option", { value: "30", text: tr("watchBackfillMonth") }),
+    el("option", { value: "all", text: tr("watchBackfillAll") }),
+  ]);
+  const backfillNote = el("p", { class: "muted", text: tr("watchBackfillNote"), hidden: true });
+  backfill.addEventListener("change", () => (backfillNote.hidden = !backfill.value));
   // Where its files are transcribed (Hebrew, where the phone can): the servers, the
   // phone, or the servers until the free time runs out, then the phone.
   const phone = Boolean(host.canTranscribeOnPhone?.());
@@ -131,6 +141,8 @@ async function addSheet(existing) {
       el("label", { class: "tr-field grow" }, [el("span", { class: "muted", text: tr("watchMinSeconds") }), minSeconds]),
       el("label", { class: "tr-field grow" }, [el("span", { class: "muted", text: tr("watchMaxMinutes") }), maxMinutes]),
     ]),
+    el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("watchBackfill") }), backfill]),
+    backfillNote,
     el("label", { class: "tr-check" }, [wifi, el("span", { text: tr("watchWifiOnly") })]),
     disclose ? el("p", { class: "notice", text: tr("watchDisclosure") }) : null,
     el("div", { class: "row end" }, [go]),
@@ -145,6 +157,8 @@ async function addSheet(existing) {
       maxSeconds: Math.max(0, Number(maxMinutes.value) || 0) * 60,
       wifiOnly: wifi.checked,
       ...(phone ? { where: where.value } : {}),
+      // Files changed after this are taken (ms; 0: all of them).
+      ...(backfill.value ? { since: backfill.value === "all" ? 0 : Date.now() - Number(backfill.value) * 86400000 } : {}),
     };
     go.disabled = true;
     try {

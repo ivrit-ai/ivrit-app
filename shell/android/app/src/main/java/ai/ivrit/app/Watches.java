@@ -51,7 +51,9 @@ final class Watches {
         int maxSeconds = 0; // 0: no limit
         boolean wifiOnly;
         boolean paused;
-        long since; // only files modified after this (ms): never the folder's old files
+        // Only files modified after this (ms): when the folder was chosen, or earlier
+        // when the user asked for the recordings already there too (0: all of them).
+        long since = -1;
         long lastChecked;
         long quotaUntil; // the free quota ran out: waiting until then (ms)
         String lastError = "";
@@ -157,7 +159,7 @@ final class Watches {
 
     static synchronized Watch add(Context context, Watch w) {
         w.id = UUID.randomUUID().toString();
-        w.since = System.currentTimeMillis();
+        if (w.since < 0) w.since = System.currentTimeMillis();
         List<Watch> watches = all(context);
         watches.add(w);
         save(context, watches);

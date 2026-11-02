@@ -208,7 +208,8 @@
         "minSeconds": "number",
         "maxSeconds": "number (0: none)",
         "wifiOnly": "boolean",
-        "where": "\"server\" | \"device\" | \"auto\" (server until the free time runs out, then the phone; the default)"
+        "where": "\"server\" | \"device\" | \"auto\" (server until the free time runs out, then the phone; the default)",
+        "since": "number, optional: ms; recordings already in the folder that changed after this are transcribed too (0: all of them). Left out: only new ones (on updateWatch, unchanged)"
       },
       "result": {
         "watch": "{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting, where}"

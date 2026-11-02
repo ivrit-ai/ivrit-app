@@ -413,7 +413,8 @@ public class IvritNativePlugin extends Plugin {
 
     /**
      * Watch a folder: Android's folder picker (the app keeps access to that folder
-     * only), then {folder, folderName, language, minSeconds, maxSeconds, wifiOnly}.
+     * only), then {folder, folderName, language, minSeconds, maxSeconds, wifiOnly, where,
+     * since (ms: the files already there changed after this are taken too; 0, all)}.
      * Resolves with the watch; rejects "cancelled" if no folder was chosen.
      */
     @PluginMethod
@@ -467,6 +468,7 @@ public class IvritNativePlugin extends Plugin {
         if (call.hasOption("wifiOnly")) w.wifiOnly = Boolean.TRUE.equals(call.getBoolean("wifiOnly", false));
         if (call.hasOption("paused")) w.paused = Boolean.TRUE.equals(call.getBoolean("paused", false));
         if (call.hasOption("where")) w.where = Watches.where(call.getString("where", Watches.AUTO));
+        if (call.hasOption("since")) w.since = Math.max(0, call.getDouble("since", 0.0).longValue());
         if (w.folder == null) w.folder = "";
         if (w.folderName == null) w.folderName = "";
     }

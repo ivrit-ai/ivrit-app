@@ -22,8 +22,9 @@ import org.json.JSONObject;
  * Looks through the watched folders (Watches) for new audio, every 15 minutes (the
  * least Android allows) and whenever the app opens. A file is taken once it has
  * stopped changing - a recording still being made is not cut short - and only once:
- * then it goes to WatchUploadWorker. Only files that appeared after the folder was
- * chosen; subfolders a few levels down too (WhatsApp keeps voice notes by week).
+ * then it goes to WatchUploadWorker. Only files that changed after the watch's
+ * "since" (when the folder was chosen, unless the user asked for older ones too);
+ * subfolders a few levels down too (WhatsApp keeps voice notes by week).
  */
 public class FolderWatchWorker extends Worker {
     private static final String TAG = "IvritWatch";
