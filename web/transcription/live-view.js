@@ -7,6 +7,7 @@
 
 import * as api from "./api.js";
 import { ENGINE, LANGUAGE } from "./local/local.js";
+import { bundled } from "./local/bundle.js";
 import { startLive, supported } from "./local/live.js";
 import { serverError, setLanguage, tr } from "./strings.js";
 import { clock } from "./transcript.js";
@@ -110,7 +111,7 @@ async function begin() {
 
   try {
     session = await startLive({
-      onModel: (fraction) => (status.textContent = tr("liveModel", { progress: Math.round(fraction * 100) })),
+      onModel: (fraction) => (status.textContent = tr(bundled() ? "liveModelBundled" : "liveModel", { progress: Math.round(fraction * 100) })),
       onText: (segments, { behind }) => {
         draw(segments);
         if (!session?.paused) status.textContent = behind > 3 ? tr("liveBehind", { seconds: Math.round(behind) }) : tr("liveListening");

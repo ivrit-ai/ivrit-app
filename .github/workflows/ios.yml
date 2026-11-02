@@ -9,6 +9,7 @@ on:
     paths:
       - "shell/**"
       - "scripts/build-ios.sh"
+      - "scripts/fetch-model.sh"
       - "scripts/check-native-api.mjs"
       - ".github/workflows/ios.yml"
   workflow_dispatch:

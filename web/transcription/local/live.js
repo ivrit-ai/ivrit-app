@@ -9,6 +9,7 @@
 //   session.pause(); session.resume();
 //   const { segments, audio, seconds } = await session.stop();
 
+import { bundled, serve } from "./bundle.js";
 import { supported as canDecode } from "./local.js";
 
 // An AudioWorklet that hands the microphone's samples on, mono, in blocks
@@ -46,6 +47,7 @@ export async function startLive({ onModel = () => {}, onText = () => {}, onState
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
   const worker = new Worker(new URL("./worker.js", import.meta.url));
+  serve(worker);
   const context = new AudioContext();
   let tap = null;
   let wakeLock = null;
@@ -83,7 +85,7 @@ export async function startLive({ onModel = () => {}, onText = () => {}, onState
     };
   });
   try {
-    worker.postMessage({ type: "live-start", sampleRate: context.sampleRate });
+    worker.postMessage({ type: "live-start", sampleRate: context.sampleRate, bundle: bundled() });
     await ready;
     const url = URL.createObjectURL(new Blob([TAP], { type: "text/javascript" }));
     await context.audioWorklet.addModule(url);

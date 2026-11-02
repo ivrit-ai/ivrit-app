@@ -46,6 +46,11 @@ targets:
         type: folder
         buildPhase: resources
         optional: true
+      # The on-device model (scripts/fetch-model.sh), as the folder "model".
+      - path: ../../bundled/model
+        type: folder
+        buildPhase: resources
+        optional: true
       - path: App/capacitor.config.json
         buildPhase: resources
         optional: true

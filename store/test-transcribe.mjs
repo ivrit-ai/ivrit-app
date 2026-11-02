@@ -847,15 +847,27 @@ try {
 
   // --- the iPhone's app, which cannot transcribe a shared recording itself: with
   // transcribing on the device only, the page reads it from the phone in pieces
-  // and transcribes it here, into My files, and the phone lets it go.
+  // and transcribes it here, into My files, and the phone lets it go. The model
+  // comes from the app (scripts/fetch-model.sh's files), not downloaded.
   await server("/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ localOnly: true }) });
   const iphone = await browser.newContext({ viewport: { width: 390, height: 800 }, locale: "he-IL", isMobile: true, hasTouch: true });
-  const shared = (await import("node:fs")).readFileSync(path.join(ROOT, "store/fixtures/hebrew-12s.ogg")).toString("base64");
+  const fs = await import("node:fs");
+  const shared = fs.readFileSync(path.join(ROOT, "store/fixtures/hebrew-12s.ogg")).toString("base64");
+  (await import("node:child_process")).execFileSync(path.join(ROOT, "scripts/fetch-model.sh"), { stdio: "inherit" });
+  await iphone.exposeFunction("__readModel", (name, offset, length) => {
+    const fd = fs.openSync(path.join(ROOT, "shell/bundled/model", path.basename(name)), "r");
+    try {
+      const buf = Buffer.alloc(length);
+      return buf.subarray(0, fs.readSync(fd, buf, 0, length, offset)).toString("base64");
+    } finally {
+      fs.closeSync(fd);
+    }
+  });
   await iphone.addInitScript(([session, shared]) => {
     if (!localStorage.getItem("app_session")) localStorage.setItem("app_session", JSON.stringify({ ...session, renewed_at: Date.now() }));
     const bytes = atob(shared);
-    const fake = (window.__fake = { discarded: [], reads: 0 });
-    const status = { available: true, permission: "granted", popup: true, platform: "ios", features: ["saveFiles", "appSettings", "readShared"] };
+    const fake = (window.__fake = { discarded: [], reads: 0, modelReads: 0 });
+    const status = { available: true, permission: "granted", popup: true, platform: "ios", features: ["saveFiles", "appSettings", "readShared", "bundledModel"] };
     const files = [{ id: "share-1", name: "voice-note.ogg", type: "audio/ogg", size: bytes.length, durationMs: 12000, origin: "whatsapp", uploadId: "" }];
     const on = () => () => Promise.resolve({ remove() {} });
     const plugins = {
@@ -868,6 +880,7 @@ try {
         sharedFiles: async () => ({ files: files.filter((f) => !fake.discarded.includes(f.id)) }),
         discardShared: async ({ id }) => void fake.discarded.push(id),
         readShared: async ({ offset, length }) => (fake.reads++, { data: btoa(bytes.slice(offset, offset + length)) }),
+        readModel: async ({ name, offset, length }) => (fake.modelReads++, { data: await window.__readModel(name, offset, length) }),
         addListener: on(),
       },
       SystemBars: { setStyle: async () => {} },
@@ -884,6 +897,8 @@ try {
   }, [info.session, shared]);
   const ios = await iphone.newPage();
   ios.on("pageerror", (e) => errors.push(`iphone: ${e}`));
+  const downloads = [];
+  iphone.on("request", (r) => r.url().includes("zipformer2-66m-streaming-he") && downloads.push(r.url()));
   await ios.goto(`${origin}/__test/login?email=dana@example.com&sub=dana-sub&to=/`);
   const fromShare = await ios.waitForSelector("#tr-feed .tr-file.openable .msg-title:text-is('voice-note.ogg')", { timeout: 240000 }).catch(() => null);
   await ios.waitForFunction(() => window.__fake.discarded.length > 0, null, { timeout: 10000 }).catch(() => null);
@@ -891,6 +906,8 @@ try {
   await ios.screenshot({ path: path.join(OUT, "bt-11-iphone-shared.png") });
   check("on iPhone, a recording shared with transcribing on the device only is transcribed in the page, into My files, and let go",
     Boolean(fromShare) && iosFake.reads > 0 && iosFake.discarded.includes("share-1"), JSON.stringify(iosFake));
+  check("the model the app carries is read from it, and nothing is downloaded", iosFake.modelReads >= 5 && downloads.length === 0,
+    JSON.stringify({ modelReads: iosFake.modelReads, downloads }));
   await iphone.close();
   await server("/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ localOnly: false }) });
 

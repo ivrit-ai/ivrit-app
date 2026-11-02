@@ -16,6 +16,7 @@ import * as api from "./api.js";
 import * as device from "./device.js";
 import * as reader from "./reader.js";
 import * as recorder from "./recorder.js";
+import { bundled } from "./local/bundle.js";
 import * as local from "./local/local.js";
 import { language, serverError, setLanguage, tr } from "./strings.js";
 import { clock } from "./transcript.js";
@@ -626,7 +627,7 @@ function pendingCard(id, p) {
 function localStatus(p, percent) {
   if (p.phase === "handing") return tr("statusLocalHanding", { progress: percent ?? 0 });
   if (p.phase === "queued") return tr("statusLocalQueued");
-  if (p.phase === "model") return tr("statusLocalModel", { progress: percent ?? 0 });
+  if (p.phase === "model") return tr(bundled() ? "statusLocalModelBundled" : "statusLocalModel", { progress: percent ?? 0 });
   if (p.phase === "transcribing") {
     const status = tr("statusLocalTranscribing", { progress: percent ?? 0 });
     return p.left == null ? status : `${status} · ${eta(p.left)}`;

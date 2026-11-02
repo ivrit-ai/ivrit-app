@@ -21,6 +21,7 @@ build=$(git rev-list --count HEAD)
 out=$(pwd)/build/ios
 project=shell/ios/App/App.xcodeproj
 
+scripts/fetch-model.sh
 (cd shell && npm ci --no-audit --no-fund)
 # Generated twice: Capacitor's sync needs a project, and the project needs the
 # files the sync writes (the web assets, capacitor.config.json).

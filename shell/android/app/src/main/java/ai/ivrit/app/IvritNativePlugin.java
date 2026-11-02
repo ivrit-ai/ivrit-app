@@ -114,7 +114,14 @@ public class IvritNativePlugin extends Plugin {
             .put("popup", importance >= NotificationManager.IMPORTANCE_HIGH)
             .put("importance", importance)
             .put("platform", "android")
-            .put("features", new JSArray().put("watchFolders").put("localTranscription").put("appSettings").put("saveFiles"));
+            .put("features", features());
+    }
+
+    private JSArray features() {
+        JSArray features = new JSArray();
+        features.put("watchFolders").put("localTranscription").put("appSettings").put("saveFiles");
+        if (LocalModel.bundled(getContext())) features.put("bundledModel");
+        return features;
     }
 
     @PluginMethod
@@ -161,6 +168,40 @@ public class IvritNativePlugin extends Plugin {
         getActivity().startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         call.resolve();
     }
+
+    /**
+     * {name, offset, length}: a piece of the bundled on-device model (base64), for
+     * the page's own transcription (Live), which would otherwise download it.
+     */
+    @PluginMethod
+    public void readModel(PluginCall call) {
+        String name = call.getString("name", "");
+        if (!LocalModel.bundled(getContext()) || !MODEL_FILES.contains(name)) {
+            call.reject("not found", "not_found");
+            return;
+        }
+        long offset = Math.max(0, call.getInt("offset", 0));
+        int length = Math.min(Math.max(0, call.getInt("length", 0)), 4 << 20);
+        MODEL_READS.execute(() -> {
+            try (InputStream in = getContext().getAssets().open(LocalModel.ASSETS + "/" + name)) {
+                for (long skipped = 0; skipped < offset; ) {
+                    long n = in.skip(offset - skipped);
+                    if (n <= 0) break;
+                    skipped += n;
+                }
+                byte[] buffer = new byte[length];
+                int read = 0;
+                for (int n; read < length && (n = in.read(buffer, read, length - read)) > 0; ) read += n;
+                call.resolve(new JSObject().put("data", android.util.Base64.encodeToString(buffer, 0, read, android.util.Base64.NO_WRAP)));
+            } catch (Exception e) {
+                call.reject("could not read", "io");
+            }
+        });
+    }
+
+    private static final ExecutorService MODEL_READS = Executors.newSingleThreadExecutor();
+    private static final java.util.Set<String> MODEL_FILES = new java.util.HashSet<>(java.util.Arrays.asList(
+        "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt", "config.json"));
 
     /** This device's Firebase token and message key, for registering with Communicator. */
     @PluginMethod

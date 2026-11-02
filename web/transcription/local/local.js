@@ -7,6 +7,8 @@
 // when the free transcription time is used up. No speakers: the model does not
 // tell voices apart.
 
+import { bundled, serve } from "./bundle.js";
+
 export const ENGINE = "zipformer2-66m-he";
 export const LANGUAGE = "he";
 // The decoded audio is held in memory (16 kHz, 4 bytes a sample: ~230 MB an
@@ -67,6 +69,7 @@ async function transcribeNow(file, { onProgress = () => {}, signal } = {}) {
   const { pcm, sampleRate, duration } = await decode(file);
   if (signal?.aborted) throw new DOMException("aborted", "AbortError");
   const worker = new Worker(new URL("./worker.js", import.meta.url));
+  serve(worker);
   try {
     return await new Promise((resolve, reject) => {
       signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
@@ -77,7 +80,7 @@ async function transcribeNow(file, { onProgress = () => {}, signal } = {}) {
         else if (data.type === "done") resolve({ segments: data.segments, duration, seconds: data.seconds });
         else if (data.type === "error") reject(new Error(data.message));
       };
-      worker.postMessage({ type: "run", pcm, sampleRate }, [pcm.buffer]);
+      worker.postMessage({ type: "run", pcm, sampleRate, bundle: bundled() }, [pcm.buffer]);
     });
   } finally {
     worker.terminate();

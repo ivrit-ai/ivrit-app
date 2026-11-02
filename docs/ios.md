@@ -33,6 +33,7 @@ instance, so the page never has to know which push service is behind it.
 | `configure` | SharedPreferences | the App Group, which the notification extension reads |
 | `openAppSettings` (feature `appSettings`) | the app's details page | the app's page in Settings (the microphone) |
 | on-device transcription (Live, files) | native, sherpa-onnx, in the background (`localTranscription`) | in the page (WebAssembly), while the app is open; `readShared` (feature `readShared`) hands it shared recordings in pieces when the user transcribes on the device only |
+| the on-device model (72 MB) | in the app's assets (`scripts/fetch-model.sh`), read in place; Live in the page reads it with `readModel` | in the app as the folder `model`, which the page reads with `readModel` (feature `bundledModel`): nothing downloaded, no second copy |
 
 How it differs from Android, because iOS works differently:
 - **A share cannot open the app.** The share extension saves the recording,

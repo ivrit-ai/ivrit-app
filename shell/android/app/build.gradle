@@ -17,6 +17,14 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // The on-device model (scripts/fetch-model.sh), as assets under model/, stored
+    // uncompressed: read in place, and at offsets for the page (readModel).
+    sourceSets {
+        main.assets.srcDirs += '../../bundled'
+    }
+    androidResources {
+        noCompress += ['onnx']
+    }
     signingConfigs {
         // The upload key stays outside the repo; scripts/build-android.sh
         // points here. Without it, release builds come out unsigned.

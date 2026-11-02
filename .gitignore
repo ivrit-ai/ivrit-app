@@ -8,3 +8,4 @@ shell/node_modules/
 shell/android/app/google-services.json
 build/
 *.p8
+shell/bundled/

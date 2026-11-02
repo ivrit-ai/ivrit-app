@@ -6,6 +6,7 @@ import * as live from "./transcription/live-view.js";
 import * as device from "./transcription/device.js";
 import * as transcriptionSettings from "./transcription/settings.js";
 import * as watches from "./transcription/watches.js";
+import { useBundledModel } from "./transcription/local/bundle.js";
 import { createLibrary } from "./search/library.js";
 import * as searchView from "./search/view.js";
 
@@ -1942,6 +1943,14 @@ function rerender() {
 const canWatch = () => Boolean(shell && nativeStatus?.features?.includes("watchFolders"));
 // The phone transcribes in the background itself (native, LocalTranscribeWorker).
 const canTranscribeOnPhone = () => Boolean(shell && nativeStatus?.features?.includes("localTranscription"));
+// The phone app may carry the on-device model: the page's own transcription (Live,
+// and files on the iPhone) then reads it from there instead of downloading it.
+if (shell) {
+  useBundledModel({
+    available: () => Boolean(nativeStatus?.features?.includes("bundledModel")),
+    read: (name, offset, length) => shell.ivrit.readModel({ name, offset, length }).then((r) => r.data),
+  });
+}
 
 // A file picked in the app, handed to the phone in pieces and transcribed there,
 // in the background. The phone's progress comes back as "localTranscription".

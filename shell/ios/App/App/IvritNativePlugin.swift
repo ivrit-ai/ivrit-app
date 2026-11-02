@@ -32,6 +32,7 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "saveStaged", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "readShared", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "readModel", returnType: CAPPluginReturnPromise),
     ]
 
     private static weak var current: IvritNativePlugin?
@@ -91,7 +92,7 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
         }
         // Allowed, yet set to show only in Notification Centre: no banner pops up.
         let popup = settings.alertSetting == .enabled && settings.alertStyle != .none
-        return ["available": true, "permission": permission, "popup": popup, "platform": "ios", "features": ["saveFiles", "appSettings", "readShared"]]
+        return ["available": true, "permission": permission, "popup": popup, "platform": "ios", "features": Self.features]
     }
 
     @objc func notificationStatus(_ call: CAPPluginCall) {
@@ -272,6 +273,41 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve(["data": data.base64EncodedString()])
         } catch {
             call.reject("could not read", "io")
+        }
+    }
+
+    // MARK: the bundled model
+
+    /// The on-device model, in the app as the folder "model" (scripts/fetch-model.sh).
+    private static let modelFiles = ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt", "config.json"]
+    private static let modelDir = Bundle.main.resourceURL?.appendingPathComponent("model", isDirectory: true)
+    private static let modelBundled = modelFiles.allSatisfy { name in
+        modelDir.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent(name).path) } ?? false
+    }
+    private static let features = ["saveFiles", "appSettings", "readShared"] + (modelBundled ? ["bundledModel"] : [])
+    private let modelReads = DispatchQueue(label: "ai.ivrit.readModel")
+
+    /// A piece of the bundled model (base64), for the page's own transcription,
+    /// which would otherwise download it.
+    @objc func readModel(_ call: CAPPluginCall) {
+        let name = call.getString("name") ?? ""
+        guard Self.modelBundled, Self.modelFiles.contains(name), let dir = Self.modelDir else {
+            return call.reject("not found", "not_found")
+        }
+        let offset = UInt64(max(0, call.getInt("offset") ?? 0))
+        let length = min(max(0, call.getInt("length") ?? 0), 4 << 20)
+        modelReads.async {
+            guard let handle = try? FileHandle(forReadingFrom: dir.appendingPathComponent(name)) else {
+                return call.reject("not found", "not_found")
+            }
+            defer { try? handle.close() }
+            do {
+                try handle.seek(toOffset: offset)
+                let data = try handle.read(upToCount: length) ?? Data()
+                call.resolve(["data": data.base64EncodedString()])
+            } catch {
+                call.reject("could not read", "io")
+            }
         }
     }
 

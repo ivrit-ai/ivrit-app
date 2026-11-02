@@ -1,18 +1,20 @@
 // Transcribing on the device: a whole file (local.js), or live from the microphone
 // (live.js). The model is downloaded once and kept in Cache Storage.
 //   A file:
-//   in:  {type: "run", pcm: Float32Array, sampleRate}
+//   in:  {type: "run", pcm: Float32Array, sampleRate, bundle}
 //   out: {type: "model", loaded, total} while downloading,
 //        {type: "progress", done, total} (seconds of audio),
 //        {type: "done", segments, seconds}, or {type: "error", message}.
 //   Live:
-//   in:  {type: "live-start", sampleRate}, then {type: "live-audio", data: Float32Array}
+//   in:  {type: "live-start", sampleRate, bundle}, then {type: "live-audio", data: Float32Array}
 //        as it is heard, and {type: "live-stop"}
 //   out: {type: "model", …}, {type: "live-ready"}, {type: "live", from, segments, heard, behind}
 //        (the sentences from index `from` on, which may still change; `behind`: seconds
 //        of audio not yet through the model), and {type: "live-done", segments}.
 // The model loads as live-transcribe.ivrit.ai loads it (public/zipformer/worker.js),
-// from the ivrit-ai mirror at a pinned revision. A classic worker that imports its
+// from the ivrit-ai mirror at a pinned revision, or from the phone app when it
+// carries the model (`bundle`: the files' sizes, bundle.js; then nothing is
+// downloaded or kept here). A classic worker that imports its
 // modules dynamically: a failed static import kills a worker silently on WebKit.
 
 const ORT_VERSION = "1.30.0";
@@ -36,6 +38,8 @@ let ort = null;
 let asr = null; // asr.js
 let segments = null; // segments.js
 let model = null; // {sessions, config, symbols}
+let bundle = null; // {name: size} when the phone app carries the model (bundle.js)
+const reading = new Map(); // name → {piece(message)} while the page sends it
 
 const post = (message) => self.postMessage(message);
 
@@ -48,10 +52,61 @@ self.addEventListener("unhandledrejection", (e) => {
   post({ type: "error", message: e.reason?.message || String(e.reason) });
 });
 
+const fileName = (path) => path.slice(path.lastIndexOf("/") + 1);
+
+// A bundled file, from the page in pieces; count(n) as each arrives.
+function fromBundle(name, count) {
+  return new Promise((resolve, reject) => {
+    const parts = [];
+    reading.set(name, {
+      piece({ bytes, end, error }) {
+        if (error) {
+          reading.delete(name);
+          return reject(new Error(error));
+        }
+        parts.push(bytes);
+        count(bytes.length);
+        if (!end) return;
+        reading.delete(name);
+        resolve(join(parts));
+      },
+    });
+    post({ type: "bundle-read", name });
+  });
+}
+
+function join(parts) {
+  const buf = new Uint8Array(parts.reduce((sum, p) => sum + p.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    buf.set(part, at);
+    at += part.length;
+  }
+  return buf;
+}
+
+async function readAll(res, count) {
+  const reader = res.body.getReader();
+  const parts = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    count(value.length);
+  }
+  return join(parts);
+}
+
 async function download(paths) {
-  const cache = self.caches ? await caches.open(CACHE_NAME).catch(() => null) : null;
+  // Bundled: an earlier download is no longer needed.
+  if (bundle && self.caches) await caches.delete(CACHE_NAME).catch(() => {});
+  const cache = !bundle && self.caches ? await caches.open(CACHE_NAME).catch(() => null) : null;
   const found = [];
   for (const path of paths) {
+    if (bundle?.[fileName(path)]) {
+      found.push({ path, size: bundle[fileName(path)], bundled: true });
+      continue;
+    }
     const hit = cache && (await cache.match(BASE + path));
     if (hit) {
       found.push({ path, res: hit, cached: true });
@@ -61,31 +116,20 @@ async function download(paths) {
     if (!res.ok) throw new Error(`model download failed (${res.status})`);
     found.push({ path, res, cached: false });
   }
-  const total = found.reduce((sum, f) => sum + Number(f.res.headers.get("content-length") || 0), 0);
+  const total = found.reduce((sum, f) => sum + (f.size ?? Number(f.res.headers.get("content-length") || 0)), 0);
   let loaded = 0;
   let told = 0;
+  const count = (n) => {
+    loaded += n;
+    if (Date.now() - told > 200) {
+      told = Date.now();
+      post({ type: "model", loaded: Math.min(loaded, total), total });
+    }
+  };
   const bytes = await Promise.all(
     found.map(async (f) => {
-      const reader = f.res.body.getReader();
-      const parts = [];
-      let size = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        parts.push(value);
-        size += value.length;
-        loaded += value.length;
-        if (Date.now() - told > 200) {
-          told = Date.now();
-          post({ type: "model", loaded, total });
-        }
-      }
-      const buf = new Uint8Array(size);
-      let at = 0;
-      for (const part of parts) {
-        buf.set(part, at);
-        at += part.length;
-      }
+      if (f.bundled) return fromBundle(fileName(f.path), count);
+      const buf = await readAll(f.res, count);
       if (!f.cached && cache) {
         cache.put(BASE + f.path, new Response(buf, { headers: { "content-type": "application/octet-stream" } })).catch(() => {});
       }
@@ -116,7 +160,8 @@ async function load() {
   return model;
 }
 
-async function run({ pcm, sampleRate }) {
+async function run({ pcm, sampleRate, bundle: sizes }) {
+  bundle = sizes || null;
   const { sessions, config, symbols } = await load();
   const transducer = new asr.FileTransducer(ort, sessions, config, symbols);
   const resampler = sampleRate === SAMPLE_RATE ? null : new asr.Resampler(sampleRate, SAMPLE_RATE);
@@ -141,7 +186,8 @@ async function run({ pcm, sampleRate }) {
 
 let live = null; // {transducer, resampler, received, told, shown}
 
-async function liveStart({ sampleRate }) {
+async function liveStart({ sampleRate, bundle: sizes }) {
+  bundle = sizes || null;
   const { sessions, config, symbols } = await load();
   live = {
     transducer: new asr.FileTransducer(ort, sessions, config, symbols),
@@ -182,6 +228,8 @@ async function liveStop() {
 let busy = Promise.resolve();
 const handlers = { run, "live-start": liveStart, "live-audio": liveAudio, "live-stop": liveStop };
 self.onmessage = (e) => {
+  // Not queued: a load waiting in the queue is what asked for it.
+  if (e.data?.type === "bundle-piece") return reading.get(e.data.name)?.piece(e.data);
   const handler = handlers[e.data?.type];
   if (!handler) return;
   busy = busy.then(() => handler(e.data)).catch((err) => post({ type: "error", message: err?.message || String(err) }));

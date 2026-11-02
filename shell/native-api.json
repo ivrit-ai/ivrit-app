@@ -10,7 +10,7 @@
         "popup": "boolean: messages show on screen (Android: the channel's importance; iPhone: banners allowed)",
         "platform": "\"android\" | \"ios\": for wording only (which settings to describe), never for behaviour",
         "importance": "number, Android only: the channel's importance",
-        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\", \"localTranscription\", \"appSettings\", \"saveFiles\", \"readShared\")"
+        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\", \"localTranscription\", \"appSettings\", \"saveFiles\", \"readShared\", \"bundledModel\")"
       }
     },
     "requestPermission": {
@@ -158,6 +158,22 @@
       "note": "A piece of a shared file, for the page to transcribe it on the device itself (a shell without localTranscription). Read in pieces of at most 4 MB, from offset 0 until a piece comes back short.",
       "options": {
         "id": "the shared file's id",
+        "offset": "number: the byte to start at",
+        "length": "number: how many bytes, at most 4 MB"
+      },
+      "result": {
+        "data": "base64 of the bytes read; fewer than asked at the end of the file"
+      },
+      "rejects": [
+        "not_found",
+        "io"
+      ]
+    },
+    "readModel": {
+      "feature": "bundledModel",
+      "note": "A piece of the on-device model the app carries (scripts/fetch-model.sh), for the page's own transcription, which then needs no download. Read in pieces of at most 4 MB, from offset 0 until a piece comes back short.",
+      "options": {
+        "name": "\"encoder.int8.onnx\" | \"decoder.int8.onnx\" | \"joiner.int8.onnx\" | \"tokens.txt\" | \"config.json\"",
         "offset": "number: the byte to start at",
         "length": "number: how many bytes, at most 4 MB"
       },
