@@ -9,3 +9,7 @@ shell/android/app/google-services.json
 build/
 *.p8
 shell/bundled/
+shell/android/app/src/main/cpp/whisper.cpp/
+shell/android/app/.cxx/
+shell/android/app/src/main/cpp/vulkan-headers/
+shell/android/app/src/main/cpp/spirv-headers/

@@ -15,6 +15,10 @@ import org.json.JSONObject;
  * minute of audio: the word pieces so far, with their times in the file, and where
  * to go on from. A run the phone stopped resumes there with a fresh stream, cut at
  * the start of the last word so no word is split or lost.
+ *
+ * The Turbo model (Turbo) keeps its words here too, whole and each with its end,
+ * after every few minutes it hears. A checkpoint is its engine's only: a run with
+ * another model starts over.
  */
 final class Checkpoint {
     static final double EVERY_SECONDS = 60;
@@ -22,7 +26,23 @@ final class Checkpoint {
 
     final List<String> pieceList = new ArrayList<>();
     final List<Float> timeList = new ArrayList<>();
+    final List<Float> endList = new ArrayList<>(); // the Turbo model's words' ends
     double offset; // seconds into the file where the next stream starts
+    String engine = LocalModel.ENGINE; // what made the pieces
+
+    /** The Turbo model's words so far. */
+    List<Segments.Word> words() {
+        List<Segments.Word> words = new ArrayList<>();
+        for (int i = 0; i < pieceList.size() && i < endList.size(); i++) {
+            Segments.Word w = new Segments.Word();
+            w.text = pieceList.get(i);
+            w.start = timeList.get(i);
+            w.end = endList.get(i);
+            w.last = w.end;
+            words.add(w);
+        }
+        return words;
+    }
 
     String[] pieces() {
         return pieceList.toArray(new String[0]);
@@ -69,7 +89,10 @@ final class Checkpoint {
                 cp.pieceList.add(pieces.getString(i));
                 cp.timeList.add((float) times.getDouble(i));
             }
+            JSONArray ends = o.optJSONArray("ends");
+            for (int i = 0; ends != null && i < ends.length(); i++) cp.endList.add((float) ends.getDouble(i));
             cp.offset = o.optDouble("offset", 0);
+            cp.engine = o.optString("engine", LocalModel.ENGINE);
         } catch (Exception e) {
             return new Checkpoint(); // damaged: start over
         }
@@ -96,17 +119,39 @@ final class Checkpoint {
                 pieces.put(all.pieceList.get(i));
                 times.put(all.timeList.get(i));
             }
-            JSONObject o = new JSONObject().put("pieces", pieces).put("times", times).put("offset", resumeAt);
-            File f = file(context, key);
-            File part = new File(f.getPath() + ".part");
-            try (FileOutputStream out = new FileOutputStream(part)) {
-                out.write(o.toString().getBytes(StandardCharsets.UTF_8));
-            }
-            //noinspection ResultOfMethodCallIgnored
-            part.renameTo(f);
+            write(context, key, new JSONObject().put("pieces", pieces).put("times", times).put("offset", resumeAt)
+                .put("engine", LocalModel.ENGINE));
         } catch (Exception ignored) {
             // Only a faster restart is lost.
         }
+    }
+
+    /** The Turbo model's words so far, and where in the file it goes on from. */
+    static void saveWords(Context context, String key, String engine, List<Segments.Word> words, double resumeAt) {
+        try {
+            JSONArray pieces = new JSONArray();
+            JSONArray times = new JSONArray();
+            JSONArray ends = new JSONArray();
+            for (Segments.Word w : words) {
+                pieces.put(w.text);
+                times.put(w.start);
+                ends.put(w.end);
+            }
+            write(context, key, new JSONObject().put("pieces", pieces).put("times", times).put("ends", ends)
+                .put("offset", resumeAt).put("engine", engine));
+        } catch (Exception ignored) {
+            // Only a faster restart is lost.
+        }
+    }
+
+    private static void write(Context context, String key, JSONObject o) throws Exception {
+        File f = file(context, key);
+        File part = new File(f.getPath() + ".part");
+        try (FileOutputStream out = new FileOutputStream(part)) {
+            out.write(o.toString().getBytes(StandardCharsets.UTF_8));
+        }
+        //noinspection ResultOfMethodCallIgnored
+        part.renameTo(f);
     }
 
     static void forget(Context context, String key) {

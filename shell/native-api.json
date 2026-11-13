@@ -10,7 +10,7 @@
         "popup": "boolean: messages show on screen (Android: the channel's importance; iPhone: banners allowed)",
         "platform": "\"android\" | \"ios\": for wording only (which settings to describe), never for behaviour",
         "importance": "number, Android only: the channel's importance",
-        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\", \"localTranscription\", \"appSettings\", \"saveFiles\", \"readShared\", \"bundledModel\")"
+        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\", \"localTranscription\", \"appSettings\", \"saveFiles\", \"readShared\", \"bundledModel\", \"turboModel\")"
       }
     },
     "requestPermission": {
@@ -183,6 +183,27 @@
       "rejects": [
         "not_found",
         "io"
+      ]
+    },
+    "onDeviceModel": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "turboModel",
+      "note": "The model the phone transcribes recordings with, in the background (shared, watched, handed over): the zipformer, or ivrit.ai's Turbo model (whisper.cpp; scripts/turbo_model.py's quantizations), which only phones that can run it offer, and where that runs: the GPU (Vulkan) once it has passed a check on the phone (TurboGpu), or the CPU. The Turbo model downloads the first time it transcribes; choosing another lets go of it.",
+      "options": {
+        "model": "string, optional: \"zipformer\" | \"q8_0\" | \"q5_1\", to choose it",
+        "processor": "string, optional: \"auto\" (the GPU when it passed its check and is faster) | \"cpu\" | \"gpu\" (whenever it gives the right words), to choose it"
+      },
+      "result": {
+        "model": "\"zipformer\" | \"q8_0\" | \"q5_1\": the one chosen",
+        "ready": "boolean: it needs no download",
+        "processor": "\"auto\" | \"cpu\" | \"gpu\": the one chosen",
+        "gpu": "optional, once the GPU was checked with this model: {name, state: \"faster\" | \"slower\" | \"wrong\" | \"failed\" | \"crashed\" | \"none\", cpuSeconds, gpuSeconds} (the check's 12 seconds of Hebrew)"
+      },
+      "rejects": [
+        "unsupported",
+        "bad_request"
       ]
     },
     "watches": {

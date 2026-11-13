@@ -74,8 +74,15 @@ directly), signed with the upload key. Needs, outside the repo:
 `~/keys/ivrit-app-upload.jks` with its password in
 `~/keys/ivrit-app-upload.password` (back both up: Play needs this key for
 every update), and Firebase's `~/keys/ivrit-app-google-services.json`.
-The toolchain (Node 22, JDK 21, Android SDK) is found under `~/.local/opt`;
-see `scripts/android-env.sh`.
+The toolchain (Node 22, JDK 21, Android SDK with NDK 27.0.12077973 and CMake
+3.22.1) is found under `~/.local/opt`; see `scripts/android-env.sh`.
+
+The phone transcribes recordings in the background with the zipformer
+(sherpa-onnx, bundled), or, where the user chooses it in Settings, with
+ivrit.ai's Turbo model: whisper.cpp (`scripts/fetch-whisper.sh`, built by
+Gradle from `shell/android/app/src/main/cpp`) on the CPU, or the GPU through
+Vulkan once it passes a check on the phone; arm64 phones with dot products and
+about 6 GB of memory only. See [docs/turbo-android.md](docs/turbo-android.md).
 
     scripts/publish-android.sh "release notes"
 

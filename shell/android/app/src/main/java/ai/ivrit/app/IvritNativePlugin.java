@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.NotificationManager;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
@@ -121,7 +122,49 @@ public class IvritNativePlugin extends Plugin {
         JSArray features = new JSArray();
         features.put("watchFolders").put("localTranscription").put("appSettings").put("saveFiles");
         if (LocalModel.bundled(getContext())) features.put("bundledModel");
+        if (Turbo.supported(getContext())) features.put("turboModel");
         return features;
+    }
+
+    /**
+     * The model this phone transcribes with: "zipformer", or the Turbo model ("q8_0",
+     * "q5_1"; Turbo), whether that one is downloaded, where it runs ("auto", "cpu",
+     * "gpu"; TurboGpu) and what the GPU's check found. Given `model` or `processor`,
+     * chooses it; choosing a model lets go of any other Turbo model downloaded.
+     */
+    @PluginMethod
+    public void onDeviceModel(PluginCall call) {
+        Context context = getContext();
+        if (!Turbo.supported(context)) {
+            call.reject("this phone cannot run the Turbo model", "unsupported");
+            return;
+        }
+        String model = call.getString("model");
+        String processor = call.getString("processor");
+        if ((model != null && !Turbo.ZIPFORMER.equals(model) && !java.util.Arrays.asList(Turbo.VARIANTS).contains(model))
+            || (processor != null && !java.util.Arrays.asList(TurboGpu.PROCESSORS).contains(processor))) {
+            call.reject("unknown model or processor", "bad_request");
+            return;
+        }
+        if (model != null) {
+            Store.setOnDeviceModel(context, model);
+            for (String variant : Turbo.VARIANTS) if (!variant.equals(model)) Turbo.forget(context, variant);
+        }
+        if (processor != null) Store.setTurboProcessor(context, processor);
+        String chosen = Store.onDeviceModel(context);
+        JSObject result = new JSObject()
+            .put("model", chosen)
+            .put("ready", Turbo.ZIPFORMER.equals(chosen) || Turbo.ready(context, chosen))
+            .put("processor", Store.turboProcessor(context));
+        TurboGpu.Verdict verdict = TurboGpu.load(context);
+        if (verdict != null && verdict.state != null && verdict.key.endsWith(" " + chosen)) {
+            result.put("gpu", new JSObject()
+                .put("name", verdict.gpu)
+                .put("state", verdict.state)
+                .put("cpuSeconds", verdict.cpuSeconds)
+                .put("gpuSeconds", verdict.gpuSeconds));
+        }
+        call.resolve(result);
     }
 
     @PluginMethod

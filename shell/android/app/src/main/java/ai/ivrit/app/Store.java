@@ -69,6 +69,24 @@ final class Store {
         return prefs(context).getBoolean("local_only", false);
     }
 
+    /** The model this phone transcribes with: Turbo.ZIPFORMER, or one of Turbo.VARIANTS. */
+    static void setOnDeviceModel(Context context, String model) {
+        prefs(context).edit().putString("on_device_model", model).apply();
+    }
+
+    static String onDeviceModel(Context context) {
+        return prefs(context).getString("on_device_model", Turbo.ZIPFORMER);
+    }
+
+    /** Where the Turbo model runs: TurboGpu.AUTO, CPU or GPU. */
+    static void setTurboProcessor(Context context, String processor) {
+        prefs(context).edit().putString("turbo_processor", processor).apply();
+    }
+
+    static String turboProcessor(Context context) {
+        return prefs(context).getString("turbo_processor", TurboGpu.AUTO);
+    }
+
     static String site(Context context) {
         return prefs(context).getString("site", "https://app.ivrit.ai");
     }

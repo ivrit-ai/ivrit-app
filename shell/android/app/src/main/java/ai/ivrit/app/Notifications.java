@@ -161,7 +161,9 @@ final class Notifications {
     static android.app.Notification localProgress(Context context, String name, String phase, int percent, Double secondsLeft, PendingIntent cancel) {
         ensureWorkChannel(context);
         String text;
-        if ("model".equals(phase)) text = context.getString(R.string.local_model, Math.max(0, percent));
+        // "downloading": the Turbo model; "checking": its one check of the GPU (TurboGpu).
+        if ("model".equals(phase) || "downloading".equals(phase)) text = context.getString(R.string.local_model, Math.max(0, percent));
+        else if ("checking".equals(phase)) text = context.getString(R.string.local_checking);
         else if ("saving".equals(phase)) text = context.getString(R.string.local_saving);
         else if ("transcribing".equals(phase)) {
             text = secondsLeft == null
@@ -176,7 +178,7 @@ final class Notifications {
             .setOngoing(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-            .setProgress(100, Math.max(0, percent), percent < 0 || "saving".equals(phase))
+            .setProgress(100, Math.max(0, percent), percent < 0 || "saving".equals(phase) || "checking".equals(phase))
             .addAction(0, context.getString(R.string.local_stop), cancel)
             .setContentIntent(linkIntent(context, "#transcribe"));
         return builder.build();

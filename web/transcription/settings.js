@@ -1,5 +1,6 @@
 // Transcribing's settings, in the app's Settings: transcribing on the user's
-// devices only, the user's own RunPod key (no weekly limit, more languages; kept
+// devices only, the model the phone does it with (where it can run ivrit.ai's Turbo
+// model), the user's own RunPod key (no weekly limit, more languages; kept
 // encrypted in their Drive, never shown again), its balance, and Stats for Nerds.
 
 import * as api from "./api.js";
@@ -38,12 +39,14 @@ export async function render(box, host, onChange) {
     el("span", { text: tr("localOnlyTitle") }),
     el("span", { class: "sub", text: local.supported() ? tr("localOnlyBody") : tr("localOnlyUnsupported") }),
   ])]);
+  const phoneModelBox = await phoneModel(host);
   const status = boot.runpodKeyStatus || {};
   const balance = el("span", { class: "muted" });
   const input = el("input", { class: "tr-input", type: "password", autocomplete: "off", placeholder: tr("runpodKeyPlaceholder"), dir: "ltr" });
   const save = el("button", { class: "btn primary small", type: "submit", text: tr("save") });
   const form = el("form", { class: "stack" }, [
     onDeviceBox,
+    phoneModelBox,
     el("p", { class: "muted", text: tr("runpodHelpText") }),
     status.has_key
       ? el("div", { class: "row spread" }, [
@@ -87,4 +90,60 @@ export async function render(box, host, onChange) {
       balance.textContent = typeof b.clientBalance === "number" ? tr("balanceLine", { amount: `$${b.clientBalance.toFixed(2)}` }) : tr("balanceLoadingError");
     }, () => (balance.textContent = tr("balanceLoadingError")));
   }
+}
+
+// The model the phone transcribes recordings with, in the background: the small one,
+// or ivrit.ai's Turbo model, far more accurate, slower, and a large download the first
+// time (sizes: scripts/turbo_model.py's files). Only on phones that can run it. Then
+// where Turbo runs: the GPU once it passed its check on the phone (automatic), the
+// CPU, or the GPU whenever it gives the right words; and what that check found.
+const PHONE_MODELS = { zipformer: null, q8_0: 875, q5_1: 625 };
+const PROCESSORS = ["auto", "cpu", "gpu"];
+
+async function phoneModel(host) {
+  const { el } = host;
+  let current;
+  try {
+    current = await host.onDeviceModel?.();
+  } catch {
+    current = null;
+  }
+  if (!current) return null;
+  const model = el("select", { class: "tr-select", "aria-label": tr("phoneModelTitle") },
+    Object.entries(PHONE_MODELS).map(([value, megabytes]) =>
+      el("option", { value, text: tr(`phoneModel_${value}`, { megabytes }) })));
+  const processor = el("select", { class: "tr-select", "aria-label": tr("phoneProcessorTitle") },
+    PROCESSORS.map((value) => el("option", { value, text: tr(`phoneProcessor_${value}`) })));
+  const note = el("span", { class: "sub" });
+  const gpuNote = el("span", { class: "sub" });
+  const processorField = el("label", { class: "tr-field" }, [el("span", { text: tr("phoneProcessorTitle") }), processor, gpuNote]);
+  const show = () => {
+    model.value = current.model;
+    processor.value = current.processor || "auto";
+    const turbo = current.model !== "zipformer";
+    note.textContent = tr(!turbo ? "phoneModelSmallBody" : current.ready ? "phoneModelTurboBody" : "phoneModelTurboDownload");
+    processorField.hidden = !turbo;
+    const gpu = current.gpu;
+    gpuNote.textContent = !gpu
+      ? tr("phoneGpuUnchecked")
+      : tr(`phoneGpu_${gpu.state}`, { name: gpu.name ? `(${gpu.name})` : "", cpu: gpu.cpuSeconds?.toFixed(1), gpu: gpu.gpuSeconds?.toFixed(1) });
+  };
+  const choose = (options) => async () => {
+    model.disabled = processor.disabled = true;
+    try {
+      current = await host.onDeviceModel(options());
+    } catch {
+      host.toast(tr("errorInternalServer"));
+    } finally {
+      model.disabled = processor.disabled = false;
+      show();
+    }
+  };
+  model.addEventListener("change", choose(() => ({ model: model.value })));
+  processor.addEventListener("change", choose(() => ({ processor: processor.value })));
+  show();
+  return el("div", { class: "stack" }, [
+    el("label", { class: "tr-field" }, [el("span", { text: tr("phoneModelTitle") }), model, note]),
+    processorField,
+  ]);
 }

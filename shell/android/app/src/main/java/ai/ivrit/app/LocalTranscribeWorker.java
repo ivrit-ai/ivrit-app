@@ -23,6 +23,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import java.util.zip.GZIPOutputStream;
 import org.json.JSONArray;
@@ -43,6 +44,11 @@ import org.json.JSONObject;
  *
  * Where a recording comes from: a file shared into the app ("share"), a new file in
  * a watched folder ("watch"), or one picked in the app and handed over ("staged").
+ *
+ * With ivrit.ai's Turbo model, when the user chose it (Turbo), the recording goes
+ * through whisper.cpp a few minutes at a time instead, on the GPU where it passed
+ * its check on this phone (TurboGpu), and how long it took is reported to the site
+ * (POST /lab/report?kind=local-turbo), to see how phones fare.
  */
 public class LocalTranscribeWorker extends Worker {
     private static final String TAG = "IvritLocal";
@@ -84,6 +90,9 @@ public class LocalTranscribeWorker extends Worker {
     private String name;
     private String folder;
     private long told;
+    private String engine = LocalModel.ENGINE;
+    // The Turbo model while it is loaded, so stopping the work stops it (onStopped).
+    private long turbo;
 
     @NonNull
     @Override
@@ -116,9 +125,15 @@ public class LocalTranscribeWorker extends Worker {
             Log.w(TAG, "could not run in the foreground", e);
         }
         try {
-            LocalModel.ensure(context, (done, total) -> progress("model", done / (double) Math.max(1, total), null));
+            String variant = Turbo.chosen(context);
+            if (variant != null) {
+                engine = Turbo.engine(variant);
+                Turbo.ensure(context, variant, (done, total) -> progress("downloading", done / (double) Math.max(1, total), null));
+            } else {
+                LocalModel.ensure(context, (done, total) -> progress("model", done / (double) Math.max(1, total), null));
+            }
             double duration = AudioDecoder.duration(context, source);
-            JSONArray segments = transcribe(context, source, duration);
+            JSONArray segments = variant != null ? transcribeTurbo(context, kind, source, duration, variant) : transcribe(context, source, duration);
             if (isStopped()) return Result.success();
             progress("saving", 1, null);
             String resultsId;
@@ -156,21 +171,30 @@ public class LocalTranscribeWorker extends Worker {
 
     /** What went wrong, to the site's log (POST /lab/report), so a failure on a phone can be seen. */
     private void report(Context context, String kind, Throwable e) {
-        HttpURLConnection connection = null;
         try {
             java.io.StringWriter trace = new java.io.StringWriter();
             e.printStackTrace(new java.io.PrintWriter(trace));
             String stack = trace.toString();
-            JSONObject body = new JSONObject()
+            post(context, "local-native", new JSONObject()
                 .put("kind", kind)
+                .put("engine", engine)
                 .put("error", e.toString())
                 .put("stack", stack.length() > 4000 ? stack.substring(0, 4000) : stack)
-                .put("attempt", getRunAttemptCount())
-                .put("sdk", Build.VERSION.SDK_INT)
+                .put("attempt", getRunAttemptCount()));
+        } catch (Exception ignored) {
+            // Only the report is lost.
+        }
+    }
+
+    /** To the site's log (POST /lab/report?kind=…), with the phone and the app it came from. */
+    static void post(Context context, String kind, JSONObject body) {
+        HttpURLConnection connection = null;
+        try {
+            body.put("sdk", Build.VERSION.SDK_INT)
                 .put("device", Build.MANUFACTURER + " " + Build.MODEL)
                 .put("abi", Build.SUPPORTED_ABIS.length > 0 ? Build.SUPPORTED_ABIS[0] : "")
                 .put("app", appVersion(context));
-            connection = (HttpURLConnection) new URL(Store.site(context) + "/lab/report?kind=local-native").openConnection();
+            connection = (HttpURLConnection) new URL(Store.site(context) + "/lab/report?kind=" + kind).openConnection();
             connection.setRequestMethod("POST");
             connection.setDoOutput(true);
             connection.setConnectTimeout(10000);
@@ -208,7 +232,8 @@ public class LocalTranscribeWorker extends Worker {
         OnlineRecognizer recognizer = LocalModel.recognizer(context);
         // Resumed where an earlier run stopped (the phone stopped it, or a background
         // run's 10 minutes ran out): its words so far, and where to go on from.
-        Checkpoint done = Checkpoint.load(context, key);
+        Checkpoint kept = Checkpoint.load(context, key);
+        Checkpoint done = LocalModel.ENGINE.equals(kept.engine) ? kept : new Checkpoint();
         OnlineStream stream = recognizer.createStream("");
         long started = System.currentTimeMillis();
         double from = done.offset;
@@ -253,6 +278,138 @@ public class LocalTranscribeWorker extends Worker {
         } finally {
             stream.release();
         }
+    }
+
+    @Override
+    public void onStopped() {
+        synchronized (this) {
+            if (turbo != 0) Whisper.stop(turbo);
+        }
+    }
+
+    /** Sound waiting for the Turbo model: 16 kHz, from `start` seconds into the file. */
+    private static final class Sound {
+        float[] samples = new float[Resampler.RATE * 60];
+        int length;
+        double start = -1;
+        Resampler resampler;
+
+        void add(float[] more) {
+            if (length + more.length > samples.length) samples = java.util.Arrays.copyOf(samples, Math.max(2 * samples.length, length + more.length));
+            System.arraycopy(more, 0, samples, length, more.length);
+            length += more.length;
+        }
+
+        double seconds() {
+            return length / (double) Resampler.RATE;
+        }
+
+        /** Lets go of the sound before `at` seconds into the file. */
+        void keepFrom(double at) {
+            int drop = (int) Math.max(0, Math.min(length, Math.round((at - start) * Resampler.RATE)));
+            System.arraycopy(samples, drop, samples, 0, length - drop);
+            length -= drop;
+            start += drop / (double) Resampler.RATE;
+        }
+    }
+
+    private JSONArray transcribeTurbo(Context context, String kind, Uri source, double duration, String variant) throws Exception {
+        // Resumed where an earlier run's last checkpoint left off, as transcribe() is.
+        Checkpoint kept = Checkpoint.load(context, key);
+        Checkpoint done = engine.equals(kept.engine) ? kept : new Checkpoint();
+        List<Segments.Word> words = done.words();
+        double from = done.offset;
+        // On the GPU where it passed its check on this phone (TurboGpu), once checked.
+        String processor = Store.turboProcessor(context);
+        TurboGpu.Verdict verdict = TurboGpu.decide(context, variant, processor, () -> progress("checking", 0, null));
+        boolean gpu = TurboGpu.onGpu(verdict, processor);
+        long loading = System.currentTimeMillis();
+        String path = Turbo.file(context, variant).getPath();
+        long loaded = Whisper.load(path, gpu);
+        if (loaded == 0 && gpu) {
+            gpu = false; // no room on the GPU: the CPU, then
+            loaded = Whisper.load(path, false);
+        }
+        // Checked when it downloaded: not loading is the phone short of memory.
+        if (loaded == 0) throw new IllegalStateException("the Turbo model did not load");
+        long handle = loaded;
+        synchronized (this) {
+            turbo = handle;
+        }
+        if (gpu) TurboGpu.started(context);
+        long started = System.currentTimeMillis();
+        int threads = Turbo.threads();
+        try {
+            Sound sound = new Sound();
+            AudioDecoder.decode(context, source, from, (samples, sampleRate, at) -> {
+                if (isStopped()) throw new InterruptedException("stopped");
+                // A resumed run's decoding starts a little before where it left off.
+                double blockStart = at - samples.length / (double) sampleRate;
+                if (blockStart < from) {
+                    int skip = (int) Math.min(samples.length, Math.round((from - blockStart) * sampleRate));
+                    samples = java.util.Arrays.copyOfRange(samples, skip, samples.length);
+                    blockStart = at - samples.length / (double) sampleRate;
+                    if (samples.length == 0) return;
+                }
+                if (sound.start < 0) sound.start = blockStart;
+                if (sound.resampler == null || sound.resampler.from != sampleRate) {
+                    if (sound.resampler != null) sound.add(sound.resampler.flush());
+                    sound.resampler = new Resampler(sampleRate);
+                }
+                sound.add(sound.resampler.push(samples));
+                if (sound.seconds() >= Turbo.CHUNK_SECONDS) hearTurbo(context, handle, threads, sound, words, false, duration, from, started);
+            });
+            if (sound.resampler != null) sound.add(sound.resampler.flush());
+            if (sound.start < 0) sound.start = from;
+            hearTurbo(context, handle, threads, sound, words, true, duration, from, started);
+        } finally {
+            synchronized (this) {
+                turbo = 0;
+                Whisper.free(handle);
+            }
+            if (gpu) TurboGpu.finished(context);
+        }
+        double heard = duration > 0 ? duration - from : 0;
+        double took = (System.currentTimeMillis() - started) / 1000.0;
+        post(context, "local-turbo", new JSONObject()
+            .put("kind", kind)
+            .put("engine", engine)
+            .put("seconds", heard)
+            .put("took", took)
+            .put("realtime", took > 0 ? heard / took : null)
+            .put("load", (started - loading) / 1000.0)
+            .put("resumedAt", from)
+            .put("processor", gpu ? "gpu" : "cpu")
+            .put("chose", processor)
+            .put("gpu", verdict.gpu)
+            .put("gpuCheck", verdict.state == null ? JSONObject.NULL : verdict.state)
+            .put("threads", threads)
+            .put("cores", Runtime.getRuntime().availableProcessors())
+            .put("memory", Turbo.memory(context))
+            .put("beams", Turbo.BEAMS)
+            .put("system", Whisper.system()));
+        return Segments.segments(words);
+    }
+
+    /** The sound so far through the Turbo model, keeping what may be cut off for next time. */
+    private void hearTurbo(Context context, long handle, int threads, Sound sound, List<Segments.Word> words, boolean last,
+                           double duration, double from, long started) throws Exception {
+        if (isStopped()) throw new InterruptedException("stopped");
+        if (sound.length < Resampler.RATE / 10) return; // nothing to speak of
+        double start = sound.start;
+        double seconds = sound.seconds();
+        Object[] heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, threads, Turbo.BEAMS, percent -> {
+            if (duration <= 0) return;
+            double fraction = Math.min(1, (start + seconds * percent / 100.0) / duration);
+            double spent = (System.currentTimeMillis() - started) / 1000.0;
+            double share = fraction - from / duration;
+            progress("transcribing", fraction, share > 0.03 ? spent * (1 - fraction) / share : null);
+        });
+        if (heard == null) throw new InterruptedException("stopped");
+        TurboWords.Chunk chunk = TurboWords.chunk((byte[]) heard[0], (int[]) heard[1], (int[]) heard[2], (int[]) heard[3], start, seconds, last);
+        words.addAll(chunk.words);
+        sound.keepFrom(chunk.next);
+        if (!last) Checkpoint.saveWords(context, key, engine, words, chunk.next);
     }
 
     /** The server's refusal, worth showing as is. */
@@ -300,7 +457,7 @@ public class LocalTranscribeWorker extends Worker {
             .put("duration_seconds", duration)
             .put("folder", folder == null ? "" : folder)
             .put("origin", input.getString("origin"))
-            .put("engine", LocalModel.ENGINE);
+            .put("engine", engine);
         ByteArrayOutputStream packed = new ByteArrayOutputStream();
         try (GZIPOutputStream gzip = new GZIPOutputStream(packed)) {
             gzip.write(segments.toString().getBytes(StandardCharsets.UTF_8));

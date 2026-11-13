@@ -11,6 +11,15 @@ android {
         versionCode Integer.parseInt(System.getenv("IVRIT_VERSION_CODE") ?: "1")
         versionName System.getenv("IVRIT_VERSION_NAME") ?: "0.0.0-dev"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // The Turbo model's runtime (src/main/cpp: whisper.cpp, scripts/fetch-whisper.sh),
+        // for arm64 phones only; others keep the zipformer.
+        externalNativeBuild {
+            cmake {
+                abiFilters 'arm64-v8a'
+                // -PturboVulkan=OFF: whisper.cpp on the CPU only (src/main/cpp/CMakeLists.txt).
+                arguments '-DCMAKE_BUILD_TYPE=Release', "-DIVRIT_TURBO_VULKAN=${project.findProperty('turboVulkan') ?: 'ON'}"
+            }
+        }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -24,6 +33,12 @@ android {
     }
     androidResources {
         noCompress += ['onnx']
+    }
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
+        }
     }
     signingConfigs {
         // The upload key stays outside the repo; scripts/build-android.sh

@@ -173,4 +173,10 @@ def mount_pages(app: FastAPI):
     if lab_models:
         os.makedirs(lab_models, exist_ok=True)
         app.mount("/lab/models", Pages(directory=lab_models), name="lab-models")
+    # The Turbo model for the Android app's on-device transcription, made at
+    # start-up into TURBO_MODELS_DIR (scripts/turbo_model.py); missing until then.
+    turbo_models = os.environ.get("TURBO_MODELS_DIR")
+    if turbo_models:
+        os.makedirs(turbo_models, exist_ok=True)
+        app.mount("/models/turbo", Pages(directory=turbo_models), name="turbo-models")
     app.mount("/", Pages(directory=WEB_DIR, html=True), name="pages")

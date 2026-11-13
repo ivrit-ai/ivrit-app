@@ -2419,7 +2419,9 @@ async def delete_library_folder(folder_id: str, request: Request):
 # `results` (the segments, gzipped JSON) and, when the user keeps the audio,
 # `audio`. The audio is only converted for playback and stored in their Drive;
 # it is not transcribed here, and no quota is used.
-LOCAL_ENGINES = {"zipformer2-66m-he"}
+# The engines: the zipformer, and ivrit.ai's Turbo model as the Android app runs
+# it (whisper.cpp, scripts/turbo_model.py's quantizations).
+LOCAL_ENGINES = {"zipformer2-66m-he", "whisper-turbo-he-q5_1", "whisper-turbo-he-q8_0"}
 LOCAL_MAX_RESULTS = 40 * 1024 * 1024  # unpacked JSON; ~20 hours of speech
 
 

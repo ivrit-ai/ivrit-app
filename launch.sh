@@ -8,6 +8,9 @@ set -eu
 # web/lab/models.json.
 export LAB_MODELS_DIR=/tmp/lab-models
 nice -n 19 python3 scripts/lab_models.py > /tmp/lab-models.log 2>&1 &
+# The Android app's Turbo model (scripts/turbo_model.py), the same way.
+export TURBO_MODELS_DIR=/tmp/turbo-models
+nice -n 19 python3 scripts/turbo_model.py > /tmp/turbo-models.log 2>&1 &
 cd server
 exec uvicorn app:app --host 0.0.0.0 --port "${XHOSTD_HTTP_PORT:-${PORT:-8080}}" \
   --proxy-headers --forwarded-allow-ips='*'

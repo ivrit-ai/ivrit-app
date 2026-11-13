@@ -29,6 +29,7 @@ export IVRIT_VERSION_CODE IVRIT_VERSION_NAME
 
 scripts/fetch-sherpa.sh
 scripts/fetch-model.sh
+scripts/fetch-whisper.sh
 (cd shell && npm ci --silent && npx cap sync android)
 (cd shell/android && ./gradlew --no-daemon -q bundleRelease assembleRelease)
 

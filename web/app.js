@@ -1651,6 +1651,10 @@ const transcriptionHost = {
   liveBusy: () => live.busy(),
   // My files on the device: the way to Drive (signed in, the panel above has it).
   deviceAction: () => (state.me ? null : { label: t("continueGoogle"), run: () => signInWithGoogle() }),
+  // The model the phone transcribes with, where it can run ivrit.ai's Turbo model
+  // (the shell's "turboModel"), and where it runs: {model, ready, processor, gpu},
+  // choosing what `choice` ({model} or {processor}) names.
+  onDeviceModel: (choice) => (shell && nativeStatus?.features?.includes("turboModel") ? shell.ivrit.onDeviceModel(choice ?? {}) : null),
   canOpenAppSettings: () => Boolean(shell && nativeStatus?.features?.includes("appSettings")),
   openAppSettings: () => shell?.ivrit.openAppSettings().catch(() => {}),
 };

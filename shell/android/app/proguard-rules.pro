@@ -36,3 +36,7 @@
 # Its core is small and works by reflection throughout: kept whole.
 -keep class com.getcapacitor.** { *; }
 -keep @interface com.getcapacitor.annotation.** { *; }
+# The Turbo model's runtime (turbo.c) calls these by name.
+-keep class ai.ivrit.app.Whisper { native <methods>; }
+-keep interface ai.ivrit.app.Whisper$Listener { *; }
+-keepclassmembers class * implements ai.ivrit.app.Whisper$Listener { void progress(int); }

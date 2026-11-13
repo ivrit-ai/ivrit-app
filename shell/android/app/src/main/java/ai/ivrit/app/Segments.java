@@ -26,7 +26,7 @@ final class Segments {
     static final double LONG_SENTENCE = 12;
     static final double TAIL = 0.4;
     static final double MIN_WORD = 0.04;
-    private static final Pattern PUNCTUATION = Pattern.compile("^[.,?!:;…\"'()\\[\\]\\-–—]+$");
+    static final Pattern PUNCTUATION = Pattern.compile("^[.,?!:;…\"'()\\[\\]\\-–—]+$");
     private static final Pattern ENDS_SENTENCE = Pattern.compile("[.?!…][\"')\\]]*$");
 
     static final class Word {
@@ -67,7 +67,11 @@ final class Segments {
     }
 
     static JSONArray segments(String[] pieces, float[] times) throws Exception {
-        List<Word> words = words(pieces, times);
+        return segments(words(pieces, times));
+    }
+
+    /** Words already timed (the Turbo model's, TurboWords) into sentences, by the same rules. */
+    static JSONArray segments(List<Word> words) throws Exception {
         JSONArray out = new JSONArray();
         List<Word> current = new ArrayList<>();
         for (int i = 0; i < words.size(); i++) {
@@ -103,7 +107,7 @@ final class Segments {
             .put("words", list);
     }
 
-    private static double round(double seconds) {
+    static double round(double seconds) {
         return Math.round(seconds * 1000) / 1000.0;
     }
 }
