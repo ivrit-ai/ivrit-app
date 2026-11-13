@@ -53,8 +53,11 @@ Open to comment; each with what it rests on.
    library is built for `armv8.2-a+dotprod+fp16`: a phone without them would
    crash, so the check is a must, not a nicety.
 
-5. **Threads:** the cores faster than the slowest kind, at least four where
-   there are as many, at most six. ggml shares matrix work out in small pieces,
+5. **Threads:** the cores at least half as capable as the best, by the
+   kernel's own measure (`cpu_capacity`), at most eight: all eight on a Galaxy
+   S25, whose cores are all big (build 249 used four there, and still ran
+   1.2× real time on the CPU); where that is missing, the cores faster than the
+   slowest kind, at least four. ggml shares matrix work out in small pieces,
    so a small core helps more than it holds back. Reported with each run, to
    tune from phones' numbers.
 
@@ -90,7 +93,19 @@ Open to comment; each with what it rests on.
     words in order; half floats move a word or two, a broken driver far more)
     and its second run is faster. About a minute, once.
 
-11. **Crash guard instead of a separate process.** A GPU driver crash kills
+11. **Safer settings before giving up.** On a Galaxy S25 (Adreno 830, Android
+    17) build 249's check crashed while ggml was starting the GPU, before the
+    first transcription. ggml takes its newest path on Adreno 8xx (cooperative
+    matrices) and builds every shader when the device starts, the likeliest
+    place. A check that crashes now runs again with safer switches for ggml's
+    Vulkan backend: first without cooperative matrices, then also without
+    integer dot products, half floats and fusion; only when the last crashes
+    is the GPU given up. Each crash is reported (`kind=local-turbo-gpu-crash`)
+    with the check's step and, from Android 11, the phone's own record of it,
+    the native tombstone included, for symbols from the build's unstripped
+    library (kept outside the repo, by build number).
+
+12. **Crash guard instead of a separate process.** A GPU driver crash kills
     the process. A check under way is saved before it starts; if it is still
     there next time, the GPU is marked crashed. A GPU run likewise; two dying in
     a row put the phone back on the CPU (until its next system update). A run
@@ -101,12 +116,12 @@ Open to comment; each with what it rests on.
     the page shows across processes; worth it only if phones' reports show
     crashes.
 
-12. **The user's choice of processor:** automatic (the GPU when it passed and is
+13. **The user's choice of processor:** automatic (the GPU when it passed and is
     faster; the default), the CPU, or the GPU whenever its words are right,
     faster or not (to compare on a phone). Settings shows what the check found:
     the GPU's name, and its time against the CPU's.
 
-13. **Building:** NDK 27.0.12077973 (AGP 8.13's default) and CMake 3.22.1.
+14. **Building:** NDK 27.0.12077973 (AGP 8.13's default) and CMake 3.22.1.
     ggml-vulkan needs newer Vulkan headers than the NDK's (it has 275; these are
     1.4.350, May 2026) and SPIR-V's headers, fetched pinned with whisper.cpp.
     Its shaders compile with the NDK's `glslc` (shaderc 2022.3; NDK r30 has the

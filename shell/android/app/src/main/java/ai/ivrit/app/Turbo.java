@@ -89,27 +89,44 @@ final class Turbo {
     }
 
     /**
-     * Threads for whisper.cpp: the cores faster than the slowest kind (the big ones),
-     * at least four where there are as many: the work is shared out in small pieces,
-     * so a small core helps rather than holding the others back.
+     * Threads for whisper.cpp: the cores at least half as capable as the best (the
+     * kernel's own measure, cpu_capacity, out of 1024), at most eight: all eight on
+     * a phone whose cores are all big (the Galaxy S25's), four on four big and four
+     * small. Where the kernel does not say, the cores faster than the slowest kind,
+     * at least four. ggml shares matrix work out in small pieces, so a slower core
+     * still helps.
      */
     static int threads() {
         int n = Runtime.getRuntime().availableProcessors();
-        long[] speeds = new long[n];
-        long slowest = Long.MAX_VALUE;
-        for (int i = 0; i < n; i++) {
-            try (java.io.BufferedReader in = new java.io.BufferedReader(
-                    new java.io.FileReader("/sys/devices/system/cpu/cpu" + i + "/cpufreq/cpuinfo_max_freq"))) {
-                speeds[i] = Long.parseLong(in.readLine().trim());
-            } catch (Exception e) {
-                return Math.max(1, Math.min(4, n));
-            }
-            slowest = Math.min(slowest, speeds[i]);
+        long[] capacity = cores(n, "cpu_capacity");
+        if (capacity != null) {
+            long best = 0;
+            for (long c : capacity) best = Math.max(best, c);
+            int able = 0;
+            for (long c : capacity) if (c * 2 >= best) able++;
+            return Math.max(2, Math.min(8, able));
         }
+        long[] speeds = cores(n, "cpufreq/cpuinfo_max_freq");
+        if (speeds == null) return Math.max(1, Math.min(4, n));
+        long slowest = Long.MAX_VALUE;
+        for (long s : speeds) slowest = Math.min(slowest, s);
         int big = 0;
         for (long s : speeds) if (s > slowest) big++;
         if (big == 0) big = n;
-        return Math.min(6, Math.max(big, Math.min(4, n)));
+        return Math.min(8, Math.max(big, Math.min(4, n)));
+    }
+
+    /** /sys/devices/system/cpu/cpu<i>/<file> for every core, or null where one is missing. */
+    private static long[] cores(int n, String file) {
+        long[] out = new long[n];
+        for (int i = 0; i < n; i++) {
+            try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.FileReader("/sys/devices/system/cpu/cpu" + i + "/" + file))) {
+                out[i] = Long.parseLong(in.readLine().trim());
+            } catch (Exception e) {
+                return null;
+            }
+        }
+        return out;
     }
 
     private static File dir(Context context) {

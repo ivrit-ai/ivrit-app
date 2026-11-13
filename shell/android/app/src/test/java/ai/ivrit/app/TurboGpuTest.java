@@ -31,21 +31,46 @@ public class TurboGpuTest {
     }
 
     @Test
-    public void aCheckThatNeverEndedIsACrash() {
-        assertEquals("crashed", TurboGpu.settle(verdict("testing"), "build q8_0").state);
+    public void aCheckThatNeverEndedIsCheckedAgainMoreCarefully() {
+        TurboGpu.Verdict v = verdict("testing");
+        v.step = "probe";
+        v = TurboGpu.settle(v, "build q8_0");
+        assertNull(v.state);
+        assertEquals(1, v.level);
+        assertEquals("0:probe", v.crashed);
+        for (int level = 1; level < TurboGpu.LEVELS.length; level++) {
+            v.state = "testing";
+            v.step = "gpu-shaders";
+            v = TurboGpu.settle(v, "build q8_0");
+        }
+        assertEquals("crashed", v.state);
+        assertEquals(TurboGpu.LEVELS.length - 1, v.level);
+        assertEquals("0:probe 1:gpu-shaders 2:gpu-shaders ", v.crashes);
     }
 
     @Test
-    public void twoGpuRunsDyingInARowGiveUpTheGpu() {
+    public void twoGpuRunsDyingInARowAreACrash() {
         TurboGpu.Verdict v = verdict("faster");
         v.running = true;
         v = TurboGpu.settle(v, "build q8_0");
         assertEquals("faster", v.state);
         assertEquals(1, v.deaths);
+        assertNull(v.crashed);
         v.running = true;
         v = TurboGpu.settle(v, "build q8_0");
-        assertEquals("crashed", v.state);
+        assertNull(v.state);
+        assertEquals(1, v.level);
+        assertEquals("0:run", v.crashed);
         assertFalse(v.running);
+    }
+
+    @Test
+    public void aCrashKeptBeforeLevelsIsTriedAgain() throws Exception {
+        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", "crashed").put("gpu", "");
+        TurboGpu.Verdict v = TurboGpu.Verdict.of(old);
+        assertNull(v.state);
+        assertEquals(1, v.level);
+        assertEquals("0:probe", v.crashed);
     }
 
     @Test
@@ -62,11 +87,15 @@ public class TurboGpuTest {
         v.gpu = "Adreno (TM) 720";
         v.cpuSeconds = 9.5;
         v.deaths = 1;
+        v.level = 1;
+        v.step = "gpu-run";
         TurboGpu.Verdict back = TurboGpu.Verdict.of(v.json());
         assertEquals("slower", back.state);
         assertEquals("Adreno (TM) 720", back.gpu);
         assertEquals(9.5, back.cpuSeconds, 0);
         assertEquals(1, back.deaths);
+        assertEquals(1, back.level);
+        assertEquals("gpu-run", back.step);
         assertNull(TurboGpu.Verdict.of(verdict(null).json()).state);
     }
 
