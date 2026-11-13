@@ -363,6 +363,14 @@ public class LocalTranscribeWorker extends Worker {
             if (sound.resampler != null) sound.add(sound.resampler.flush());
             if (sound.start < 0) sound.start = from;
             hearTurbo(context, handle, threads, sound, words, true, duration, from, started);
+        } catch (IllegalStateException e) {
+            // ggml failing on the GPU (guard.cpp): the next level next time; this
+            // recording again, from its last checkpoint, on the CPU (retried).
+            if (gpu && !isStopped()) {
+                TurboGpu.failed(context, variant, e.getMessage());
+                gpu = false;
+            }
+            throw e;
         } finally {
             synchronized (this) {
                 turbo = 0;

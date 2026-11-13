@@ -45,7 +45,7 @@ public class TurboGpuTest {
         }
         assertEquals("crashed", v.state);
         assertEquals(TurboGpu.LEVELS.length - 1, v.level);
-        assertEquals("0:probe 1:gpu-shaders 2:gpu-shaders 3:gpu-shaders ", v.crashes);
+        assertEquals("0:probe 1:gpu-shaders 2:gpu-shaders 3:gpu-shaders 4:gpu-shaders ", v.crashes);
     }
 
     @Test
@@ -74,18 +74,44 @@ public class TurboGpuTest {
     }
 
     @Test
-    public void aCrashAtBuild250sLastLevelGoesOnWithoutFlashAttention() throws Exception {
-        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", "crashed").put("level", 2)
-            .put("gpu", "Adreno (TM) 830").put("crashes", "0:probe 1:gpu-shaders 2:gpu-shaders ");
+    public void aPhoneThatFailedOnAnEarlierLadderGoesOnFromTheNewLevels() throws Exception {
+        // The Galaxy S25 after build 251: past levels 0 and 1, on level 3 of ladder 2.
+        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", JSONObjectNull()).put("level", 3)
+            .put("ladder", 2).put("gpu", "Adreno (TM) 830").put("crashes", "0:probe 1:gpu-shaders 2:gpu-shaders 2:gpu-shaders ");
         TurboGpu.Verdict v = TurboGpu.Verdict.of(old);
         assertNull(v.state);
-        assertEquals(TurboGpu.NO_FLASH, v.level);
-        assertFalse(TurboGpu.flash(v));
-        assertEquals(TurboGpu.LADDER, TurboGpu.Verdict.of(v.json()).json().getInt("ladder"));
-        // Kept at this ladder: a crash stays one.
+        assertEquals(TurboGpu.RESUME, v.level);
+        assertTrue(TurboGpu.flash(v));
+        assertEquals(TurboGpu.LADDER, v.json().getInt("ladder"));
+        // Only the first crash so far: level 1 is still to be tried.
+        TurboGpu.Verdict early = TurboGpu.Verdict.of(new org.json.JSONObject().put("key", "k").put("state", JSONObjectNull())
+            .put("level", 1).put("ladder", 2));
+        assertEquals(1, early.level);
+        // A GPU that works, or a verdict of this ladder, stays as it is.
+        TurboGpu.Verdict works = verdict("faster");
+        works.level = 3;
+        org.json.JSONObject worked = works.json().put("ladder", 2);
+        assertEquals(3, TurboGpu.Verdict.of(worked).level);
         TurboGpu.Verdict kept = verdict("crashed");
-        kept.level = 3;
+        kept.level = 4;
         assertEquals("crashed", TurboGpu.Verdict.of(kept.json()).state);
+    }
+
+    private static Object JSONObjectNull() {
+        return org.json.JSONObject.NULL;
+    }
+
+    @Test
+    public void aFailureGgmlReportsMovesOnLikeACrash() {
+        TurboGpu.Verdict v = verdict("testing");
+        v.level = 2;
+        TurboGpu.fail(v, "gpu-shaders", "failed");
+        assertNull(v.state);
+        assertEquals(3, v.level);
+        v.level = TurboGpu.LEVELS.length - 1;
+        TurboGpu.fail(v, "run", "failed");
+        assertEquals("failed", v.state);
+        assertFalse(TurboGpu.flash(v));
     }
 
     @Test

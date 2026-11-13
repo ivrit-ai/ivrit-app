@@ -50,7 +50,7 @@ if(IVRIT_TURBO_VULKAN)
     target_include_directories(ggml-vulkan PRIVATE ${Vulkan_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/spirv-headers/include)
 endif()
 
-add_library(ivritturbo SHARED turbo.c)
+add_library(ivritturbo SHARED turbo.c guard.cpp)
 target_link_libraries(ivritturbo PRIVATE whisper ggml log)
 target_compile_options(ivritturbo PRIVATE -O3)
 target_link_options(ivritturbo PRIVATE -Wl,--gc-sections -Wl,--exclude-libs,ALL)

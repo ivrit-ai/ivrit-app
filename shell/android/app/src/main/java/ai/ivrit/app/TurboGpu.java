@@ -22,9 +22,11 @@ import org.json.JSONObject;
  * A check or a GPU run that never finished (the process died in it) is found the next
  * time, and reported with the step it died in and, from Android 11, the phone's own
  * record of the crash (kind=local-turbo-gpu-crash). The check then runs again with
- * safer settings for ggml's Vulkan backend (LEVELS: first without cooperative
- * matrices, which only newer GPUs have, as Adreno 8xx), and only after the last one
- * also dies is the GPU given up. GPU runs dying twice in a row count as a crash too.
+ * safer settings for ggml's Vulkan backend (LEVELS), and only after the last one
+ * also fails is the GPU given up. GPU runs dying twice in a row count as a crash too.
+ * A failure ggml reports rather than dying of (the driver refusing to build a
+ * shader: guard.cpp) counts the same, reported at once, and the recording goes on
+ * on the CPU.
  *
  * The user can choose (the web app's Settings): automatic (the GPU when it passed and
  * is faster), the CPU, or the GPU whenever it gives the right words, faster or not.
@@ -40,17 +42,28 @@ final class TurboGpu {
     static final double AGREEMENT = 0.85;
     /** GPU runs that died in a row before the GPU is given up. */
     static final int DEATHS = 2;
-    /** ggml-vulkan's switches (environment variables) for each try, safest last. */
+    /**
+     * ggml-vulkan's switches (environment variables; the last two are the app's own,
+     * patches/ggml-vulkan-switches.patch) for each try, safest last. On the Galaxy
+     * S25 (Adreno 830): with cooperative matrices the GPU did not start; without,
+     * the driver refused the q8_0 matrix-vector shader ("createComputePipeline:
+     * ErrorUnknown"), which differs from the f16 ones it built in leaving bounds
+     * checks off (robustness) and requiring whole subgroups of a fixed size.
+     */
     static final String[][] LEVELS = {
         {},
         {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2"},
-        {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2"},
-        {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2", "GGML_VK_DISABLE_INTEGER_DOT_PRODUCT", "GGML_VK_DISABLE_F16", "GGML_VK_DISABLE_FUSION"},
+        {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2", "GGML_VK_KEEP_ROBUSTNESS"},
+        {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2", "GGML_VK_KEEP_ROBUSTNESS", "GGML_VK_DISABLE_SUBGROUP_ARITHMETIC"},
+        {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2", "GGML_VK_KEEP_ROBUSTNESS", "GGML_VK_DISABLE_SUBGROUP_ARITHMETIC",
+            "GGML_VK_DISABLE_INTEGER_DOT_PRODUCT", "GGML_VK_DISABLE_F16", "GGML_VK_DISABLE_FUSION"},
     };
-    /** From this level on, whisper.cpp runs without flash attention (its shaders are a usual suspect). */
-    static final int NO_FLASH = 2;
+    /** At the last level whisper.cpp also runs without flash attention. */
+    static final int NO_FLASH = 4;
     /** These levels' version: verdicts from an earlier one are carried over (Verdict.of). */
-    static final int LADDER = 2;
+    static final int LADDER = 3;
+    /** Where a phone that failed on an earlier ladder's levels past the first two goes on from. */
+    static final int RESUME = 2;
 
     /** What was found on this phone: kept between runs, one at a time. */
     static final class Verdict {
@@ -101,10 +114,10 @@ final class TurboGpu {
                 v.level = 1;
                 v.state = null;
             }
-            // Build 250's levels were 0 and 1 as now, and 2 became 3: having crashed
-            // there, go on from the level put in between (no flash attention).
-            if (o.optInt("ladder", 1) < LADDER && "crashed".equals(v.state) && v.level >= 2) {
-                v.level = NO_FLASH;
+            // Builds 250 and 251 had levels 0 and 1 as now, then others that failed the
+            // same way as 1: past those, go on from the first new one.
+            if (o.optInt("ladder", 1) < LADDER && !v.works() && v.level >= 1) {
+                v.level = Math.min(v.level, RESUME);
                 v.state = null;
             }
             return v;
@@ -134,6 +147,11 @@ final class TurboGpu {
     }
 
     private static void crash(Verdict v, String where) {
+        fail(v, where, "crashed");
+    }
+
+    /** Failed at this level: the next is checked next time, or, after the last, `last`. */
+    static void fail(Verdict v, String where, String last) {
         v.crashed = v.level + ":" + where;
         v.crashes += v.crashed + " ";
         v.deaths = 0;
@@ -141,7 +159,7 @@ final class TurboGpu {
             v.level++;
             v.state = null; // checked again, more carefully
         } else {
-            v.state = "crashed";
+            v.state = last;
         }
     }
 
@@ -280,13 +298,32 @@ final class TurboGpu {
                 v.state = v.agreement < AGREEMENT ? "wrong" : v.gpuSeconds < v.cpuSeconds ? "faster" : "slower";
             }
         } catch (Exception e) {
-            // Out of memory on the GPU, say: the CPU, then.
-            v.state = "failed";
             v.error = String.valueOf(e.getMessage());
+            if ("cpu".equals(v.step)) {
+                v.state = "failed"; // the sample or the CPU, not the GPU
+            } else {
+                // ggml said what failed (the driver refusing a shader, say): the next
+                // level next time, and this recording on the CPU.
+                fail(v, v.step, "failed");
+                save(context, v);
+                reportCrash(context, variant, v);
+                return;
+            }
         }
         save(context, v);
         LocalTranscribeWorker.post(context, "local-turbo-gpu", v.json().put("engine", Turbo.engine(variant))
             .put("threads", Turbo.threads()).put("system", Whisper.system()));
+    }
+
+    /** A GPU run failed with ggml saying why (not a crash): as a failed check, at this level. */
+    static void failed(Context context, String variant, String why) {
+        Verdict v = load(context);
+        if (v == null) return;
+        v.running = false;
+        v.error = String.valueOf(why);
+        fail(v, "run", "failed");
+        save(context, v);
+        reportCrash(context, variant, v);
     }
 
     // Kept at once, so a crash in it says where.

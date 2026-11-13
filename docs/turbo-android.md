@@ -93,23 +93,30 @@ Open to comment; each with what it rests on.
     words in order; half floats move a word or two, a broken driver far more)
     and its second run is faster. About a minute, once.
 
-11. **Safer settings before giving up.** On a Galaxy S25 (Adreno 830, Android
-    17) build 249's check crashed while ggml was starting the GPU, before the
-    first transcription. ggml takes its newest path on Adreno 8xx (cooperative
-    matrices) and builds every shader when the device starts, the likeliest
-    place. A check that crashes now runs again with safer switches for ggml's
-    Vulkan backend: without cooperative matrices; then also without flash
-    attention; then also without integer dot products, half floats and fusion;
-    only when the last crashes is the GPU given up. On the S25, without
-    cooperative matrices the GPU started, but the first transcription on it
-    still died (build 250), with flash attention on.
-    ggml-vulkan writes its errors (and failed assertions their last words) to
-    stderr, which Android drops: during the check and GPU runs, stderr and the
-    whole ggml/whisper.cpp log go to a file, whose end goes with the next crash
-    report. Each crash is reported (`kind=local-turbo-gpu-crash`)
-    with the check's step and, from Android 11, the phone's own record of it,
-    the native tombstone included, for symbols from the build's unstripped
-    library (kept outside the repo, by build number).
+11. **Safer settings before giving up, and the Galaxy S25.** On a Galaxy S25
+    (Adreno 830, Android 17) the GPU first failed to start (ggml's cooperative
+    matrix path, the newest, taken on Adreno 8xx); without it, the GPU started,
+    but its driver refused to build ggml's q8_0 matrix-vector shader
+    (`createComputePipeline: ErrorUnknown`), and the C++ exception ended the app.
+    That shader differs from the f16 ones the driver built in leaving bounds
+    checks off (pipeline robustness) and requiring whole subgroups of a fixed
+    size. So:
+    - `patches/ggml-vulkan-switches.patch` (applied by `fetch-whisper.sh`) adds
+      two switches to ggml-vulkan: keep robustness on everywhere
+      (`GGML_VK_KEEP_ROBUSTNESS`), reduce through shared memory instead of
+      subgroups (`GGML_VK_DISABLE_SUBGROUP_ARITHMETIC`).
+    - The levels, each tried once, safest last: as is; no cooperative matrices;
+      also robustness kept; also no subgroup reductions; also no integer dot
+      products, half floats, fusion or flash attention. Only after the last is
+      the GPU given up.
+    - `guard.cpp` catches what whisper.cpp and ggml throw, so a refused shader
+      fails the check (next level next time; this recording on the CPU) instead
+      of ending the app.
+    - During the check and GPU runs, stderr and the whole ggml/whisper.cpp log go
+      to a file; every failure or crash is reported
+      (`kind=local-turbo-gpu-crash`) with its end, the step, and from Android 11
+      the phone's exit records with native tombstones (symbols: the build's
+      unstripped library, kept outside the repo by build number).
 
 12. **Crash guard instead of a separate process.** A GPU driver crash kills
     the process. A check under way is saved before it starts; if it is still

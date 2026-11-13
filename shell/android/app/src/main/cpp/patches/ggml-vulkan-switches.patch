@@ -1,0 +1,25 @@
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -4239,6 +4239,11 @@
+                                  (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eBasic);
+         device->subgroup_arithmetic = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                       (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
++        // ivrit-app: reductions through shared memory instead, for a driver that
++        // fails to build the subgroup ones.
++        if (getenv("GGML_VK_DISABLE_SUBGROUP_ARITHMETIC")) {
++            device->subgroup_arithmetic = false;
++        }
+ #ifdef __APPLE__
+         // Workaround for subgroup arithmetic failing on MoltenVK with AMD GPUs (issue 15846)
+         if (device->vendor_id == VK_VENDOR_ID_AMD) {
+@@ -4508,7 +4513,9 @@
+                           shader_float8_extension && shader_float8_features.shaderFloat8 &&
+                           !getenv("GGML_VK_DISABLE_OCP_FP4");
+ 
+-        device->pipeline_robustness = pl_robustness_features.pipelineRobustness;
++        // ivrit-app: GGML_VK_KEEP_ROBUSTNESS leaves bounds checks on in every pipeline,
++        // for a driver that fails to build them without.
++        device->pipeline_robustness = pl_robustness_features.pipelineRobustness && !getenv("GGML_VK_KEEP_ROBUSTNESS");
+ 
+         device->multi_add = vk12_props.shaderRoundingModeRTEFloat16 &&
+                             device->properties.limits.maxPushConstantsSize >= sizeof(vk_op_multi_add_push_constants) &&

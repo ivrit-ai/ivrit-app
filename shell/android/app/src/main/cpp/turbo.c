@@ -19,6 +19,15 @@
 
 #define TAG "IvritTurbo"
 
+// guard.cpp: the same calls, with what they throw caught.
+struct whisper_context *guarded_init(const char *path, struct whisper_context_params params, char *error, size_t size);
+int guarded_full(struct whisper_context *ctx, struct whisper_full_params params, const float *samples, int n, char *error, size_t size);
+const char *guarded_gpu(char *error, size_t size);
+
+static void throw_state(JNIEnv *env, const char *message) {
+    (*env)->ThrowNew(env, (*env)->FindClass(env, "java/lang/IllegalStateException"), message);
+}
+
 typedef struct {
     struct whisper_context *ctx;
     atomic_bool stop;  // set by Whisper.stop from another thread
@@ -77,21 +86,17 @@ static void progressed(struct whisper_context *ctx, struct whisper_state *state,
 }
 
 // The GPU whisper.cpp would use ("Adreno (TM) 720"…), once it is known to start,
-// or null: no Vulkan device ggml can work with.
+// or null: no Vulkan device ggml can work with. Throws when starting it threw.
 JNIEXPORT jstring JNICALL Java_ai_ivrit_app_Whisper_gpu(JNIEnv *env, jclass cls) {
     (void) cls;
     ggml_log_set(on_log, NULL);
-    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
-        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-        enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
-        if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) continue;
-        // As whisper.cpp starts it (whisper_backend_init_gpu): the first GPU.
-        ggml_backend_t backend = ggml_backend_dev_init(dev, NULL);
-        if (!backend) return NULL;
-        ggml_backend_free(backend);
-        return (*env)->NewStringUTF(env, ggml_backend_dev_description(dev));
+    char error[512] = "";
+    const char *name = guarded_gpu(error, sizeof error);
+    if (error[0]) {
+        throw_state(env, error);
+        return NULL;
     }
-    return NULL;
+    return name ? (*env)->NewStringUTF(env, name) : NULL;
 }
 
 JNIEXPORT jlong JNICALL Java_ai_ivrit_app_Whisper_load(JNIEnv *env, jclass cls, jstring path, jboolean gpu, jboolean flash) {
@@ -101,8 +106,13 @@ JNIEXPORT jlong JNICALL Java_ai_ivrit_app_Whisper_load(JNIEnv *env, jclass cls, 
     params.use_gpu = gpu == JNI_TRUE;
     params.flash_attn = flash == JNI_TRUE;
     const char *file = (*env)->GetStringUTFChars(env, path, NULL);
-    struct whisper_context *ctx = whisper_init_from_file_with_params(file, params);
+    char error[512] = "";
+    struct whisper_context *ctx = guarded_init(file, params, error, sizeof error);
     (*env)->ReleaseStringUTFChars(env, path, file);
+    if (error[0]) {
+        throw_state(env, error);
+        return 0;
+    }
     if (!ctx) return 0;
     turbo *t = calloc(1, sizeof *t);
     if (!t) {
@@ -139,7 +149,7 @@ JNIEXPORT jstring JNICALL Java_ai_ivrit_app_Whisper_system(JNIEnv *env, jclass c
 // after another (UTF-8, but a token may end inside a letter), where each token's
 // bytes end, each token's start and end (centiseconds, two ints a token), and each
 // segment's start, end and the token it ends before (three ints a segment). Null
-// when stopped; throws when whisper.cpp fails.
+// when stopped; throws when whisper.cpp fails, with what it threw if it did.
 JNIEXPORT jobjectArray JNICALL Java_ai_ivrit_app_Whisper_transcribe(
         JNIEnv *env, jclass cls, jlong handle, jfloatArray pcm, jstring language, jint threads, jint beams, jobject listener) {
     (void) cls;
@@ -171,13 +181,13 @@ JNIEXPORT jobjectArray JNICALL Java_ai_ivrit_app_Whisper_transcribe(
     params.language = lang;
     jsize n = (*env)->GetArrayLength(env, pcm);
     jfloat *samples = (*env)->GetFloatArrayElements(env, pcm, NULL);
-    int failed = whisper_full(t->ctx, params, samples, n);
+    char error[512] = "";
+    int failed = guarded_full(t->ctx, params, samples, n, error, sizeof error);
     (*env)->ReleaseFloatArrayElements(env, pcm, samples, JNI_ABORT);
     (*env)->ReleaseStringUTFChars(env, language, lang);
     if (atomic_load(&t->stop)) return NULL;
     if (failed) {
-        jclass error = (*env)->FindClass(env, "java/lang/IllegalStateException");
-        (*env)->ThrowNew(env, error, "whisper_full failed");
+        throw_state(env, error[0] ? error : "whisper_full failed");
         return NULL;
     }
 
