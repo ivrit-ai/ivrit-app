@@ -44,8 +44,13 @@ final class TurboGpu {
     static final String[][] LEVELS = {
         {},
         {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2"},
+        {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2"},
         {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2", "GGML_VK_DISABLE_INTEGER_DOT_PRODUCT", "GGML_VK_DISABLE_F16", "GGML_VK_DISABLE_FUSION"},
     };
+    /** From this level on, whisper.cpp runs without flash attention (its shaders are a usual suspect). */
+    static final int NO_FLASH = 2;
+    /** These levels' version: verdicts from an earlier one are carried over (Verdict.of). */
+    static final int LADDER = 2;
 
     /** What was found on this phone: kept between runs, one at a time. */
     static final class Verdict {
@@ -72,7 +77,7 @@ final class TurboGpu {
             return new JSONObject().put("key", key).put("state", state == null ? JSONObject.NULL : state).put("gpu", gpu)
                 .put("cpuSeconds", cpuSeconds).put("gpuSeconds", gpuSeconds).put("agreement", agreement)
                 .put("error", error).put("deaths", deaths).put("running", running).put("level", level).put("step", step)
-                .put("since", since).put("crashes", crashes);
+                .put("since", since).put("crashes", crashes).put("ladder", LADDER);
         }
 
         static Verdict of(JSONObject o) {
@@ -94,6 +99,12 @@ final class TurboGpu {
                 v.crashed = "0:" + (v.gpu.isEmpty() ? "probe" : "?");
                 v.crashes = v.crashed + " ";
                 v.level = 1;
+                v.state = null;
+            }
+            // Build 250's levels were 0 and 1 as now, and 2 became 3: having crashed
+            // there, go on from the level put in between (no flash attention).
+            if (o.optInt("ladder", 1) < LADDER && "crashed".equals(v.state) && v.level >= 2) {
+                v.level = NO_FLASH;
                 v.state = null;
             }
             return v;
@@ -132,6 +143,16 @@ final class TurboGpu {
         } else {
             v.state = "crashed";
         }
+    }
+
+    /** Flash attention at the verdict's level. */
+    static boolean flash(Verdict v) {
+        return v.level < NO_FLASH;
+    }
+
+    /** What ggml and whisper.cpp say while the GPU works, kept for a crash's report. */
+    static void log(Context context) {
+        Whisper.logTo(new java.io.File(context.getFilesDir(), "turbo-gpu.log").getPath());
     }
 
     /** The settings for the verdict's level, set before ggml first starts the GPU in this process. */
@@ -236,6 +257,7 @@ final class TurboGpu {
     private static void check(Context context, String variant, Verdict v) throws Exception {
         v.state = "testing";
         v.since = System.currentTimeMillis();
+        log(context);
         step(context, v, "probe");
         try {
             String gpu = Whisper.gpu();
@@ -247,12 +269,12 @@ final class TurboGpu {
                 float[] sound = sample(context);
                 String path = Turbo.file(context, variant).getPath();
                 long[] took = new long[1];
-                String cpu = hear(path, false, sound, took);
+                String cpu = hear(path, false, true, sound, took);
                 v.cpuSeconds = took[0] / 1000.0;
                 step(context, v, "gpu-shaders");
-                hear(path, true, sound, took); // builds the shaders
+                hear(path, true, flash(v), sound, took); // builds the shaders
                 step(context, v, "gpu-run");
-                String onGpu = hear(path, true, sound, took);
+                String onGpu = hear(path, true, flash(v), sound, took);
                 v.gpuSeconds = took[0] / 1000.0;
                 v.agreement = agreement(cpu, onGpu);
                 v.state = v.agreement < AGREEMENT ? "wrong" : v.gpuSeconds < v.cpuSeconds ? "faster" : "slower";
@@ -284,21 +306,29 @@ final class TurboGpu {
                 .put("verdict", v.json());
             if (Build.VERSION.SDK_INT >= 30) {
                 android.app.ActivityManager am = (android.app.ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
-                for (android.app.ApplicationExitInfo exit : am.getHistoricalProcessExitReasons(null, 0, 5)) {
+                org.json.JSONArray exits = new org.json.JSONArray();
+                for (android.app.ApplicationExitInfo exit : am.getHistoricalProcessExitReasons(null, 0, 10)) {
                     if (exit.getTimestamp() < v.since - 1000) continue;
-                    body.put("exit", new JSONObject().put("reason", exit.getReason()).put("description", String.valueOf(exit.getDescription()))
-                        .put("status", exit.getStatus()).put("pss", exit.getPss()).put("rss", exit.getRss()).put("at", exit.getTimestamp()));
+                    JSONObject e = new JSONObject().put("process", exit.getProcessName()).put("pid", exit.getPid())
+                        .put("reason", exit.getReason()).put("description", String.valueOf(exit.getDescription()))
+                        .put("status", exit.getStatus()).put("pss", exit.getPss()).put("rss", exit.getRss()).put("at", exit.getTimestamp());
                     if (exit.getReason() == android.app.ApplicationExitInfo.REASON_CRASH_NATIVE) {
                         try (java.io.InputStream trace = exit.getTraceInputStream()) {
-                            if (trace != null) {
-                                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-                                byte[] buffer = new byte[16384];
-                                for (int n; out.size() < (512 << 10) && (n = trace.read(buffer)) > 0; ) out.write(buffer, 0, n);
-                                body.put("tombstone", android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP));
-                            }
+                            if (trace != null) e.put("tombstone", android.util.Base64.encodeToString(head(trace, 512 << 10), android.util.Base64.NO_WRAP));
                         }
                     }
-                    break;
+                    exits.put(e);
+                }
+                body.put("exits", exits);
+            }
+            java.io.File log = new java.io.File(context.getFilesDir(), "turbo-gpu.log");
+            if (log.isFile()) {
+                try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(log, "r")) {
+                    long from = Math.max(0, f.length() - (48 << 10));
+                    byte[] tail = new byte[(int) (f.length() - from)];
+                    f.seek(from);
+                    f.readFully(tail);
+                    body.put("log", new String(tail, java.nio.charset.StandardCharsets.UTF_8));
                 }
             }
             LocalTranscribeWorker.post(context, "local-turbo-gpu-crash", body);
@@ -307,9 +337,16 @@ final class TurboGpu {
         }
     }
 
+    private static byte[] head(java.io.InputStream in, int most) throws java.io.IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[16384];
+        for (int n; out.size() < most && (n = in.read(buffer)) > 0; ) out.write(buffer, 0, n);
+        return out.toByteArray();
+    }
+
     /** The sample's words, on the GPU or not; took[0]: how long, in milliseconds. */
-    private static String hear(String path, boolean gpu, float[] sound, long[] took) {
-        long handle = Whisper.load(path, gpu);
+    private static String hear(String path, boolean gpu, boolean flash, float[] sound, long[] took) {
+        long handle = Whisper.load(path, gpu, flash);
         if (handle == 0) throw new IllegalStateException("the Turbo model did not load" + (gpu ? " on the GPU" : ""));
         try {
             long started = System.currentTimeMillis();

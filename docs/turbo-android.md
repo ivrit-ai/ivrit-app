@@ -98,9 +98,15 @@ Open to comment; each with what it rests on.
     first transcription. ggml takes its newest path on Adreno 8xx (cooperative
     matrices) and builds every shader when the device starts, the likeliest
     place. A check that crashes now runs again with safer switches for ggml's
-    Vulkan backend: first without cooperative matrices, then also without
-    integer dot products, half floats and fusion; only when the last crashes
-    is the GPU given up. Each crash is reported (`kind=local-turbo-gpu-crash`)
+    Vulkan backend: without cooperative matrices; then also without flash
+    attention; then also without integer dot products, half floats and fusion;
+    only when the last crashes is the GPU given up. On the S25, without
+    cooperative matrices the GPU started, but the first transcription on it
+    still died (build 250), with flash attention on.
+    ggml-vulkan writes its errors (and failed assertions their last words) to
+    stderr, which Android drops: during the check and GPU runs, stderr and the
+    whole ggml/whisper.cpp log go to a file, whose end goes with the next crash
+    report. Each crash is reported (`kind=local-turbo-gpu-crash`)
     with the check's step and, from Android 11, the phone's own record of it,
     the native tombstone included, for symbols from the build's unstripped
     library (kept outside the repo, by build number).

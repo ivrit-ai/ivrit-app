@@ -325,10 +325,11 @@ public class LocalTranscribeWorker extends Worker {
         boolean gpu = TurboGpu.onGpu(verdict, processor);
         long loading = System.currentTimeMillis();
         String path = Turbo.file(context, variant).getPath();
-        long loaded = Whisper.load(path, gpu);
+        if (gpu) TurboGpu.log(context);
+        long loaded = Whisper.load(path, gpu, !gpu || TurboGpu.flash(verdict));
         if (loaded == 0 && gpu) {
             gpu = false; // no room on the GPU: the CPU, then
-            loaded = Whisper.load(path, false);
+            loaded = Whisper.load(path, false, true);
         }
         // Checked when it downloaded: not loading is the phone short of memory.
         if (loaded == 0) throw new IllegalStateException("the Turbo model did not load");

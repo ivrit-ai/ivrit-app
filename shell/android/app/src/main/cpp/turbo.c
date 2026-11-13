@@ -4,7 +4,10 @@
 // (TurboWords), and choosing the GPU too (TurboGpu), where they are tested.
 
 #include <android/log.h>
+#include <fcntl.h>
 #include <jni.h>
+#include <stdio.h>
+#include <unistd.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -27,10 +30,30 @@ typedef struct {
     jmethodID progress;
 } progress_sink;
 
+static bool logging = false;  // everything to stderr, once Whisper.logTo pointed it at a file
+
 static void on_log(enum ggml_log_level level, const char *text, void *user) {
     (void) user;
+    if (logging) fputs(text, stderr);
     if (level == GGML_LOG_LEVEL_ERROR) __android_log_write(ANDROID_LOG_ERROR, TAG, text);
     else if (level == GGML_LOG_LEVEL_WARN) __android_log_write(ANDROID_LOG_WARN, TAG, text);
+}
+
+// stderr (where ggml-vulkan writes its errors, and GGML_ABORT its last words) and
+// whisper.cpp's and ggml's whole log, into a file from here on, unbuffered: what a
+// crash leaves behind is read the next time (TurboGpu).
+JNIEXPORT void JNICALL Java_ai_ivrit_app_Whisper_logTo(JNIEnv *env, jclass cls, jstring path) {
+    (void) cls;
+    const char *file = (*env)->GetStringUTFChars(env, path, NULL);
+    int fd = open(file, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    (*env)->ReleaseStringUTFChars(env, path, file);
+    if (fd < 0) return;
+    dup2(fd, STDERR_FILENO);
+    close(fd);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    logging = true;
+    whisper_log_set(on_log, NULL);
+    ggml_log_set(on_log, NULL);
 }
 
 static bool aborted(void *data) {
@@ -71,12 +94,12 @@ JNIEXPORT jstring JNICALL Java_ai_ivrit_app_Whisper_gpu(JNIEnv *env, jclass cls)
     return NULL;
 }
 
-JNIEXPORT jlong JNICALL Java_ai_ivrit_app_Whisper_load(JNIEnv *env, jclass cls, jstring path, jboolean gpu) {
+JNIEXPORT jlong JNICALL Java_ai_ivrit_app_Whisper_load(JNIEnv *env, jclass cls, jstring path, jboolean gpu, jboolean flash) {
     (void) cls;
     whisper_log_set(on_log, NULL);
     struct whisper_context_params params = whisper_context_default_params();
     params.use_gpu = gpu == JNI_TRUE;
-    params.flash_attn = true;
+    params.flash_attn = flash == JNI_TRUE;
     const char *file = (*env)->GetStringUTFChars(env, path, NULL);
     struct whisper_context *ctx = whisper_init_from_file_with_params(file, params);
     (*env)->ReleaseStringUTFChars(env, path, file);

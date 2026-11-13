@@ -45,7 +45,7 @@ public class TurboGpuTest {
         }
         assertEquals("crashed", v.state);
         assertEquals(TurboGpu.LEVELS.length - 1, v.level);
-        assertEquals("0:probe 1:gpu-shaders 2:gpu-shaders ", v.crashes);
+        assertEquals("0:probe 1:gpu-shaders 2:gpu-shaders 3:gpu-shaders ", v.crashes);
     }
 
     @Test
@@ -71,6 +71,21 @@ public class TurboGpuTest {
         assertNull(v.state);
         assertEquals(1, v.level);
         assertEquals("0:probe", v.crashed);
+    }
+
+    @Test
+    public void aCrashAtBuild250sLastLevelGoesOnWithoutFlashAttention() throws Exception {
+        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", "crashed").put("level", 2)
+            .put("gpu", "Adreno (TM) 830").put("crashes", "0:probe 1:gpu-shaders 2:gpu-shaders ");
+        TurboGpu.Verdict v = TurboGpu.Verdict.of(old);
+        assertNull(v.state);
+        assertEquals(TurboGpu.NO_FLASH, v.level);
+        assertFalse(TurboGpu.flash(v));
+        assertEquals(TurboGpu.LADDER, TurboGpu.Verdict.of(v.json()).json().getInt("ladder"));
+        // Kept at this ladder: a crash stays one.
+        TurboGpu.Verdict kept = verdict("crashed");
+        kept.level = 3;
+        assertEquals("crashed", TurboGpu.Verdict.of(kept.json()).state);
     }
 
     @Test

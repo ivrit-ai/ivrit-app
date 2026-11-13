@@ -31,8 +31,11 @@ final class Whisper {
     /** The GPU whisper.cpp would use, checked to start, or null when there is none it can. */
     static native String gpu();
 
-    /** A model file loaded, on the GPU or not, or 0 when it would not load. */
-    static native long load(String path, boolean gpu);
+    /** A model file loaded, on the GPU or not, with flash attention or not; 0 when it would not load. */
+    static native long load(String path, boolean gpu, boolean flash);
+
+    /** stderr and whisper.cpp's whole log into this file from now on (TurboGpu reads it after a crash). */
+    static native void logTo(String path);
 
     static native void free(long handle);
 
