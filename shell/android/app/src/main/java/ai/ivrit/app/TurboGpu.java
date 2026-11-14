@@ -55,7 +55,7 @@ final class TurboGpu {
     /** A way to run on the GPU: one of ggml's backends, with switches. */
     static final class Level {
         final String backend; // ggml's device name starts so: "WebGPU", "Vulkan"
-        final String[] env; // ggml-vulkan's switches, set before it starts the GPU
+        final String[] env; // the backend's switches, set before ggml starts it
         final boolean flash; // whisper.cpp's flash attention
 
         Level(String backend, boolean flash, String... env) {
@@ -70,16 +70,24 @@ final class TurboGpu {
     // The app's own (patches/ggml-vulkan-switches.patch).
     private static final String KEEP_ROBUSTNESS = "GGML_VK_KEEP_ROBUSTNESS";
     private static final String NO_SUBGROUPS = "GGML_VK_DISABLE_SUBGROUP_ARITHMETIC";
+    // patches/ggml-webgpu-switches.patch: Dawn's bounds checks kept, features left unused.
+    private static final String WEBGPU = "GGML_WEBGPU_";
+    private static final String WEBGPU_ROBUSTNESS = "GGML_WEBGPU_KEEP_ROBUSTNESS";
+    private static final String WEBGPU_NO_MATRIX = "GGML_WEBGPU_DISABLE_SUBGROUP_MATRIX";
 
     /**
      * Safest last. On the Galaxy S25 (Adreno 830), ggml-vulkan: with cooperative
      * matrices the GPU did not start; without, the driver refused the q8_0
      * matrix-vector shader (also with robustness kept); without subgroup reductions
-     * it hung; with everything off its words were wrong. Hence WebGPU first.
+     * it hung; with everything off its words were wrong. Hence WebGPU first. As
+     * ggml-webgpu has it (no bounds checks, cooperative matrices), the S25 lost the
+     * device on the first work sent, with flash attention and without (build 254):
+     * so it is not tried so.
      */
     static final Level[] LEVELS = {
-        new Level("WebGPU", true),
-        new Level("WebGPU", false),
+        new Level("WebGPU", true, WEBGPU_ROBUSTNESS, WEBGPU_NO_MATRIX),
+        new Level("WebGPU", false, WEBGPU_ROBUSTNESS, WEBGPU_NO_MATRIX,
+            "GGML_WEBGPU_DISABLE_SUBGROUPS", "GGML_WEBGPU_DISABLE_DOT_PRODUCT"),
         new Level("Vulkan", true),
         new Level("Vulkan", true, NO_COOPMAT, NO_COOPMAT2),
         new Level("Vulkan", true, NO_COOPMAT, NO_COOPMAT2, KEEP_ROBUSTNESS),
@@ -88,7 +96,7 @@ final class TurboGpu {
             "GGML_VK_DISABLE_INTEGER_DOT_PRODUCT", "GGML_VK_DISABLE_F16", "GGML_VK_DISABLE_FUSION"),
     };
     /** These levels' version: a verdict from an earlier one starts over (Verdict.of). */
-    static final int LADDER = 4;
+    static final int LADDER = 5;
 
     /** What was found on this phone: kept between runs, one at a time. */
     static final class Verdict {
@@ -244,8 +252,28 @@ final class TurboGpu {
         Whisper.logTo(new java.io.File(context.getFilesDir(), "turbo-gpu.log").getPath());
     }
 
+    /** ggml-webgpu's switches as the process set them first, or null before any. */
+    private static String webgpuSet;
+
+    /** The switches of a level as one string, those of ggml-webgpu alone. */
+    static String webgpu(Level level) {
+        StringBuilder set = new StringBuilder();
+        for (String name : level.env) if (name.startsWith(WEBGPU)) set.append(name).append(' ');
+        return set.toString();
+    }
+
+    /**
+     * Whether the level's switches can be had in this process: ggml-webgpu reads
+     * its own once, as ggml first starts (which the first apply() comes before), so a
+     * WebGPU level after another in one process needs a new one.
+     */
+    private static boolean applicable(Level level) {
+        return !"WebGPU".equals(level.backend) || webgpuSet == null || webgpuSet.equals(webgpu(level));
+    }
+
     /** The level's switches, set before ggml first starts that GPU backend in this process. */
     private static void apply(Level level) {
+        if (webgpuSet == null) webgpuSet = webgpu(level);
         for (String name : level.env) {
             try {
                 android.system.Os.setenv(name, "1", true);
@@ -304,6 +332,12 @@ final class TurboGpu {
     }
 
     private static void check(Context context, String variant, Verdict v, Progress progress) throws Exception {
+        if (!applicable(v.level())) {
+            // A WebGPU level after another failed in this process (not by crashing): in a
+            // new one, as a crash would have it (WorkManager starts the work again).
+            android.os.Process.killProcess(android.os.Process.myPid());
+        }
+        apply(v.level());
         v.state = "testing";
         v.since = System.currentTimeMillis();
         log(context);

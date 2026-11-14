@@ -44,7 +44,8 @@ static bool logging = false;  // everything to stderr, once Whisper.logTo pointe
 
 static void on_log(enum ggml_log_level level, const char *text, void *user) {
     (void) user;
-    if (logging) fputs(text, stderr);
+    // Not the CPU's line per weight repacked: they would fill the report's tail.
+    if (logging && strncmp(text, "repack: ", 8) != 0) fputs(text, stderr);
     if (level == GGML_LOG_LEVEL_ERROR) __android_log_write(ANDROID_LOG_ERROR, TAG, text);
     else if (level == GGML_LOG_LEVEL_WARN) __android_log_write(ANDROID_LOG_WARN, TAG, text);
 }

@@ -127,6 +127,21 @@ Open to comment; each with what it rests on.
       and ends the process, as a hung GPU cannot be interrupted; WorkManager
       starts the work again. Build 252's no-subgroups level hung the S25 for
       three hours.
+    - Build 254 on the S25: Dawn started the Adreno, the model loaded onto it,
+      and the first work sent lost the device (`vkQueueSubmit` →
+      `VK_ERROR_DEVICE_LOST`; ggml-webgpu then aborts), with flash attention
+      and without. ggml-webgpu turns off Dawn's bounds checks
+      (`disable_robustness`) and uses cooperative matrices (Dawn's subgroup
+      matrix, on Adreno's `VK_KHR_cooperative_matrix`, the path that also
+      crashed ggml-vulkan). Build 255 patches in switches
+      (`patches/ggml-webgpu-switches.patch`) and tries WebGPU with the bounds
+      checks kept and no cooperative matrices; then with subgroups and packed
+      dot products off too, without flash attention; then Vulkan as before.
+      ggml-webgpu reads its switches once, when ggml first starts in the
+      process, so a WebGPU level after another failed without a crash restarts
+      the process. ggml's log now leaves out the CPU's line per repacked
+      weight, which filled the report's tail; it states the adapter and the
+      features used.
 
 12. **Crash guard instead of a separate process.** A GPU driver crash kills
     the process. A check under way is saved before it starts; if it is still

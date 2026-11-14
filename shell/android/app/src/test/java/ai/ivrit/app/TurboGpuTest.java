@@ -39,6 +39,14 @@ public class TurboGpuTest {
     }
 
     @Test
+    public void webGpuKeepsItsBoundsChecksAndNoVulkanSwitchCountsForIt() {
+        // The Galaxy S25 lost the device without them (build 254).
+        assertTrue(TurboGpu.webgpu(TurboGpu.LEVELS[0]).contains("GGML_WEBGPU_KEEP_ROBUSTNESS "));
+        assertTrue(TurboGpu.webgpu(TurboGpu.LEVELS[1]).contains("GGML_WEBGPU_DISABLE_SUBGROUPS "));
+        assertEquals("", TurboGpu.webgpu(TurboGpu.LEVELS[TurboGpu.LEVELS.length - 1]));
+    }
+
+    @Test
     public void aCheckThatNeverEndedIsCheckedAgainAnotherWay() {
         TurboGpu.Verdict v = verdict("testing");
         v.step = "probe";
