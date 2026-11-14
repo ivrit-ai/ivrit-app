@@ -142,6 +142,27 @@ Open to comment; each with what it rests on.
       the process. ggml's log now leaves out the CPU's line per repacked
       weight, which filled the report's tail; it states the adapter and the
       features used.
+    - Then over adb on the S25 (whisper-cli built with the app's whisper.cpp,
+      the q8_0 model, 2026-11-14): Dawn reports no subgroup matrix there, so
+      that was not it. ggml-webgpu ran but gave wrong words ("inappropriate"
+      for the 12-second sample), with bounds checks or without, and its encoder
+      took 22 s to the CPU's 10; with subgroups and dot products off, it lost
+      the device. WebGPU on Adreno is out for now.
+    - **OpenCL (ggml-opencl, Qualcomm's kernels for Adreno) works**, after two
+      fixes (`patches/ggml-opencl-early-buffers.patch`: it crashed reading its
+      context before whisper.cpp had started it; `whisper-gpu-get-rows.patch`:
+      it has no q8_0 GET_ROWS, so the token embedding left on the GPU was copied
+      back whole, 70 MB a token, 112 ms; whisper.cpp now asks, and keeps it on
+      the CPU). On the 5-minute reference: the CPU's very words (540 of 540),
+      82 s against 166 s on the CPU (encoder 4.5 s a window against 13.7;
+      decoder 13 ms a token against 6). Build 256 tries OpenCL first. The
+      library does not link the phone's `libOpenCL.so` (most phones have none,
+      and the library would not load): `cpp/opencl.c` opens it on first use,
+      and the manifest asks for it (`uses-native-library`, needed from Android
+      12). ggml-opencl takes Adreno (and Intel) only; Mali phones go on to
+      WebGPU and Vulkan. Its built kernels are kept in the app's cache.
+    - Still to try: the decoder on the CPU and the encoder on the GPU (the CPU
+      decodes twice as fast over long recordings).
 
 12. **Crash guard instead of a separate process.** A GPU driver crash kills
     the process. A check under way is saved before it starts; if it is still

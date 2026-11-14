@@ -10,6 +10,10 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!-- The phone's OpenCL, for the Turbo model on the GPU (src/main/cpp/opencl.c);
+             from Android 12 an app can open a vendor's library only if it asks. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:name=".MainActivity"

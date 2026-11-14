@@ -1,16 +1,19 @@
 # The Turbo model's runtime (Whisper.java): whisper.cpp (scripts/fetch-whisper.sh)
-# on the CPU, and on the GPU, through WebGPU (Google's Dawn) or Vulkan, where the
-# phone's passes its check (TurboGpu), linked into one library with turbo.c. Built for arm64-v8a with dot
+# on the CPU, and on the GPU, through OpenCL (Adreno's), WebGPU (Google's Dawn) or
+# Vulkan, where the phone's passes its check (TurboGpu), linked into one library
+# with turbo.c. Built for arm64-v8a with dot
 # products and half floats, which every phone it is offered on has (Turbo.supported
 # checks), and nothing older.
 cmake_minimum_required(VERSION 3.22)
 project(ivritturbo C CXX)
 
-# Vulkan and WebGPU can be left out (gradle -PturboVulkan=OFF, -PturboWebgpu=OFF).
+# Each GPU backend can be left out (gradle -PturboVulkan=OFF, -PturboWebgpu=OFF,
+# -PturboOpencl=OFF).
 option(IVRIT_TURBO_VULKAN "the Turbo model on the GPU too, through Vulkan" ON)
 option(IVRIT_TURBO_WEBGPU "the Turbo model on the GPU too, through WebGPU (Dawn)" ON)
+option(IVRIT_TURBO_OPENCL "the Turbo model on the GPU too, through OpenCL" ON)
 
-foreach(dir whisper.cpp vulkan-headers spirv-headers dawn-android dawn-headers)
+foreach(dir whisper.cpp vulkan-headers spirv-headers dawn-android dawn-headers opencl-headers)
     if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${dir})
         message(FATAL_ERROR "${dir} is missing: run scripts/fetch-whisper.sh")
     endif()
@@ -62,6 +65,17 @@ if(NOT TARGET dawn::webgpu_dawn)
 endif()
 ")
     set(Dawn_DIR ${DAWN_CONFIG} CACHE PATH "" FORCE)
+endif()
+
+# OpenCL: the Khronos headers, and for the library, opencl.c, which opens the
+# phone's libOpenCL.so when first called (ggml links what it is told OpenCL is).
+# Its kernels are embedded in the library (with Python, at build time).
+set(GGML_OPENCL ${IVRIT_TURBO_OPENCL} CACHE BOOL "" FORCE)
+if(IVRIT_TURBO_OPENCL)
+    add_library(ivritopencl STATIC opencl.c)
+    target_include_directories(ivritopencl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/opencl-headers)
+    set(OpenCL_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/opencl-headers CACHE PATH "" FORCE)
+    set(OpenCL_LIBRARY ivritopencl CACHE STRING "" FORCE)
 endif()
 
 add_subdirectory(whisper.cpp)

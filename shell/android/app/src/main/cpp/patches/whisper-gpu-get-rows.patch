@@ -1,0 +1,16 @@
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -1418,8 +1418,11 @@
+ static bool weight_buft_supported(const whisper_hparams & hparams, ggml_tensor * w, ggml_op op, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
+     bool op_supported = true;
+ 
+-    if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU ||
+-        ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU ||
++    // ivrit-app: GPUs asked about GET_ROWS too. ggml-opencl has none for q8_0: the token
++    // embedding left on its GPU was copied back to the CPU, whole, for every token.
++    const bool gpu = ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU ||
++                     ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU;
++    if ((gpu && op != GGML_OP_GET_ROWS) ||
+         (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && buft == ggml_backend_cpu_buffer_type())) {
+         // GPU and default CPU backend support all operators
+         op_supported = true;

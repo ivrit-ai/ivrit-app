@@ -3,7 +3,9 @@
 # shell/android/app/src/main/cpp), the Vulkan and SPIR-V headers its Vulkan
 # backend builds against (newer than the NDK's), and Google's Dawn for its WebGPU
 # backend (Dawn's own Android build, static, and its headers, from the release
-# nearest whisper.cpp's): release tarballs, each checked against a pinned hash,
+# nearest whisper.cpp's), and the OpenCL headers its OpenCL backend builds against
+# (the phone's own libOpenCL.so is opened at run time: src/main/cpp/opencl.c):
+# release tarballs, each checked against a pinned hash,
 # into shell/android/app/src/main/cpp/ (not in git).
 # whisper.cpp gets the app's patches (src/main/cpp/patches/*.patch) on top; a
 # change to them fetches it again. build-android.sh runs this.
@@ -41,3 +43,5 @@ fetch dawn-android v20261002.154047 d3543688c734da73f7fd742c308f6462b59360b6997b
   $DAWN/dawn-android-b1236a9bb4a47f1262bc3acb253bb1c2181e90dd.tar.gz
 fetch dawn-headers v20261002.154047 dcaad42cf9298386ea390e8a4477992715bbb13d46888bce03b0a9a4aae68568 \
   $DAWN/dawn-headers-b1236a9bb4a47f1262bc3acb253bb1c2181e90dd.tar.gz
+fetch opencl-headers v2024.10.24 159f2a550592bae49859fee83d372acd152328fdf95c0dcd8b9409f8fad5db93 \
+  https://github.com/KhronosGroup/OpenCL-Headers/archive/refs/tags/v2024.10.24.tar.gz

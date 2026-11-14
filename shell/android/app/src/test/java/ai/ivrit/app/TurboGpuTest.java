@@ -31,9 +31,10 @@ public class TurboGpuTest {
     }
 
     @Test
-    public void webGpuIsTriedFirstThenVulkan() {
-        assertEquals("WebGPU", TurboGpu.LEVELS[0].backend);
+    public void openClIsTriedFirstThenWebGpuThenVulkan() {
+        assertEquals("OpenCL", TurboGpu.LEVELS[0].backend);
         assertTrue(TurboGpu.LEVELS[0].flash);
+        assertEquals("WebGPU", TurboGpu.LEVELS[1].backend);
         assertEquals("Vulkan", TurboGpu.LEVELS[TurboGpu.LEVELS.length - 1].backend);
         assertFalse(TurboGpu.LEVELS[TurboGpu.LEVELS.length - 1].flash);
     }
@@ -41,8 +42,9 @@ public class TurboGpuTest {
     @Test
     public void webGpuKeepsItsBoundsChecksAndNoVulkanSwitchCountsForIt() {
         // The Galaxy S25 lost the device without them (build 254).
-        assertTrue(TurboGpu.webgpu(TurboGpu.LEVELS[0]).contains("GGML_WEBGPU_KEEP_ROBUSTNESS "));
-        assertTrue(TurboGpu.webgpu(TurboGpu.LEVELS[1]).contains("GGML_WEBGPU_DISABLE_SUBGROUPS "));
+        assertTrue(TurboGpu.webgpu(TurboGpu.LEVELS[1]).contains("GGML_WEBGPU_KEEP_ROBUSTNESS "));
+        assertTrue(TurboGpu.webgpu(TurboGpu.LEVELS[2]).contains("GGML_WEBGPU_DISABLE_SUBGROUPS "));
+        assertEquals("", TurboGpu.webgpu(TurboGpu.LEVELS[0]));
         assertEquals("", TurboGpu.webgpu(TurboGpu.LEVELS[TurboGpu.LEVELS.length - 1]));
     }
 
@@ -113,9 +115,10 @@ public class TurboGpuTest {
 
     @Test
     public void devicesAreFoundByBackend() {
-        String[] gpus = {"Vulkan0: Adreno (TM) 830", "WebGPU: Qualcomm Adreno (TM) 830"};
+        String[] gpus = {"Vulkan0: Adreno (TM) 830", "WebGPU: WebGPU", "GPUOpenCL: QUALCOMM Adreno(TM) 830"};
         assertEquals(1, TurboGpu.device(gpus, "WebGPU"));
         assertEquals(0, TurboGpu.device(gpus, "Vulkan"));
+        assertEquals(2, TurboGpu.device(gpus, "OpenCL"));
         assertEquals(-1, TurboGpu.device(new String[] {"Vulkan0: Mali-G715"}, "WebGPU"));
     }
 

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import org.json.JSONObject;
@@ -23,7 +24,8 @@ import org.json.JSONObject;
  * is reported to the site (POST /lab/report?kind=local-turbo-gpu).
  *
  * The check tries LEVELS one at a time, a level per transcription, until one passes:
- * WebGPU first, then ggml-vulkan with ever safer switches. A level fails when ggml
+ * OpenCL first (Adreno's alone), then WebGPU, then ggml-vulkan with ever safer
+ * switches. A level fails when ggml
  * says so (the driver refusing a shader: guard.cpp), when the process dies in it
  * (found the next time), when a GPU step runs far past its time (Watchdog: the
  * process is ended, as a hung GPU cannot be interrupted), or, for GPU runs after a
@@ -54,7 +56,7 @@ final class TurboGpu {
 
     /** A way to run on the GPU: one of ggml's backends, with switches. */
     static final class Level {
-        final String backend; // ggml's device name starts so: "WebGPU", "Vulkan"
+        final String backend; // in ggml's device name: "OpenCL" (GPUOpenCL), "WebGPU", "Vulkan" (Vulkan0)
         final String[] env; // the backend's switches, set before ggml starts it
         final boolean flash; // whisper.cpp's flash attention
 
@@ -82,9 +84,11 @@ final class TurboGpu {
      * it hung; with everything off its words were wrong. Hence WebGPU first. As
      * ggml-webgpu has it (no bounds checks, cooperative matrices), the S25 lost the
      * device on the first work sent, with flash attention and without (build 254):
-     * so it is not tried so.
+     * so it is not tried so. OpenCL (ggml-opencl, which takes Adreno GPUs alone)
+     * gave the CPU's very words there, twice as fast (over adb).
      */
     static final Level[] LEVELS = {
+        new Level("OpenCL", true),
         new Level("WebGPU", true, WEBGPU_ROBUSTNESS, WEBGPU_NO_MATRIX),
         new Level("WebGPU", false, WEBGPU_ROBUSTNESS, WEBGPU_NO_MATRIX,
             "GGML_WEBGPU_DISABLE_SUBGROUPS", "GGML_WEBGPU_DISABLE_DOT_PRODUCT"),
@@ -96,7 +100,7 @@ final class TurboGpu {
             "GGML_VK_DISABLE_INTEGER_DOT_PRODUCT", "GGML_VK_DISABLE_F16", "GGML_VK_DISABLE_FUSION"),
     };
     /** These levels' version: a verdict from an earlier one starts over (Verdict.of). */
-    static final int LADDER = 5;
+    static final int LADDER = 6;
 
     /** What was found on this phone: kept between runs, one at a time. */
     static final class Verdict {
@@ -196,7 +200,10 @@ final class TurboGpu {
 
     /** ggml's GPU device for a backend, among Whisper.gpus() (whisper.cpp's gpu_device), or -1. */
     static int device(String[] gpus, String backend) {
-        for (int i = 0; i < gpus.length; i++) if (gpus[i].startsWith(backend)) return i;
+        for (int i = 0; i < gpus.length; i++) {
+            String name = gpus[i].split(":", 2)[0];
+            if (name.contains(backend)) return i;
+        }
         return -1;
     }
 
@@ -252,6 +259,20 @@ final class TurboGpu {
         Whisper.logTo(new java.io.File(context.getFilesDir(), "turbo-gpu.log").getPath());
     }
 
+    /**
+     * ggml-opencl keeps its built kernels (seconds' work) where it is told, before
+     * it starts: else in a temporary directory an app may not have.
+     */
+    private static void caches(Context context) {
+        try {
+            File dir = new File(context.getCacheDir(), "opencl");
+            dir.mkdirs();
+            android.system.Os.setenv("GGML_OPENCL_KERNEL_CACHE_DIR", dir.getPath(), false);
+        } catch (Exception ignored) {
+            // Built again each time.
+        }
+    }
+
     /** ggml-webgpu's switches as the process set them first, or null before any. */
     private static String webgpuSet;
 
@@ -288,6 +309,7 @@ final class TurboGpu {
      * has not been (`checking` follows it, as it takes a minute).
      */
     static Verdict decide(Context context, String variant, String processor, Progress checking) throws Exception {
+        caches(context);
         Verdict v = settle(load(context), key(variant));
         save(context, v);
         if (v.crashed != null) report(context, variant, v);
