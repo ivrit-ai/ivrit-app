@@ -163,7 +163,7 @@ final class Notifications {
         String text;
         // "downloading": the Turbo model; "checking": its one check of the GPU (TurboGpu).
         if ("model".equals(phase) || "downloading".equals(phase)) text = context.getString(R.string.local_model, Math.max(0, percent));
-        else if ("checking".equals(phase)) text = context.getString(R.string.local_checking);
+        else if ("checking".equals(phase)) text = context.getString(R.string.local_checking, Math.max(0, percent));
         else if ("saving".equals(phase)) text = context.getString(R.string.local_saving);
         else if ("transcribing".equals(phase)) {
             text = secondsLeft == null
@@ -178,7 +178,7 @@ final class Notifications {
             .setOngoing(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-            .setProgress(100, Math.max(0, percent), percent < 0 || "saving".equals(phase) || "checking".equals(phase))
+            .setProgress(100, Math.max(0, percent), percent < 0 || "saving".equals(phase))
             .addAction(0, context.getString(R.string.local_stop), cancel)
             .setContentIntent(linkIntent(context, "#transcribe"));
         return builder.build();

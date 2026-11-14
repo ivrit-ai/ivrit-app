@@ -321,7 +321,7 @@ public class LocalTranscribeWorker extends Worker {
         double from = done.offset;
         // On the GPU where it passed its check on this phone (TurboGpu), once checked.
         String processor = Store.turboProcessor(context);
-        TurboGpu.Verdict verdict = TurboGpu.decide(context, variant, processor, () -> progress("checking", 0, null));
+        TurboGpu.Verdict verdict = TurboGpu.decide(context, variant, processor, fraction -> progress("checking", fraction, null));
         boolean gpu = TurboGpu.onGpu(verdict, processor);
         long loading = System.currentTimeMillis();
         String path = Turbo.file(context, variant).getPath();

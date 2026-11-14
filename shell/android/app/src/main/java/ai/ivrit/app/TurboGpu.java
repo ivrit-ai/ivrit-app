@@ -47,6 +47,11 @@ final class TurboGpu {
     /** GPU runs that died in a row before the level is given up. */
     static final int DEATHS = 2;
 
+    /** How far a check got, 0 to 1, for the notification and the page. */
+    interface Progress {
+        void at(double fraction);
+    }
+
     /** A way to run on the GPU: one of ggml's backends, with switches. */
     static final class Level {
         final String backend; // ggml's device name starts so: "WebGPU", "Vulkan"
@@ -252,15 +257,15 @@ final class TurboGpu {
 
     /**
      * The verdict for the chosen model on this phone, checking the GPU first where it
-     * has not been (`checking` says so, as it takes a minute).
+     * has not been (`checking` follows it, as it takes a minute).
      */
-    static Verdict decide(Context context, String variant, String processor, Runnable checking) throws Exception {
+    static Verdict decide(Context context, String variant, String processor, Progress checking) throws Exception {
         Verdict v = settle(load(context), key(variant));
         save(context, v);
         if (v.crashed != null) report(context, variant, v);
         if (v.state == null && !CPU.equals(processor)) {
-            checking.run();
-            check(context, variant, v);
+            checking.at(0);
+            check(context, variant, v, checking);
         }
         apply(v.level());
         return v;
@@ -289,7 +294,16 @@ final class TurboGpu {
         save(context, v);
     }
 
-    private static void check(Context context, String variant, Verdict v) throws Exception {
+    /** Each step's share of the check: starting the GPU, the CPU, the GPU's first run, its timed one. */
+    private static final double[] STEPS = {0, 0.05, 0.35, 0.70, 1};
+
+    /** Whisper's percent within step `i`, as the check's progress. */
+    private static Whisper.Listener within(Progress progress, int i) {
+        progress.at(STEPS[i]);
+        return percent -> progress.at(STEPS[i] + (STEPS[i + 1] - STEPS[i]) * percent / 100.0);
+    }
+
+    private static void check(Context context, String variant, Verdict v, Progress progress) throws Exception {
         v.state = "testing";
         v.since = System.currentTimeMillis();
         log(context);
@@ -313,18 +327,18 @@ final class TurboGpu {
             float[] sound = sample(context);
             String path = Turbo.file(context, variant).getPath();
             long[] took = new long[1];
-            String cpu = hear(path, -1, true, sound, took);
+            String cpu = hear(path, -1, true, sound, took, within(progress, 1));
             v.cpuSeconds = took[0] / 1000.0;
             // Shaders take a while to build the first time; past these, the GPU has hung.
             long limit = Math.max(120_000, 10 * took[0]);
             step(context, v, "gpu-shaders");
             try (Watchdog ignored = new Watchdog(context, variant, v, v.step, limit)) {
-                hear(path, device, level.flash, sound, took);
+                hear(path, device, level.flash, sound, took, within(progress, 2));
             }
             step(context, v, "gpu-run");
             String onGpu;
             try (Watchdog ignored = new Watchdog(context, variant, v, v.step, limit)) {
-                onGpu = hear(path, device, level.flash, sound, took);
+                onGpu = hear(path, device, level.flash, sound, took, within(progress, 3));
             }
             v.gpuSeconds = took[0] / 1000.0;
             v.agreement = agreement(cpu, onGpu);
@@ -458,12 +472,12 @@ final class TurboGpu {
     }
 
     /** The sample's words on a GPU device (-1: the CPU); took[0]: how long, in milliseconds. */
-    private static String hear(String path, int device, boolean flash, float[] sound, long[] took) {
+    private static String hear(String path, int device, boolean flash, float[] sound, long[] took, Whisper.Listener progress) {
         long handle = Whisper.load(path, device, flash);
         if (handle == 0) throw new IllegalStateException("the Turbo model did not load" + (device >= 0 ? " on the GPU" : ""));
         try {
             long started = System.currentTimeMillis();
-            Object[] heard = Whisper.transcribe(handle, sound, Turbo.LANGUAGE, Turbo.threads(), Turbo.BEAMS, null);
+            Object[] heard = Whisper.transcribe(handle, sound, Turbo.LANGUAGE, Turbo.threads(), Turbo.BEAMS, progress);
             took[0] = System.currentTimeMillis() - started;
             if (heard == null) throw new IllegalStateException("stopped");
             StringBuilder text = new StringBuilder();

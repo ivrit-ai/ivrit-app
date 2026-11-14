@@ -630,7 +630,7 @@ function localStatus(p, percent) {
   if (p.phase === "model") return tr(bundled() ? "statusLocalModelBundled" : "statusLocalModel", { progress: percent ?? 0 });
   // The phone's Turbo model: downloaded, and its GPU checked, the first time.
   if (p.phase === "downloading") return tr("statusLocalModel", { progress: percent ?? 0 });
-  if (p.phase === "checking") return tr("statusLocalChecking");
+  if (p.phase === "checking") return tr("statusLocalChecking", { progress: percent ?? 0 });
   if (p.phase === "transcribing") {
     const status = tr("statusLocalTranscribing", { progress: percent ?? 0 });
     return p.left == null ? status : `${status} · ${eta(p.left)}`;
