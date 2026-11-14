@@ -31,25 +31,46 @@ public class TurboGpuTest {
     }
 
     @Test
-    public void aCheckThatNeverEndedIsCheckedAgainMoreCarefully() {
+    public void webGpuIsTriedFirstThenVulkan() {
+        assertEquals("WebGPU", TurboGpu.LEVELS[0].backend);
+        assertTrue(TurboGpu.LEVELS[0].flash);
+        assertEquals("Vulkan", TurboGpu.LEVELS[TurboGpu.LEVELS.length - 1].backend);
+        assertFalse(TurboGpu.LEVELS[TurboGpu.LEVELS.length - 1].flash);
+    }
+
+    @Test
+    public void aCheckThatNeverEndedIsCheckedAgainAnotherWay() {
         TurboGpu.Verdict v = verdict("testing");
         v.step = "probe";
         v = TurboGpu.settle(v, "build q8_0");
         assertNull(v.state);
         assertEquals(1, v.level);
         assertEquals("0:probe", v.crashed);
-        for (int level = 1; level < TurboGpu.LEVELS.length; level++) {
+        while (v.level < TurboGpu.LEVELS.length - 1) {
             v.state = "testing";
             v.step = "gpu-shaders";
             v = TurboGpu.settle(v, "build q8_0");
         }
+        v.state = "testing";
+        v = TurboGpu.settle(v, "build q8_0");
         assertEquals("crashed", v.state);
-        assertEquals(TurboGpu.LEVELS.length - 1, v.level);
-        assertEquals("0:probe 1:gpu-shaders 2:gpu-shaders 3:gpu-shaders 4:gpu-shaders ", v.crashes);
+        assertTrue(v.crashes.startsWith("0:probe 1:gpu-shaders 2:gpu-shaders "));
     }
 
     @Test
-    public void twoGpuRunsDyingInARowAreACrash() {
+    public void wrongWordsAndReportedFailuresMoveOnToo() {
+        TurboGpu.Verdict v = verdict("testing");
+        TurboGpu.fail(v, "wrong", "wrong");
+        assertNull(v.state);
+        assertEquals(1, v.level);
+        v.level = TurboGpu.LEVELS.length - 1;
+        TurboGpu.fail(v, "gpu-run-hung", "failed");
+        assertEquals("failed", v.state);
+        assertTrue(v.crashes.endsWith((TurboGpu.LEVELS.length - 1) + ":gpu-run-hung "));
+    }
+
+    @Test
+    public void twoGpuRunsDyingInARowFailTheirLevel() {
         TurboGpu.Verdict v = verdict("faster");
         v.running = true;
         v = TurboGpu.settle(v, "build q8_0");
@@ -65,53 +86,29 @@ public class TurboGpuTest {
     }
 
     @Test
-    public void aCrashKeptBeforeLevelsIsTriedAgain() throws Exception {
-        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", "crashed").put("gpu", "");
+    public void aVerdictFromAnEarlierLadderStartsOver() throws Exception {
+        // The Galaxy S25 after build 252: ggml-vulkan's every level, wrong at the last.
+        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", "wrong").put("level", 4)
+            .put("ladder", 3).put("gpu", "Adreno (TM) 830").put("crashes", "0:probe 1:gpu-shaders ");
         TurboGpu.Verdict v = TurboGpu.Verdict.of(old);
         assertNull(v.state);
-        assertEquals(1, v.level);
-        assertEquals("0:probe", v.crashed);
-    }
-
-    @Test
-    public void aPhoneThatFailedOnAnEarlierLadderGoesOnFromTheNewLevels() throws Exception {
-        // The Galaxy S25 after build 251: past levels 0 and 1, on level 3 of ladder 2.
-        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", JSONObjectNull()).put("level", 3)
-            .put("ladder", 2).put("gpu", "Adreno (TM) 830").put("crashes", "0:probe 1:gpu-shaders 2:gpu-shaders 2:gpu-shaders ");
-        TurboGpu.Verdict v = TurboGpu.Verdict.of(old);
-        assertNull(v.state);
-        assertEquals(TurboGpu.RESUME, v.level);
-        assertTrue(TurboGpu.flash(v));
-        assertEquals(TurboGpu.LADDER, v.json().getInt("ladder"));
-        // Only the first crash so far: level 1 is still to be tried.
-        TurboGpu.Verdict early = TurboGpu.Verdict.of(new org.json.JSONObject().put("key", "k").put("state", JSONObjectNull())
-            .put("level", 1).put("ladder", 2));
-        assertEquals(1, early.level);
-        // A GPU that works, or a verdict of this ladder, stays as it is.
-        TurboGpu.Verdict works = verdict("faster");
-        works.level = 3;
-        org.json.JSONObject worked = works.json().put("ladder", 2);
-        assertEquals(3, TurboGpu.Verdict.of(worked).level);
+        assertEquals(0, v.level);
+        assertEquals("build q8_0", v.key);
+        assertTrue(v.crashes.startsWith("ladder3:0:probe 1:gpu-shaders wrong"));
+        // Of this ladder: kept as it is.
         TurboGpu.Verdict kept = verdict("crashed");
-        kept.level = 4;
-        assertEquals("crashed", TurboGpu.Verdict.of(kept.json()).state);
-    }
-
-    private static Object JSONObjectNull() {
-        return org.json.JSONObject.NULL;
+        kept.level = 3;
+        TurboGpu.Verdict back = TurboGpu.Verdict.of(kept.json());
+        assertEquals("crashed", back.state);
+        assertEquals(3, back.level);
     }
 
     @Test
-    public void aFailureGgmlReportsMovesOnLikeACrash() {
-        TurboGpu.Verdict v = verdict("testing");
-        v.level = 2;
-        TurboGpu.fail(v, "gpu-shaders", "failed");
-        assertNull(v.state);
-        assertEquals(3, v.level);
-        v.level = TurboGpu.LEVELS.length - 1;
-        TurboGpu.fail(v, "run", "failed");
-        assertEquals("failed", v.state);
-        assertFalse(TurboGpu.flash(v));
+    public void devicesAreFoundByBackend() {
+        String[] gpus = {"Vulkan0: Adreno (TM) 830", "WebGPU: Qualcomm Adreno (TM) 830"};
+        assertEquals(1, TurboGpu.device(gpus, "WebGPU"));
+        assertEquals(0, TurboGpu.device(gpus, "Vulkan"));
+        assertEquals(-1, TurboGpu.device(new String[] {"Vulkan0: Mali-G715"}, "WebGPU"));
     }
 
     @Test
@@ -125,18 +122,19 @@ public class TurboGpuTest {
     @Test
     public void verdictsSurviveBeingKept() throws Exception {
         TurboGpu.Verdict v = verdict("slower");
-        v.gpu = "Adreno (TM) 720";
+        v.gpu = "Adreno (TM) 830 · WebGPU";
         v.cpuSeconds = 9.5;
         v.deaths = 1;
         v.level = 1;
         v.step = "gpu-run";
         TurboGpu.Verdict back = TurboGpu.Verdict.of(v.json());
         assertEquals("slower", back.state);
-        assertEquals("Adreno (TM) 720", back.gpu);
+        assertEquals("Adreno (TM) 830 · WebGPU", back.gpu);
         assertEquals(9.5, back.cpuSeconds, 0);
         assertEquals(1, back.deaths);
         assertEquals(1, back.level);
         assertEquals("gpu-run", back.step);
+        assertEquals("WebGPU", v.json().getString("backend"));
         assertNull(TurboGpu.Verdict.of(verdict(null).json()).state);
     }
 

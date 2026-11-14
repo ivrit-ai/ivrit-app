@@ -9,24 +9,28 @@ import java.util.List;
 import org.json.JSONObject;
 
 /**
- * Whether the Turbo model runs on the phone's GPU (Vulkan) or its CPU.
+ * Whether the Turbo model runs on the phone's GPU or its CPU, and through which of
+ * ggml's GPU backends: WebGPU (Google's Dawn, built into the app, on the phone's
+ * Vulkan driver, with Dawn's own shaders and its workarounds for drivers' bugs) or
+ * Vulkan directly (ggml-vulkan).
  *
- * Phones' GPU drivers vary, and a bad one can give wrong text or bring the app down,
- * so the GPU is used only once it has passed a check on this phone, for this build
- * of its system (drivers come with it) and this model: a 12-second Hebrew recording
- * (res/raw/turbo_check, store/fixtures/hebrew-12s.ogg) on the CPU, then on the GPU,
- * twice (the first run also builds its shaders). It passes when the GPU's words
- * agree with the CPU's (AGREEMENT) and its second run is faster. What it found is
- * reported to the site (POST /lab/report?kind=local-turbo-gpu).
+ * Phones' GPU drivers vary, and a bad one can give wrong text, hang, or bring the app
+ * down, so the GPU is used only once it has passed a check on this phone, for this
+ * build of its system (drivers come with it) and this model: a 12-second Hebrew
+ * recording (res/raw/turbo_check, store/fixtures/hebrew-12s.ogg) on the CPU, then on
+ * the GPU, twice (the first run also builds its shaders). It passes when the GPU's
+ * words agree with the CPU's (AGREEMENT) and its second run is faster. What it found
+ * is reported to the site (POST /lab/report?kind=local-turbo-gpu).
  *
- * A check or a GPU run that never finished (the process died in it) is found the next
- * time, and reported with the step it died in and, from Android 11, the phone's own
- * record of the crash (kind=local-turbo-gpu-crash). The check then runs again with
- * safer settings for ggml's Vulkan backend (LEVELS), and only after the last one
- * also fails is the GPU given up. GPU runs dying twice in a row count as a crash too.
- * A failure ggml reports rather than dying of (the driver refusing to build a
- * shader: guard.cpp) counts the same, reported at once, and the recording goes on
- * on the CPU.
+ * The check tries LEVELS one at a time, a level per transcription, until one passes:
+ * WebGPU first, then ggml-vulkan with ever safer switches. A level fails when ggml
+ * says so (the driver refusing a shader: guard.cpp), when the process dies in it
+ * (found the next time), when a GPU step runs far past its time (Watchdog: the
+ * process is ended, as a hung GPU cannot be interrupted), or, for GPU runs after a
+ * pass, when two die in a row. Each failure is reported (kind=local-turbo-gpu-crash)
+ * with the step, ggml's log, and from Android 11 the phone's exit records with native
+ * tombstones; the recording goes on on the CPU. After the last level, the GPU is
+ * given up.
  *
  * The user can choose (the web app's Settings): automatic (the GPU when it passed and
  * is faster), the CPU, or the GPU whenever it gives the right words, faster or not.
@@ -40,30 +44,46 @@ final class TurboGpu {
     static final String[] PROCESSORS = {AUTO, CPU, GPU};
     /** The GPU's words against the CPU's: a little apart is half floats, more is a broken driver. */
     static final double AGREEMENT = 0.85;
-    /** GPU runs that died in a row before the GPU is given up. */
+    /** GPU runs that died in a row before the level is given up. */
     static final int DEATHS = 2;
+
+    /** A way to run on the GPU: one of ggml's backends, with switches. */
+    static final class Level {
+        final String backend; // ggml's device name starts so: "WebGPU", "Vulkan"
+        final String[] env; // ggml-vulkan's switches, set before it starts the GPU
+        final boolean flash; // whisper.cpp's flash attention
+
+        Level(String backend, boolean flash, String... env) {
+            this.backend = backend;
+            this.flash = flash;
+            this.env = env;
+        }
+    }
+
+    private static final String NO_COOPMAT = "GGML_VK_DISABLE_COOPMAT";
+    private static final String NO_COOPMAT2 = "GGML_VK_DISABLE_COOPMAT2";
+    // The app's own (patches/ggml-vulkan-switches.patch).
+    private static final String KEEP_ROBUSTNESS = "GGML_VK_KEEP_ROBUSTNESS";
+    private static final String NO_SUBGROUPS = "GGML_VK_DISABLE_SUBGROUP_ARITHMETIC";
+
     /**
-     * ggml-vulkan's switches (environment variables; the last two are the app's own,
-     * patches/ggml-vulkan-switches.patch) for each try, safest last. On the Galaxy
-     * S25 (Adreno 830): with cooperative matrices the GPU did not start; without,
-     * the driver refused the q8_0 matrix-vector shader ("createComputePipeline:
-     * ErrorUnknown"), which differs from the f16 ones it built in leaving bounds
-     * checks off (robustness) and requiring whole subgroups of a fixed size.
+     * Safest last. On the Galaxy S25 (Adreno 830), ggml-vulkan: with cooperative
+     * matrices the GPU did not start; without, the driver refused the q8_0
+     * matrix-vector shader (also with robustness kept); without subgroup reductions
+     * it hung; with everything off its words were wrong. Hence WebGPU first.
      */
-    static final String[][] LEVELS = {
-        {},
-        {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2"},
-        {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2", "GGML_VK_KEEP_ROBUSTNESS"},
-        {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2", "GGML_VK_KEEP_ROBUSTNESS", "GGML_VK_DISABLE_SUBGROUP_ARITHMETIC"},
-        {"GGML_VK_DISABLE_COOPMAT", "GGML_VK_DISABLE_COOPMAT2", "GGML_VK_KEEP_ROBUSTNESS", "GGML_VK_DISABLE_SUBGROUP_ARITHMETIC",
-            "GGML_VK_DISABLE_INTEGER_DOT_PRODUCT", "GGML_VK_DISABLE_F16", "GGML_VK_DISABLE_FUSION"},
+    static final Level[] LEVELS = {
+        new Level("WebGPU", true),
+        new Level("WebGPU", false),
+        new Level("Vulkan", true),
+        new Level("Vulkan", true, NO_COOPMAT, NO_COOPMAT2),
+        new Level("Vulkan", true, NO_COOPMAT, NO_COOPMAT2, KEEP_ROBUSTNESS),
+        new Level("Vulkan", true, NO_COOPMAT, NO_COOPMAT2, KEEP_ROBUSTNESS, NO_SUBGROUPS),
+        new Level("Vulkan", false, NO_COOPMAT, NO_COOPMAT2, KEEP_ROBUSTNESS, NO_SUBGROUPS,
+            "GGML_VK_DISABLE_INTEGER_DOT_PRODUCT", "GGML_VK_DISABLE_F16", "GGML_VK_DISABLE_FUSION"),
     };
-    /** At the last level whisper.cpp also runs without flash attention. */
-    static final int NO_FLASH = 4;
-    /** These levels' version: verdicts from an earlier one are carried over (Verdict.of). */
-    static final int LADDER = 3;
-    /** Where a phone that failed on an earlier ladder's levels past the first two goes on from. */
-    static final int RESUME = 2;
+    /** These levels' version: a verdict from an earlier one starts over (Verdict.of). */
+    static final int LADDER = 4;
 
     /** What was found on this phone: kept between runs, one at a time. */
     static final class Verdict {
@@ -76,11 +96,11 @@ final class TurboGpu {
         String error = "";
         int deaths; // GPU runs that died since the last one that finished
         boolean running; // a GPU run under way (or one that died)
-        int level; // the LEVELS settings it holds for
-        String step = ""; // how far the check got: "probe", "cpu", "gpu-load", "gpu-shaders", "gpu-run"
+        int level; // the LEVELS entry it holds for
+        String step = ""; // how far the check got: "probe", "cpu", "gpu-shaders", "gpu-run"
         long since; // when the check or GPU run started (milliseconds)
-        String crashes = ""; // what died so far: "level:step " each
-        String crashed; // set by settle when it found one just now (not kept)
+        String crashes = ""; // what failed so far: "level:step " each
+        String crashed; // set when one failed just now (not kept)
 
         Verdict(String key) {
             this.key = key;
@@ -90,11 +110,17 @@ final class TurboGpu {
             return new JSONObject().put("key", key).put("state", state == null ? JSONObject.NULL : state).put("gpu", gpu)
                 .put("cpuSeconds", cpuSeconds).put("gpuSeconds", gpuSeconds).put("agreement", agreement)
                 .put("error", error).put("deaths", deaths).put("running", running).put("level", level).put("step", step)
-                .put("since", since).put("crashes", crashes).put("ladder", LADDER);
+                .put("since", since).put("crashes", crashes).put("ladder", LADDER)
+                .put("backend", level().backend).put("flash", level().flash);
         }
 
         static Verdict of(JSONObject o) {
             Verdict v = new Verdict(o.optString("key"));
+            // An earlier ladder's levels mean something else: start over, keeping what failed.
+            if (o.optInt("ladder", 1) < LADDER) {
+                v.crashes = "ladder" + o.optInt("ladder", 1) + ":" + o.optString("crashes") + o.optString("state") + " ";
+                return v;
+            }
             v.state = o.isNull("state") ? null : o.optString("state", null);
             v.gpu = o.optString("gpu");
             v.cpuSeconds = o.optDouble("cpuSeconds", 0);
@@ -103,24 +129,15 @@ final class TurboGpu {
             v.error = o.optString("error");
             v.deaths = o.optInt("deaths", 0);
             v.running = o.optBoolean("running", false);
-            v.level = o.optInt("level", 0);
+            v.level = Math.max(0, Math.min(LEVELS.length - 1, o.optInt("level", 0)));
             v.step = o.optString("step");
             v.since = o.optLong("since", 0);
             v.crashes = o.optString("crashes");
-            // Kept before there were levels (build 249): a crash there was at the first.
-            if (!o.has("level") && "crashed".equals(v.state)) {
-                v.crashed = "0:" + (v.gpu.isEmpty() ? "probe" : "?");
-                v.crashes = v.crashed + " ";
-                v.level = 1;
-                v.state = null;
-            }
-            // Builds 250 and 251 had levels 0 and 1 as now, then others that failed the
-            // same way as 1: past those, go on from the first new one.
-            if (o.optInt("ladder", 1) < LADDER && !v.works() && v.level >= 1) {
-                v.level = Math.min(v.level, RESUME);
-                v.state = null;
-            }
             return v;
+        }
+
+        Level level() {
+            return LEVELS[level];
         }
 
         /** Gives the right words on the GPU. */
@@ -131,23 +148,18 @@ final class TurboGpu {
 
     /**
      * The verdict as it stands for `key`, with what an earlier run left unfinished
-     * counted: a check that never ended is a crash; so are DEATHS GPU runs in a row.
-     * After a crash the check runs again at the next, safer LEVELS, and the GPU is
-     * given up ("crashed") only when the last has crashed too.
+     * counted: a check that never ended failed its level; so did DEATHS GPU runs in
+     * a row.
      */
     static Verdict settle(Verdict saved, String key) {
         Verdict v = saved == null || !key.equals(saved.key) ? new Verdict(key) : saved;
-        if ("testing".equals(v.state)) crash(v, v.step);
+        if ("testing".equals(v.state)) fail(v, v.step, "crashed");
         if (v.running) {
             v.running = false;
             v.deaths++;
-            if (v.deaths >= DEATHS && v.works()) crash(v, "run");
+            if (v.deaths >= DEATHS && v.works()) fail(v, "run", "crashed");
         }
         return v;
-    }
-
-    private static void crash(Verdict v, String where) {
-        fail(v, where, "crashed");
     }
 
     /** Failed at this level: the next is checked next time, or, after the last, `last`. */
@@ -157,30 +169,9 @@ final class TurboGpu {
         v.deaths = 0;
         if (v.level + 1 < LEVELS.length) {
             v.level++;
-            v.state = null; // checked again, more carefully
+            v.state = null; // checked again, another way
         } else {
             v.state = last;
-        }
-    }
-
-    /** Flash attention at the verdict's level. */
-    static boolean flash(Verdict v) {
-        return v.level < NO_FLASH;
-    }
-
-    /** What ggml and whisper.cpp say while the GPU works, kept for a crash's report. */
-    static void log(Context context) {
-        Whisper.logTo(new java.io.File(context.getFilesDir(), "turbo-gpu.log").getPath());
-    }
-
-    /** The settings for the verdict's level, set before ggml first starts the GPU in this process. */
-    static void apply(Verdict v) {
-        for (String name : LEVELS[Math.min(v.level, LEVELS.length - 1)]) {
-            try {
-                android.system.Os.setenv(name, "1", true);
-            } catch (Exception ignored) {
-                // Not set: the GPU runs as at the level before.
-            }
         }
     }
 
@@ -188,6 +179,12 @@ final class TurboGpu {
     static boolean onGpu(Verdict v, String processor) {
         if (AUTO.equals(processor)) return "faster".equals(v.state);
         return GPU.equals(processor) && v.works();
+    }
+
+    /** ggml's GPU device for a backend, among Whisper.gpus() (whisper.cpp's gpu_device), or -1. */
+    static int device(String[] gpus, String backend) {
+        for (int i = 0; i < gpus.length; i++) if (gpus[i].startsWith(backend)) return i;
+        return -1;
     }
 
     /** The share of words two transcripts have in common, in order (0 to 1). */
@@ -237,21 +234,41 @@ final class TurboGpu {
         }
     }
 
+    /** What ggml and whisper.cpp say while the GPU works, kept for a failure's report. */
+    static void log(Context context) {
+        Whisper.logTo(new java.io.File(context.getFilesDir(), "turbo-gpu.log").getPath());
+    }
+
+    /** The level's switches, set before ggml first starts that GPU backend in this process. */
+    private static void apply(Level level) {
+        for (String name : level.env) {
+            try {
+                android.system.Os.setenv(name, "1", true);
+            } catch (Exception ignored) {
+                // Not set: the GPU runs as at the level before.
+            }
+        }
+    }
+
     /**
      * The verdict for the chosen model on this phone, checking the GPU first where it
      * has not been (`checking` says so, as it takes a minute).
      */
     static Verdict decide(Context context, String variant, String processor, Runnable checking) throws Exception {
-        Verdict saved = load(context);
-        Verdict v = settle(saved, key(variant));
+        Verdict v = settle(load(context), key(variant));
         save(context, v);
-        if (v.crashed != null) reportCrash(context, variant, v);
-        apply(v);
+        if (v.crashed != null) report(context, variant, v);
         if (v.state == null && !CPU.equals(processor)) {
             checking.run();
             check(context, variant, v);
         }
+        apply(v.level());
         return v;
+    }
+
+    /** ggml's device index for the verdict's backend, for Whisper.load, or -1 where it has none. */
+    static int device(Verdict v) {
+        return device(Whisper.gpus(), v.level().backend);
     }
 
     /** A GPU run starts: if it never finishes, the next decide() counts it. */
@@ -277,26 +294,47 @@ final class TurboGpu {
         v.since = System.currentTimeMillis();
         log(context);
         step(context, v, "probe");
-        try {
-            String gpu = Whisper.gpu();
-            if (gpu == null) {
+        // Levels whose backend this phone has no device for are passed over at once.
+        String[] gpus = Whisper.gpus();
+        while (device(gpus, v.level().backend) < 0) {
+            if (v.level + 1 >= LEVELS.length) {
                 v.state = "none";
-            } else {
-                v.gpu = gpu;
-                step(context, v, "cpu");
-                float[] sound = sample(context);
-                String path = Turbo.file(context, variant).getPath();
-                long[] took = new long[1];
-                String cpu = hear(path, false, true, sound, took);
-                v.cpuSeconds = took[0] / 1000.0;
-                step(context, v, "gpu-shaders");
-                hear(path, true, flash(v), sound, took); // builds the shaders
-                step(context, v, "gpu-run");
-                String onGpu = hear(path, true, flash(v), sound, took);
-                v.gpuSeconds = took[0] / 1000.0;
-                v.agreement = agreement(cpu, onGpu);
-                v.state = v.agreement < AGREEMENT ? "wrong" : v.gpuSeconds < v.cpuSeconds ? "faster" : "slower";
+                save(context, v);
+                return;
             }
+            v.level++;
+        }
+        Level level = v.level();
+        apply(level);
+        int device = device(gpus, level.backend);
+        try {
+            v.gpu = Whisper.probe(device) + " · " + level.backend;
+            step(context, v, "cpu");
+            float[] sound = sample(context);
+            String path = Turbo.file(context, variant).getPath();
+            long[] took = new long[1];
+            String cpu = hear(path, -1, true, sound, took);
+            v.cpuSeconds = took[0] / 1000.0;
+            // Shaders take a while to build the first time; past these, the GPU has hung.
+            long limit = Math.max(120_000, 10 * took[0]);
+            step(context, v, "gpu-shaders");
+            try (Watchdog ignored = new Watchdog(context, variant, v, v.step, limit)) {
+                hear(path, device, level.flash, sound, took);
+            }
+            step(context, v, "gpu-run");
+            String onGpu;
+            try (Watchdog ignored = new Watchdog(context, variant, v, v.step, limit)) {
+                onGpu = hear(path, device, level.flash, sound, took);
+            }
+            v.gpuSeconds = took[0] / 1000.0;
+            v.agreement = agreement(cpu, onGpu);
+            if (v.agreement < AGREEMENT) {
+                fail(v, "wrong", "wrong");
+                save(context, v);
+                report(context, variant, v);
+                return;
+            }
+            v.state = v.gpuSeconds < v.cpuSeconds ? "faster" : "slower";
         } catch (Exception e) {
             v.error = String.valueOf(e.getMessage());
             if ("cpu".equals(v.step)) {
@@ -306,7 +344,7 @@ final class TurboGpu {
                 // level next time, and this recording on the CPU.
                 fail(v, v.step, "failed");
                 save(context, v);
-                reportCrash(context, variant, v);
+                report(context, variant, v);
                 return;
             }
         }
@@ -315,7 +353,7 @@ final class TurboGpu {
             .put("threads", Turbo.threads()).put("system", Whisper.system()));
     }
 
-    /** A GPU run failed with ggml saying why (not a crash): as a failed check, at this level. */
+    /** A GPU run failed with ggml saying why (not a crash): its level failed. */
     static void failed(Context context, String variant, String why) {
         Verdict v = load(context);
         if (v == null) return;
@@ -323,7 +361,7 @@ final class TurboGpu {
         v.error = String.valueOf(why);
         fail(v, "run", "failed");
         save(context, v);
-        reportCrash(context, variant, v);
+        report(context, variant, v);
     }
 
     // Kept at once, so a crash in it says where.
@@ -333,11 +371,49 @@ final class TurboGpu {
     }
 
     /**
-     * A check or GPU run that died, to the site's log: where, at which level, and the
-     * phone's own record of it (Android 11 on: the crash's description and, for a
-     * native crash, its tombstone, for symbols from the build's unstripped library).
+     * A GPU step that runs past `millis` has hung, and a GPU cannot be interrupted:
+     * its level failed, it is reported, and the process ends (WorkManager starts the
+     * work again, on the CPU or the next level). Closed in time, it does nothing.
      */
-    private static void reportCrash(Context context, String variant, Verdict v) {
+    static final class Watchdog implements AutoCloseable {
+        private final Thread thread;
+        private volatile boolean done;
+
+        Watchdog(Context context, String variant, Verdict v, String where, long millis) {
+            thread = new Thread(() -> {
+                try {
+                    Thread.sleep(millis);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (done) return;
+                Verdict now = load(context);
+                if (now == null) now = v;
+                now.running = false;
+                now.error = where + " still running after " + millis / 1000 + " s";
+                fail(now, where + "-hung", "failed");
+                save(context, now);
+                report(context, variant, now);
+                android.os.Process.killProcess(android.os.Process.myPid());
+            }, "turbo-watchdog");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        @Override
+        public void close() {
+            done = true;
+            thread.interrupt();
+        }
+    }
+
+    /**
+     * A failed level, to the site's log: where, which, what ggml said last, and the
+     * phone's own record of a process that died (Android 11 on: its description and,
+     * for a native crash, its tombstone, for symbols from the build's unstripped
+     * library).
+     */
+    private static void report(Context context, String variant, Verdict v) {
         try {
             JSONObject body = new JSONObject().put("engine", Turbo.engine(variant)).put("crashed", v.crashed)
                 .put("verdict", v.json());
@@ -381,10 +457,10 @@ final class TurboGpu {
         return out.toByteArray();
     }
 
-    /** The sample's words, on the GPU or not; took[0]: how long, in milliseconds. */
-    private static String hear(String path, boolean gpu, boolean flash, float[] sound, long[] took) {
-        long handle = Whisper.load(path, gpu, flash);
-        if (handle == 0) throw new IllegalStateException("the Turbo model did not load" + (gpu ? " on the GPU" : ""));
+    /** The sample's words on a GPU device (-1: the CPU); took[0]: how long, in milliseconds. */
+    private static String hear(String path, int device, boolean flash, float[] sound, long[] took) {
+        long handle = Whisper.load(path, device, flash);
+        if (handle == 0) throw new IllegalStateException("the Turbo model did not load" + (device >= 0 ? " on the GPU" : ""));
         try {
             long started = System.currentTimeMillis();
             Object[] heard = Whisper.transcribe(handle, sound, Turbo.LANGUAGE, Turbo.threads(), Turbo.BEAMS, null);

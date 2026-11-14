@@ -37,23 +37,48 @@ extern "C" int guarded_full(struct whisper_context *ctx, struct whisper_full_par
     return -100;
 }
 
-// The first GPU ggml can start, as whisper.cpp starts it (whisper_backend_init_gpu),
-// or null: none, or (with `error` set) starting it threw.
-extern "C" const char *guarded_gpu(char *error, size_t size) {
+// ggml's GPU devices, in whisper.cpp's order (its gpu_device): at most `max` names
+// ("Vulkan0", "WebGPU"…) and descriptions; how many there are. Starts none of them.
+extern "C" size_t guarded_gpus(const char **names, const char **descriptions, size_t max, char *error, size_t size) {
+    size_t n = 0;
     try {
         for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
             enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
             if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) continue;
-            ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
-            if (!backend) return nullptr;
-            ggml_backend_free(backend);
-            return ggml_backend_dev_description(dev);
+            if (n < max) {
+                names[n] = ggml_backend_dev_name(dev);
+                descriptions[n] = ggml_backend_dev_description(dev);
+            }
+            n++;
         }
     } catch (const std::exception &e) {
         say(error, size, e.what());
     } catch (...) {
         say(error, size, "unknown exception");
     }
-    return nullptr;
+    return n;
+}
+
+// GPU device `index` (of guarded_gpus) started, as whisper.cpp starts it, and let go:
+// false when it would not (with `error` set if starting it threw).
+extern "C" bool guarded_probe(int index, char *error, size_t size) {
+    try {
+        int n = 0;
+        for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+            if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) continue;
+            if (n++ != index) continue;
+            ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+            if (!backend) return false;
+            ggml_backend_free(backend);
+            return true;
+        }
+    } catch (const std::exception &e) {
+        say(error, size, e.what());
+    } catch (...) {
+        say(error, size, "unknown exception");
+    }
+    return false;
 }

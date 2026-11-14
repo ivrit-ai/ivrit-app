@@ -13,3 +13,5 @@ shell/android/app/src/main/cpp/whisper.cpp/
 shell/android/app/.cxx/
 shell/android/app/src/main/cpp/vulkan-headers/
 shell/android/app/src/main/cpp/spirv-headers/
+shell/android/app/src/main/cpp/dawn-android/
+shell/android/app/src/main/cpp/dawn-headers/

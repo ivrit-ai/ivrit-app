@@ -22,7 +22,8 @@
 // guard.cpp: the same calls, with what they throw caught.
 struct whisper_context *guarded_init(const char *path, struct whisper_context_params params, char *error, size_t size);
 int guarded_full(struct whisper_context *ctx, struct whisper_full_params params, const float *samples, int n, char *error, size_t size);
-const char *guarded_gpu(char *error, size_t size);
+size_t guarded_gpus(const char **names, const char **descriptions, size_t max, char *error, size_t size);
+bool guarded_probe(int index, char *error, size_t size);
 
 static void throw_state(JNIEnv *env, const char *message) {
     (*env)->ThrowNew(env, (*env)->FindClass(env, "java/lang/IllegalStateException"), message);
@@ -85,25 +86,52 @@ static void progressed(struct whisper_context *ctx, struct whisper_state *state,
     if ((*sink->env)->ExceptionCheck(sink->env)) (*sink->env)->ExceptionClear(sink->env);
 }
 
-// The GPU whisper.cpp would use ("Adreno (TM) 720"…), once it is known to start,
-// or null: no Vulkan device ggml can work with. Throws when starting it threw.
-JNIEXPORT jstring JNICALL Java_ai_ivrit_app_Whisper_gpu(JNIEnv *env, jclass cls) {
+#define MAX_GPUS 8
+
+// ggml's GPU devices as "<name>: <description>" ("Vulkan0: Adreno (TM) 830"), in
+// whisper.cpp's order, none started. Throws when listing them threw.
+JNIEXPORT jobjectArray JNICALL Java_ai_ivrit_app_Whisper_gpus(JNIEnv *env, jclass cls) {
     (void) cls;
     ggml_log_set(on_log, NULL);
+    const char *names[MAX_GPUS];
+    const char *descriptions[MAX_GPUS];
     char error[512] = "";
-    const char *name = guarded_gpu(error, sizeof error);
+    size_t n = guarded_gpus(names, descriptions, MAX_GPUS, error, sizeof error);
     if (error[0]) {
         throw_state(env, error);
         return NULL;
     }
-    return name ? (*env)->NewStringUTF(env, name) : NULL;
+    if (n > MAX_GPUS) n = MAX_GPUS;
+    jobjectArray out = (*env)->NewObjectArray(env, (jsize) n, (*env)->FindClass(env, "java/lang/String"), NULL);
+    for (size_t i = 0; out && i < n; i++) {
+        char line[512];
+        snprintf(line, sizeof line, "%s: %s", names[i], descriptions[i]);
+        (*env)->SetObjectArrayElement(env, out, (jsize) i, (*env)->NewStringUTF(env, line));
+    }
+    return out;
 }
 
-JNIEXPORT jlong JNICALL Java_ai_ivrit_app_Whisper_load(JNIEnv *env, jclass cls, jstring path, jboolean gpu, jboolean flash) {
+// GPU device `index` started and let go: its description. Throws when it would not start.
+JNIEXPORT jstring JNICALL Java_ai_ivrit_app_Whisper_probe(JNIEnv *env, jclass cls, jint index) {
+    (void) cls;
+    ggml_log_set(on_log, NULL);
+    char error[512] = "";
+    if (!guarded_probe(index, error, sizeof error)) {
+        throw_state(env, error[0] ? error : "the GPU did not start");
+        return NULL;
+    }
+    const char *names[MAX_GPUS];
+    const char *descriptions[MAX_GPUS];
+    size_t n = guarded_gpus(names, descriptions, MAX_GPUS, error, sizeof error);
+    return (*env)->NewStringUTF(env, index >= 0 && (size_t) index < n && index < MAX_GPUS ? descriptions[index] : "");
+}
+
+JNIEXPORT jlong JNICALL Java_ai_ivrit_app_Whisper_load(JNIEnv *env, jclass cls, jstring path, jint device, jboolean flash) {
     (void) cls;
     whisper_log_set(on_log, NULL);
     struct whisper_context_params params = whisper_context_default_params();
-    params.use_gpu = gpu == JNI_TRUE;
+    params.use_gpu = device >= 0;
+    params.gpu_device = device >= 0 ? device : 0;
     params.flash_attn = flash == JNI_TRUE;
     const char *file = (*env)->GetStringUTFChars(env, path, NULL);
     char error[512] = "";

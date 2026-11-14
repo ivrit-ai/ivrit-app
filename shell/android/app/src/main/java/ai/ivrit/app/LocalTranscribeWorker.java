@@ -325,12 +325,16 @@ public class LocalTranscribeWorker extends Worker {
         boolean gpu = TurboGpu.onGpu(verdict, processor);
         long loading = System.currentTimeMillis();
         String path = Turbo.file(context, variant).getPath();
+        int device = gpu ? TurboGpu.device(verdict) : -1;
+        if (device < 0) gpu = false;
         if (gpu) TurboGpu.log(context);
-        long loaded = Whisper.load(path, gpu, !gpu || TurboGpu.flash(verdict));
+        long loaded = Whisper.load(path, device, !gpu || verdict.level().flash);
         if (loaded == 0 && gpu) {
             gpu = false; // no room on the GPU: the CPU, then
-            loaded = Whisper.load(path, false, true);
+            loaded = Whisper.load(path, -1, true);
         }
+        // A GPU run's pieces are watched for a hang (TurboGpu.Watchdog).
+        TurboGpu.Verdict watch = gpu ? verdict : null;
         // Checked when it downloaded: not loading is the phone short of memory.
         if (loaded == 0) throw new IllegalStateException("the Turbo model did not load");
         long handle = loaded;
@@ -358,11 +362,11 @@ public class LocalTranscribeWorker extends Worker {
                     sound.resampler = new Resampler(sampleRate);
                 }
                 sound.add(sound.resampler.push(samples));
-                if (sound.seconds() >= Turbo.CHUNK_SECONDS) hearTurbo(context, handle, threads, sound, words, false, duration, from, started);
+                if (sound.seconds() >= Turbo.CHUNK_SECONDS) hearTurbo(context, handle, threads, sound, words, false, duration, from, started, variant, watch);
             });
             if (sound.resampler != null) sound.add(sound.resampler.flush());
             if (sound.start < 0) sound.start = from;
-            hearTurbo(context, handle, threads, sound, words, true, duration, from, started);
+            hearTurbo(context, handle, threads, sound, words, true, duration, from, started, variant, watch);
         } catch (IllegalStateException e) {
             // ggml failing on the GPU (guard.cpp): the next level next time; this
             // recording again, from its last checkpoint, on the CPU (retried).
@@ -389,6 +393,8 @@ public class LocalTranscribeWorker extends Worker {
             .put("load", (started - loading) / 1000.0)
             .put("resumedAt", from)
             .put("processor", gpu ? "gpu" : "cpu")
+            .put("backend", gpu ? verdict.level().backend : "")
+            .put("level", verdict.level)
             .put("chose", processor)
             .put("gpu", verdict.gpu)
             .put("gpuCheck", verdict.state == null ? JSONObject.NULL : verdict.state)
@@ -402,18 +408,23 @@ public class LocalTranscribeWorker extends Worker {
 
     /** The sound so far through the Turbo model, keeping what may be cut off for next time. */
     private void hearTurbo(Context context, long handle, int threads, Sound sound, List<Segments.Word> words, boolean last,
-                           double duration, double from, long started) throws Exception {
+                           double duration, double from, long started, String variant, TurboGpu.Verdict watch) throws Exception {
         if (isStopped()) throw new InterruptedException("stopped");
         if (sound.length < Resampler.RATE / 10) return; // nothing to speak of
         double start = sound.start;
         double seconds = sound.seconds();
-        Object[] heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, threads, Turbo.BEAMS, percent -> {
-            if (duration <= 0) return;
-            double fraction = Math.min(1, (start + seconds * percent / 100.0) / duration);
-            double spent = (System.currentTimeMillis() - started) / 1000.0;
-            double share = fraction - from / duration;
-            progress("transcribing", fraction, share > 0.03 ? spent * (1 - fraction) / share : null);
-        });
+        Object[] heard;
+        // On the GPU: a piece taking over twice its length (plus two minutes) has hung.
+        try (TurboGpu.Watchdog ignored = watch == null ? null
+                : new TurboGpu.Watchdog(context, variant, watch, "run", (long) (2000 * seconds) + 120_000)) {
+            heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, threads, Turbo.BEAMS, percent -> {
+                if (duration <= 0) return;
+                double fraction = Math.min(1, (start + seconds * percent / 100.0) / duration);
+                double spent = (System.currentTimeMillis() - started) / 1000.0;
+                double share = fraction - from / duration;
+                progress("transcribing", fraction, share > 0.03 ? spent * (1 - fraction) / share : null);
+            });
+        }
         if (heard == null) throw new InterruptedException("stopped");
         TurboWords.Chunk chunk = TurboWords.chunk((byte[]) heard[0], (int[]) heard[1], (int[]) heard[2], (int[]) heard[3], start, seconds, last);
         words.addAll(chunk.words);

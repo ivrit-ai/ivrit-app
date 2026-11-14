@@ -16,8 +16,9 @@ android {
         externalNativeBuild {
             cmake {
                 abiFilters 'arm64-v8a'
-                // -PturboVulkan=OFF: whisper.cpp on the CPU only (src/main/cpp/CMakeLists.txt).
-                arguments '-DCMAKE_BUILD_TYPE=Release', "-DIVRIT_TURBO_VULKAN=${project.findProperty('turboVulkan') ?: 'ON'}"
+                // -PturboVulkan=OFF, -PturboWebgpu=OFF: without that GPU backend (src/main/cpp/CMakeLists.txt).
+                arguments '-DCMAKE_BUILD_TYPE=Release', "-DIVRIT_TURBO_VULKAN=${project.findProperty('turboVulkan') ?: 'ON'}",
+                    "-DIVRIT_TURBO_WEBGPU=${project.findProperty('turboWebgpu') ?: 'ON'}"
             }
         }
         aaptOptions {

@@ -80,10 +80,14 @@ Open to comment; each with what it rests on.
    cuts); ten minutes keeps that to a few percent. Memory: about 70 MB of sound
    and spectrogram a piece.
 
-9. **Vulkan for the GPU,** in the same library as the CPU (ggml-vulkan): it
-   covers both Adreno (Qualcomm) and Mali (MediaTek, Exynos, Tensor), and needs
-   no other model file. OpenCL (Adreno only) and Qualcomm's NPU (Hexagon) are
-   later options, if phones' numbers call for them.
+9. **Two GPU backends: WebGPU first, then Vulkan.** Both in the same library,
+   with the same model file. WebGPU is ggml's WebGPU backend on Google's Dawn
+   (its Android release, built into the app; Dawn runs on the phone's Vulkan
+   driver but writes its own, conservative shaders, and carries workarounds for
+   drivers' bugs, Qualcomm's among them). Vulkan is ggml-vulkan, ggml's own
+   shaders straight on the driver: it covers Mali well, and failed every way on
+   the Galaxy S25's Adreno 830 (decision 11). OpenCL (Adreno only) and
+   Qualcomm's NPU (Hexagon) remain options.
 
 10. **The GPU is used only after it passed a check on this phone**, per system
     build (drivers come with it) and model: the 12-second Hebrew fixture
@@ -117,6 +121,12 @@ Open to comment; each with what it rests on.
       (`kind=local-turbo-gpu-crash`) with its end, the step, and from Android 11
       the phone's exit records with native tombstones (symbols: the build's
       unstripped library, kept outside the repo by build number).
+    - Then WebGPU, tried first since build 253, and a watchdog: a GPU step
+      running far past its time (the check's: ten times the CPU's, at least two
+      minutes; a run's piece: twice its length plus two minutes) fails its level
+      and ends the process, as a hung GPU cannot be interrupted; WorkManager
+      starts the work again. Build 252's no-subgroups level hung the S25 for
+      three hours.
 
 12. **Crash guard instead of a separate process.** A GPU driver crash kills
     the process. A check under way is saved before it starts; if it is still

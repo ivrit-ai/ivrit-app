@@ -28,11 +28,14 @@ final class Whisper {
         return available;
     }
 
-    /** The GPU whisper.cpp would use, checked to start, or null when there is none it can. */
-    static native String gpu();
+    /** ggml's GPU devices, "<backend><n>: <description>" ("Vulkan0: Adreno (TM) 830"), not started. */
+    static native String[] gpus();
 
-    /** A model file loaded, on the GPU or not, with flash attention or not; 0 when it would not load. */
-    static native long load(String path, boolean gpu, boolean flash);
+    /** Starts GPU device `index` (of gpus()) and lets it go: its description; throws when ggml failed. */
+    static native String probe(int index);
+
+    /** A model file loaded on GPU device `device` (of gpus(); -1: the CPU), with flash attention or not; 0 when it would not load. */
+    static native long load(String path, int device, boolean flash);
 
     /** stderr and whisper.cpp's whole log into this file from now on (TurboGpu reads it after a crash). */
     static native void logTo(String path);
