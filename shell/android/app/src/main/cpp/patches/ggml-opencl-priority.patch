@@ -1,0 +1,24 @@
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp	2026-11-18 10:50:54.873303820 +0200
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp	2026-11-18 10:51:11.490469330 +0200
+@@ -6452,8 +6452,19 @@
+     cl_context            shared_context;
+     cl_context_properties properties[] = { (intptr_t) CL_CONTEXT_PLATFORM, (intptr_t) default_device->platform->id, 0 };
+ 
+-    CL_CHECK(
+-        (shared_context = clCreateContext(properties, device_ids.size(), device_ids.data(), NULL, NULL, &err), err));
++    // ivrit-app: on Adreno, its work at low priority (cl_qcom_priority_hint), so that
++    // the phone's own drawing goes first while it transcribes; where the hint is not
++    // taken, as before.
++    cl_context_properties hinted[] = { (intptr_t) CL_CONTEXT_PLATFORM, (intptr_t) default_device->platform->id,
++                                       (intptr_t) 0x40C9 /* CL_CONTEXT_PRIORITY_HINT_QCOM */,
++                                       (intptr_t) 0x40CC /* CL_PRIORITY_HINT_LOW_QCOM */, 0 };
++    shared_context = clCreateContext(hinted, device_ids.size(), device_ids.data(), NULL, NULL, &err);
++    if (err == CL_SUCCESS) {
++        GGML_LOG_INFO("ggml_opencl: low priority (cl_qcom_priority_hint)\n");
++    } else {
++        CL_CHECK(
++            (shared_context = clCreateContext(properties, device_ids.size(), device_ids.data(), NULL, NULL, &err), err));
++    }
+ 
+     for (auto dev = candidate_devices, dev_end = candidate_devices + n_candidate_devices; dev != dev_end; dev++) {
+         GGML_LOG_INFO("\nggml_opencl: device: '%s (%s)'\n", dev->name, dev->version);

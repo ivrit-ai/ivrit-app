@@ -70,7 +70,7 @@ final class Segments {
         return segments(words(pieces, times));
     }
 
-    /** Words already timed (the Turbo model's, TurboWords) into sentences, by the same rules. */
+    /** Words already timed into sentences, by the same rules. */
     static JSONArray segments(List<Word> words) throws Exception {
         JSONArray out = new JSONArray();
         List<Word> current = new ArrayList<>();

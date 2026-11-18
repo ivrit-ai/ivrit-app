@@ -578,8 +578,8 @@ function entryCard(entry, index) {
     tag = el("span", { class: "tag danger", text: tr("statusFailed") });
     note = [entry.failure_reason ? tr(entry.failure_reason) : tr("statusError"), entry.quota_refunded ? tr("quotaRefunded") : null].filter(Boolean).join(" · ");
   } else if (ready && entry.engine) {
-    // Made on the user's device: no speakers.
-    tag = el("span", { class: "tag", text: tr("madeOnDevice") });
+    // Made on the user's device: no speakers, but with the Turbo model.
+    tag = el("span", { class: "tag", text: tr(entry.engine.startsWith("whisper-turbo") ? "madeOnDeviceTurbo" : "madeOnDevice") });
   }
   const open = () => ready && reader.navigate(entry.results_id, folder);
   const actions = el("div", { class: "msg-actions" }, [

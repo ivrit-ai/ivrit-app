@@ -2,8 +2,8 @@ package ai.ivrit.app;
 
 /**
  * whisper.cpp, for the Turbo model (Turbo): built with the app for arm64 phones
- * (src/main/cpp, turbo.c), on the CPU, or on the GPU through Vulkan where TurboGpu
- * finds that works. One recording at a time per loaded model.
+ * (src/main/cpp, turbo.c, and shell/native), on the CPU, or on the GPU where
+ * TurboGpu finds that works. One recording at a time per loaded model.
  */
 final class Whisper {
     private Whisper() {}
@@ -49,9 +49,23 @@ final class Whisper {
     static native String system();
 
     /**
-     * 16 kHz mono sound in the language given, as {byte[] text, int[] ends, int[]
-     * times, int[] segments} (turbo.c says how they are laid out; TurboWords reads
-     * them), or null once stopped.
+     * 16 kHz mono sound in the language given, from `offset` seconds into the file
+     * (`last`: nothing comes after it), as the server would transcribe it, as
+     * {byte[] text, int[] ends, double[] times, int[] segments} (turbo.c says how
+     * they are laid out; TurboTranscript reads them), or null once stopped. state:
+     * {the speech's end so far, the transcript's end so far, where the next piece
+     * starts}: the first two read, all three written. prompt: {how many, then the
+     * tokens} of the previous text it goes on from (PROMPT at most, as faster-whisper
+     * prompts), PROMPT + 1 long, read and written.
      */
-    static native Object[] transcribe(long handle, float[] pcm, String language, int threads, int beams, Listener listener);
+    static native Object[] transcribe(long handle, float[] pcm, String language, int threads, int beams, Listener listener,
+                                      double offset, boolean last, double[] state, int[] prompt);
+
+    /** transcript.h's TR_PROMPT. */
+    static final int PROMPT = 223;
+
+    /** An empty prompt, for transcribe. */
+    static int[] prompt() {
+        return new int[PROMPT + 1];
+    }
 }

@@ -120,7 +120,7 @@ export function timeGroups(segments) {
 // "segments", timestampFormat: "none" | "segments", diarizationDisplay: "enabled" |
 // "disabled"}. [{range?, turns: [{speaker?, indices}]}]
 export function layout(segments, settings) {
-  // A transcript with no speakers at all (made on the device) shows no labels.
+  // A transcript with no speakers at all (made on the device by the zipformer) shows no labels.
   const speakers = settings.diarizationDisplay !== "disabled" && speakersIn(segments).length > 0;
   const split = (indices) => (speakers ? turns(segments, indices) : [{ speaker: undefined, indices }]);
   if (settings.timestampFormat === "segments") {

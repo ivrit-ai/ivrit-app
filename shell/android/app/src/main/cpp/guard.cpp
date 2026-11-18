@@ -7,6 +7,7 @@
 #include <exception>
 
 #include "ggml-backend.h"
+#include "transcript.h"
 #include "whisper.h"
 
 static void say(char *error, size_t size, const char *what) {
@@ -24,11 +25,11 @@ extern "C" struct whisper_context *guarded_init(const char *path, struct whisper
     return nullptr;
 }
 
-// whisper_full's result, or -100 when it threw.
-extern "C" int guarded_full(struct whisper_context *ctx, struct whisper_full_params params, const float *samples, int n,
-                            char *error, size_t size) {
+// tr_piece_make's result (its windows through whisper_full), or -100 when it threw.
+extern "C" int guarded_piece(struct whisper_context *ctx, struct whisper_full_params params, const float *pcm, size_t n,
+                             double offset, bool last, tr_state *state, tr_piece *out, char *error, size_t size) {
     try {
-        return whisper_full(ctx, params, samples, n);
+        return tr_piece_make(ctx, params, pcm, n, offset, last, state, out);
     } catch (const std::exception &e) {
         say(error, size, e.what());
     } catch (...) {

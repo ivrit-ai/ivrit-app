@@ -2420,9 +2420,11 @@ async def delete_library_folder(folder_id: str, request: Request):
 # `audio`. The audio is only converted for playback and stored in their Drive;
 # it is not transcribed here, and no quota is used.
 # The engines: the zipformer, and ivrit.ai's Turbo model as the Android app runs
-# it (whisper.cpp, scripts/turbo_model.py's quantizations).
+# it (whisper.cpp, scripts/turbo_model.py's quantizations). Turbo's transcripts
+# have speakers, labeled as ivrit's diarization labels them (shell/native/speakers).
 LOCAL_ENGINES = {"zipformer2-66m-he", "whisper-turbo-he-q5_1", "whisper-turbo-he-q8_0"}
 LOCAL_MAX_RESULTS = 40 * 1024 * 1024  # unpacked JSON; ~20 hours of speech
+LOCAL_SPEAKER = re.compile(r"SPEAKER_\d{2}")
 
 
 def checked_local_results(raw: bytes) -> Optional[list]:
@@ -2447,7 +2449,8 @@ def checked_local_results(raw: bytes) -> Optional[list]:
                     words.append({"word": w["word"][:200], "start": float(w["start"]), "end": float(w["end"])})
                 except (KeyError, TypeError, ValueError):
                     continue
-        segments.append({"text": s["text"][:20000], "start": start, "end": max(start, end), "speakers": [], "words": words})
+        speakers = [x for x in s.get("speakers") or [] if isinstance(x, str) and LOCAL_SPEAKER.fullmatch(x)][:1]
+        segments.append({"text": s["text"][:20000], "start": start, "end": max(start, end), "speakers": speakers, "words": words})
     return segments
 
 

@@ -25,7 +25,8 @@ import org.json.JSONObject;
  *
  * The model is ggml's q8_0 or q5_1 (scripts/turbo_model.py), served by the site at
  * /models/turbo/ and downloaded the first time it is used, resumed where a download
- * broke off, and checked against the site's hash. Only the chosen one is kept.
+ * broke off, and checked against the site's hash. Only the chosen one is kept. Its
+ * transcripts have speakers, with the speaker model (Speakers) from there too.
  */
 final class Turbo {
     private Turbo() {}
@@ -34,11 +35,21 @@ final class Turbo {
     /** The first is the default: as accurate as the full model, and fastest on ARM (ggml repacks it). */
     static final String[] VARIANTS = {"q8_0", "q5_1"};
     static final String LANGUAGE = "he";
-    // Greedy: beam search (5) made 3 fewer mistakes in 544 words and took 29% longer.
-    static final int BEAMS = 1;
+    /**
+     * Beam search (5), as the server: on the GPU (OpenCL, Galaxy S25) it took about
+     * as long as greedy decoding (0.6-0.7 of the recording's length either way); on
+     * the CPU three times as long as greedy (3.0 against about 1.1), so the CPU
+     * decodes greedily, which made 3 more mistakes in 544 words.
+     */
+    static final int GPU_BEAMS = 5;
+    static final int CPU_BEAMS = 1;
+
+    static int beams(boolean gpu) {
+        return gpu ? GPU_BEAMS : CPU_BEAMS;
+    }
     /**
      * Heard ten minutes at a time, with a checkpoint after each. Each cut hears a
-     * sentence again (TurboWords.chunk): 120-second pieces took 29% longer than one.
+     * sentence again (shell/native/transcript): 120-second pieces took 29% longer than one.
      */
     static final double CHUNK_SECONDS = 600;
     private static final long MIN_MEMORY = 5L << 30; // a 6 GB phone reports about 5.5
@@ -134,18 +145,27 @@ final class Turbo {
     }
 
     static File file(Context context, String variant) {
-        return new File(dir(context), "ggml-turbo-" + variant + ".bin");
+        return model(context, "ggml-turbo-" + variant);
     }
 
-    private static File manifest(Context context, String variant) {
-        return new File(dir(context), "ggml-turbo-" + variant + ".json");
+    /** A file the site serves at /models/turbo/<name>.bin (with <name>.json, its size and hash), once here. */
+    static File model(Context context, String name) {
+        return new File(dir(context), name + ".bin");
+    }
+
+    private static File manifest(Context context, String name) {
+        return new File(dir(context), name + ".json");
     }
 
     /** Downloaded and checked. */
     static boolean ready(Context context, String variant) {
+        return downloaded(context, "ggml-turbo-" + variant);
+    }
+
+    static boolean downloaded(Context context, String name) {
         try {
-            JSONObject saved = new JSONObject(new String(java.nio.file.Files.readAllBytes(manifest(context, variant).toPath()), StandardCharsets.UTF_8));
-            return file(context, variant).length() == saved.getLong("bytes");
+            JSONObject saved = new JSONObject(new String(java.nio.file.Files.readAllBytes(manifest(context, name).toPath()), StandardCharsets.UTF_8));
+            return model(context, name).length() == saved.getLong("bytes");
         } catch (Exception e) {
             return false;
         }
@@ -154,14 +174,20 @@ final class Turbo {
     /** The model, downloaded where it is missing (resumed where it broke off), then checked. */
     static void ensure(Context context, String variant, Progress progress) throws Exception {
         if (ready(context, variant)) return;
-        File dir = dir(context);
-        if (!dir.isDirectory() && !dir.mkdirs()) throw new java.io.IOException("no room for the Turbo model");
-        String base = Store.site(context) + "/models/turbo/ggml-turbo-" + variant;
-        JSONObject wanted = new JSONObject(fetch(base + ".json"));
-        long total = wanted.getLong("bytes");
-        File part = new File(dir, file(context, variant).getName() + ".part");
         // Only one model is kept: the others go before this one comes.
         for (String other : VARIANTS) if (!other.equals(variant)) forget(context, other);
+        download(context, "ggml-turbo-" + variant, progress);
+    }
+
+    /** One of the site's models (model), downloaded where it is missing, resumed where it broke off, checked. */
+    static void download(Context context, String name, Progress progress) throws Exception {
+        if (downloaded(context, name)) return;
+        File dir = dir(context);
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new java.io.IOException("no room for the Turbo model");
+        String base = Store.site(context) + "/models/turbo/" + name;
+        JSONObject wanted = new JSONObject(fetch(base + ".json"));
+        long total = wanted.getLong("bytes");
+        File part = new File(dir, model(context, name).getName() + ".part");
         long have = part.length() <= total ? part.length() : 0;
         if (dir.getUsableSpace() < total - have + (100L << 20)) throw new java.io.IOException("no room for the Turbo model");
         HttpURLConnection connection = (HttpURLConnection) new URL(base + ".bin").openConnection();
@@ -194,8 +220,8 @@ final class Turbo {
             part.delete();
             throw new java.io.IOException("Turbo model download damaged");
         }
-        if (!part.renameTo(file(context, variant))) throw new java.io.IOException("Turbo model not saved");
-        try (OutputStream out = new FileOutputStream(manifest(context, variant))) {
+        if (!part.renameTo(model(context, name))) throw new java.io.IOException("Turbo model not saved");
+        try (OutputStream out = new FileOutputStream(manifest(context, name))) {
             out.write(wanted.toString().getBytes(StandardCharsets.UTF_8));
         }
         progress.downloaded(total, total);
@@ -203,8 +229,9 @@ final class Turbo {
 
     /** A model no longer chosen, and any download of it. */
     static void forget(Context context, String variant) {
-        File model = file(context, variant);
-        for (File f : new File[] {model, manifest(context, variant), new File(model.getPath() + ".part")}) {
+        String name = "ggml-turbo-" + variant;
+        File model = model(context, name);
+        for (File f : new File[] {model, manifest(context, name), new File(model.getPath() + ".part")}) {
             //noinspection ResultOfMethodCallIgnored
             f.delete();
         }

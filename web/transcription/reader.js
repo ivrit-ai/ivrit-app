@@ -191,7 +191,7 @@ function render() {
     el("p", { class: "lede" }, [
       document.createTextNode(meta),
       hasEdits(doc.saved) ? el("span", { class: "tag tr-edited", text: tr("edited") }) : null,
-      entry.engine ? el("span", { class: "tag tr-edited", text: tr("madeOnDevice") }) : null,
+      entry.engine ? el("span", { class: "tag tr-edited", text: tr(entry.engine.startsWith("whisper-turbo") ? "madeOnDeviceTurbo" : "madeOnDevice") }) : null,
     ]),
     audio ? el("div", { class: "card tr-player" }, [audio]) : null,
     editing ? editBar() : toolbar(),

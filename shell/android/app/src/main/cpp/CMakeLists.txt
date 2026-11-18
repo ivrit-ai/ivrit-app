@@ -1,7 +1,8 @@
 # The Turbo model's runtime (Whisper.java): whisper.cpp (scripts/fetch-whisper.sh)
 # on the CPU, and on the GPU, through OpenCL (Adreno's), WebGPU (Google's Dawn) or
 # Vulkan, where the phone's passes its check (TurboGpu), linked into one library
-# with turbo.c. Built for arm64-v8a with dot
+# with turbo.c, and shell/native's transcript and speakers (speakers.c for
+# Speakers.java). Built for arm64-v8a with dot
 # products and half floats, which every phone it is offered on has (Turbo.supported
 # checks), and nothing older.
 cmake_minimum_required(VERSION 3.22)
@@ -83,8 +84,11 @@ if(IVRIT_TURBO_VULKAN)
     target_include_directories(ggml-vulkan PRIVATE ${Vulkan_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/spirv-headers/include)
 endif()
 
-add_library(ivritturbo SHARED turbo.c guard.cpp)
-target_link_libraries(ivritturbo PRIVATE whisper ggml log)
+# The transcript as the server makes it, and its speakers: shared with the iPhone's app.
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../../../native ${CMAKE_CURRENT_BINARY_DIR}/native)
+
+add_library(ivritturbo SHARED turbo.c guard.cpp speakers.c)
+target_link_libraries(ivritturbo PRIVATE ivritnative whisper ggml log)
 target_compile_options(ivritturbo PRIVATE -O3)
 target_link_options(ivritturbo PRIVATE -Wl,--gc-sections -Wl,--exclude-libs,ALL)
 # Against Android 9's system libraries, as Vulkan above (Dawn's uses API 26's

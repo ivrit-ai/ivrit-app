@@ -16,9 +16,10 @@ import org.json.JSONObject;
  * to go on from. A run the phone stopped resumes there with a fresh stream, cut at
  * the start of the last word so no word is split or lost.
  *
- * The Turbo model (Turbo) keeps its words here too, whole and each with its end,
- * after every few minutes it hears. A checkpoint is its engine's only: a run with
- * another model starts over.
+ * The Turbo model (Turbo) keeps its segments here too, each with its voice print
+ * (TurboTranscript), after every few minutes it hears, and where its speech and its
+ * transcript end. A checkpoint is its engine's only: a run with another model
+ * starts over.
  */
 final class Checkpoint {
     static final double EVERY_SECONDS = 60;
@@ -26,23 +27,12 @@ final class Checkpoint {
 
     final List<String> pieceList = new ArrayList<>();
     final List<Float> timeList = new ArrayList<>();
-    final List<Float> endList = new ArrayList<>(); // the Turbo model's words' ends
+    JSONArray turbo; // the Turbo model's segments (TurboTranscript.save); null for none
+    double lastSpeech; // the Turbo model's: where its speech, and its transcript, end
+    double after;
+    int[] prompt = Whisper.prompt(); // the Turbo model's previous text (Whisper.transcribe)
     double offset; // seconds into the file where the next stream starts
     String engine = LocalModel.ENGINE; // what made the pieces
-
-    /** The Turbo model's words so far. */
-    List<Segments.Word> words() {
-        List<Segments.Word> words = new ArrayList<>();
-        for (int i = 0; i < pieceList.size() && i < endList.size(); i++) {
-            Segments.Word w = new Segments.Word();
-            w.text = pieceList.get(i);
-            w.start = timeList.get(i);
-            w.end = endList.get(i);
-            w.last = w.end;
-            words.add(w);
-        }
-        return words;
-    }
 
     String[] pieces() {
         return pieceList.toArray(new String[0]);
@@ -83,14 +73,17 @@ final class Checkpoint {
         try {
             byte[] bytes = java.nio.file.Files.readAllBytes(f.toPath());
             JSONObject o = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
-            JSONArray pieces = o.getJSONArray("pieces");
-            JSONArray times = o.getJSONArray("times");
-            for (int i = 0; i < pieces.length() && i < times.length(); i++) {
+            JSONArray pieces = o.optJSONArray("pieces");
+            JSONArray times = o.optJSONArray("times");
+            for (int i = 0; pieces != null && times != null && i < pieces.length() && i < times.length(); i++) {
                 cp.pieceList.add(pieces.getString(i));
                 cp.timeList.add((float) times.getDouble(i));
             }
-            JSONArray ends = o.optJSONArray("ends");
-            for (int i = 0; ends != null && i < ends.length(); i++) cp.endList.add((float) ends.getDouble(i));
+            cp.turbo = o.optJSONArray("segments");
+            cp.lastSpeech = o.optDouble("lastSpeech", 0);
+            cp.after = o.optDouble("after", 0);
+            JSONArray prompt = o.optJSONArray("prompt");
+            for (int i = 0; prompt != null && i < prompt.length() && i < cp.prompt.length; i++) cp.prompt[i] = prompt.getInt(i);
             cp.offset = o.optDouble("offset", 0);
             cp.engine = o.optString("engine", LocalModel.ENGINE);
         } catch (Exception e) {
@@ -126,19 +119,14 @@ final class Checkpoint {
         }
     }
 
-    /** The Turbo model's words so far, and where in the file it goes on from. */
-    static void saveWords(Context context, String key, String engine, List<Segments.Word> words, double resumeAt) {
+    /** The Turbo model's segments so far (TurboTranscript.save), and where in the file it goes on from. */
+    static void saveTurbo(Context context, String key, String engine, JSONArray segments, double resumeAt,
+                          double lastSpeech, double after, int[] prompt) {
         try {
-            JSONArray pieces = new JSONArray();
-            JSONArray times = new JSONArray();
-            JSONArray ends = new JSONArray();
-            for (Segments.Word w : words) {
-                pieces.put(w.text);
-                times.put(w.start);
-                ends.put(w.end);
-            }
-            write(context, key, new JSONObject().put("pieces", pieces).put("times", times).put("ends", ends)
-                .put("offset", resumeAt).put("engine", engine));
+            JSONArray tokens = new JSONArray();
+            for (int i = 0; i <= prompt[0]; i++) tokens.put(prompt[i]);
+            write(context, key, new JSONObject().put("segments", segments).put("offset", resumeAt)
+                .put("lastSpeech", lastSpeech).put("after", after).put("prompt", tokens).put("engine", engine));
         } catch (Exception ignored) {
             // Only a faster restart is lost.
         }

@@ -1,0 +1,324 @@
+--- a/include/whisper.h	2026-10-06 17:10:35.000000000 +0300
++++ b/include/whisper.h	2026-11-18 09:46:42.370866051 +0200
+@@ -588,6 +588,15 @@
+         const char * vad_model_path;              // Path to VAD model
+ 
+         whisper_vad_params vad_params;
++
++        // ivrit-app: one 30-second window, as faster-whisper decodes with CTranslate2
++        // (the caller moves the window, falls back and keeps the prompt): the window
++        // is [offset_ms, offset_ms + duration_ms), the mel past its end zeros; beams
++        // are ranked on all their tokens with end-of-text and the best kept whole
++        // (whisper_full_ivrit_sequence); the prompt is kept at every temperature;
++        // no failure for a missing timestamp or the token limit, no stop at the
++        // window's end, no DTW (whisper_full_ivrit_dtw).
++        bool ivrit_window;
+     };
+ 
+     // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see whisper_free_context_params & whisper_free_params()
+@@ -640,6 +649,19 @@
+     WHISPER_API int64_t whisper_full_get_segment_t0           (struct whisper_context * ctx, int i_segment);
+     WHISPER_API int64_t whisper_full_get_segment_t0_from_state(struct whisper_state * state, int i_segment);
+ 
++    // ivrit-app: where the window a segment came from begins (10 ms units).
++    WHISPER_API int64_t whisper_full_get_segment_seek           (struct whisper_context * ctx, int i_segment);
++    WHISPER_API int64_t whisper_full_get_segment_seek_from_state(struct whisper_state * state, int i_segment);
++
++    // ivrit-app: after whisper_full with params.ivrit_window, the best sequence as
++    // decoded (every token, end-of-text included when reached), the window's
++    // no-speech probability, and the DTW times (centiseconds, from `seek`) of the
++    // given text tokens over the window's first n_frames, as faster-whisper aligns.
++    WHISPER_API int   whisper_full_ivrit_sequence(struct whisper_context * ctx, const whisper_token_data ** tokens);
++    WHISPER_API float whisper_full_ivrit_no_speech_prob(struct whisper_context * ctx);
++    WHISPER_API int   whisper_full_ivrit_dtw(struct whisper_context * ctx, const whisper_token * tokens, int n_tokens,
++                                             int seek, int n_frames, int64_t * t_dtw, int n_threads);
++
+     WHISPER_API int64_t whisper_full_get_segment_t1           (struct whisper_context * ctx, int i_segment);
+     WHISPER_API int64_t whisper_full_get_segment_t1_from_state(struct whisper_state * state, int i_segment);
+ 
+--- a/src/whisper.cpp	2026-10-06 17:10:35.000000000 +0300
++++ b/src/whisper.cpp	2026-11-18 09:46:42.434182222 +0200
+@@ -473,6 +473,10 @@
+     std::vector<whisper_token_data> tokens;
+ 
+     bool speaker_turn_next;
++
++    // ivrit-app: where in the sound the window it came from begins (10 ms units),
++    // for word times measured from there (DTW's first token).
++    int64_t seek = 0;
+ };
+ 
+ struct whisper_batch {
+@@ -893,6 +897,10 @@
+ 
+     std::vector<whisper_segment> result_all;
+ 
++    // ivrit-app: params.ivrit_window's best sequence, and the window's end (frames)
++    std::vector<whisper_token_data> ivrit_sequence;
++    int ivrit_mel_end = 0;
++
+     // prompt history split into static prefix (prompt_past0) and dynamic rolling context (prompt_past1)
+     std::vector<whisper_token>   prompt_past0; // static carried initial prompt (if enabled)
+     std::vector<whisper_token>   prompt_past1; // dynamic context from decoded output
+@@ -2435,7 +2443,10 @@
+             memset(dst, 0, ggml_nbytes(mel));
+ 
+             const int i0 = std::min(mel_offset,           mel_inp.n_len);
+-            const int i1 = std::min(mel_offset + 2*n_ctx, mel_inp.n_len);
++            int i1 = std::min(mel_offset + 2*n_ctx, mel_inp.n_len);
++            if (wstate.ivrit_mel_end > 0) {
++                i1 = std::max(i0, std::min(i1, wstate.ivrit_mel_end));  // ivrit-app: zeros past the window
++            }
+ 
+             for (int j = 0; j < mel_inp.n_mel; ++j) {
+                 for (int i = i0; i < i1; ++i) {
+@@ -2758,6 +2769,33 @@
+                 cur = ggml_flash_attn_ext(ctx0, Q, Kcross, Vcross, nullptr, KQscale, 0.0f, 0.0f);
+ 
+                 cur = ggml_reshape_2d(ctx0, cur, n_state, n_tokens);
++
++                // ivrit-app: DTW with flash attention too. Flash attention keeps no
++                // attention weights, so the alignment heads' are computed beside it,
++                // as the other branch does, and only in DTW's own pass over the text.
++                if (wctx.params.dtw_token_timestamps && save_alignment_heads_QKs && wstate.aheads_masks.m[il] != nullptr) {
++                    struct ggml_tensor * K =
++                        ggml_view_3d(ctx0, wstate.kv_cross.k,
++                                n_state_head, n_audio_ctx, n_head,
++                                ggml_element_size(wstate.kv_cross.k)*n_state,
++                                ggml_element_size(wstate.kv_cross.k)*n_state_head,
++                                ggml_element_size(wstate.kv_cross.k)*n_state*n_audio_ctx_pad*il);
++
++                    struct ggml_tensor * KQ_soft_max = ggml_soft_max_ext(ctx0, ggml_mul_mat(ctx0, K, Q), nullptr, KQscale, 0.0f);
++
++                    struct ggml_tensor * aheads_KQs = ggml_reshape_2d(ctx0, KQ_soft_max, KQ_soft_max->ne[0] * KQ_soft_max->ne[1], KQ_soft_max->ne[2]);
++                    aheads_KQs = ggml_transpose(ctx0, aheads_KQs);
++                    aheads_KQs = ggml_cont(ctx0, aheads_KQs);
++                    aheads_KQs = ggml_mul_mat(ctx0, wstate.aheads_masks.m[il], aheads_KQs);
++                    aheads_KQs = ggml_transpose(ctx0, aheads_KQs);
++                    aheads_KQs = ggml_cont(ctx0, aheads_KQs);
++                    aheads_KQs = ggml_reshape_3d(ctx0, aheads_KQs, KQ_soft_max->ne[0], KQ_soft_max->ne[1], wstate.aheads_masks.m[il]->ne[1]);
++                    if (aheads_cross_QKs == NULL) {
++                        aheads_cross_QKs = aheads_KQs;
++                    } else {
++                        aheads_cross_QKs = ggml_concat(ctx0, aheads_cross_QKs, aheads_KQs, 2);
++                    }
++                }
+             } else {
+                 struct ggml_tensor * Kcross =
+                     ggml_view_3d(ctx0, wstate.kv_cross.k,
+@@ -3814,11 +3852,6 @@
+ struct whisper_context * whisper_init_with_params_no_state(struct whisper_model_loader * loader, struct whisper_context_params params) {
+     ggml_time_init();
+ 
+-    if (params.flash_attn && params.dtw_token_timestamps) {
+-        WHISPER_LOG_WARN("%s: dtw_token_timestamps is not supported with flash_attn - disabling\n", __func__);
+-        params.dtw_token_timestamps = false;
+-    }
+-
+     WHISPER_LOG_INFO("%s: use gpu    = %d\n", __func__, params.use_gpu);
+     WHISPER_LOG_INFO("%s: flash attn = %d\n", __func__, params.flash_attn);
+     WHISPER_LOG_INFO("%s: gpu_device = %d\n", __func__, params.gpu_device);
+@@ -6172,6 +6205,8 @@
+         /*.vad_model_path              =*/ nullptr,
+ 
+         /* vad_params =*/ whisper_vad_default_params(),
++
++        /* ivrit_window =*/ false,
+     };
+ 
+     switch (strategy) {
+@@ -7173,6 +7208,8 @@
+     }
+ 
+     int seek = seek_start;
++    state->ivrit_mel_end = params.ivrit_window ? seek_end : 0;
++    state->ivrit_sequence.clear();
+ 
+     std::vector<whisper_token> prompt;
+     prompt.reserve(whisper_n_text_ctx(ctx));
+@@ -7282,7 +7319,7 @@
+             {
+                 prompt.clear();
+ 
+-                if (params.n_max_text_ctx > 0 && t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF) {
++                if (params.n_max_text_ctx > 0 && (t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF || params.ivrit_window)) {
+                     const bool can_take0 = params.carry_initial_prompt && !prompt_past0.empty();
+                     const bool can_take1 = !prompt_past1.empty();
+ 
+@@ -7561,9 +7598,9 @@
+                         // end of segment
+                         if (token.id == whisper_token_eot(ctx) ||               // end of text token
+                            (params.max_tokens > 0 && i >= params.max_tokens) || // max tokens per segment reached
+-                           (has_ts && seek + seek_delta + delta_min >= seek_end)       // end of audio reached (100ms)
++                           (has_ts && !params.ivrit_window && seek + seek_delta + delta_min >= seek_end)       // end of audio reached (100ms)
+                            ) {
+-                            if (result_len == 0 && !params.no_timestamps) {
++                            if (result_len == 0 && !params.no_timestamps && !params.ivrit_window) {
+                                 if (seek + seek_delta + delta_min >= seek_end) {
+                                     result_len = i + 1;
+                                 } else {
+@@ -7593,7 +7630,7 @@
+ 
+                     // sometimes, the decoding can get stuck in a repetition loop
+                     // this is an attempt to mitigate such cases - we flag the decoding as failed and use a fallback strategy
+-                    if (i == n_max - 1 && (result_len == 0 || seek_delta < 100*WHISPER_CHUNK_SIZE/2)) {
++                    if (i == n_max - 1 && !params.ivrit_window && (result_len == 0 || seek_delta < 100*WHISPER_CHUNK_SIZE/2)) {
+                         WHISPER_LOG_DEBUG("%s: decoder %d: failed due to repetition loop\n", __func__, j);
+                         failed = true;
+                         continue;
+@@ -7713,6 +7750,9 @@
+                         continue;
+                     }
+ 
++                    if (params.ivrit_window) {
++                        decoder.sequence.result_len = decoder.sequence.tokens.size();  // ivrit-app: all of it
++                    }
+                     decoder.sequence.tokens.resize(decoder.sequence.result_len);
+                     whisper_sequence_score(params, decoder.sequence);
+ 
+@@ -7773,6 +7813,9 @@
+             const auto result_len = best_decoder.sequence.result_len;
+ 
+             const auto & tokens_cur = best_decoder.sequence.tokens;
++            if (params.ivrit_window) {
++                state->ivrit_sequence = tokens_cur;
++            }
+ 
+             // [EXPERIMENTAL] Token-level timestamps with DTW
+             const auto n_segments_before = state->result_all.size();
+@@ -7834,7 +7877,7 @@
+ 
+                             //printf("tt0 = %d, tt1 = %d, text = %s, token = %s, token_id = %d, tid = %d\n", tt0, tt1, text.c_str(), ctx->vocab.id_to_token[tokens_cur[i].id].c_str(), tokens_cur[i].id, tokens_cur[i].tid);
+ 
+-                            result_all.push_back({ tt0, tt1, text, state->no_speech_prob, {}, speaker_turn_next });
++                            result_all.push_back({ tt0, tt1, text, state->no_speech_prob, {}, speaker_turn_next, seek });
+                             for (int j = i0; j <= i; j++) {
+                                 result_all.back().tokens.push_back(tokens_cur[j]);
+                             }
+@@ -7882,7 +7925,7 @@
+                         fflush(stdout);
+                     }
+ 
+-                    result_all.push_back({ tt0, tt1, text, state->no_speech_prob, {}, speaker_turn_next });
++                    result_all.push_back({ tt0, tt1, text, state->no_speech_prob, {}, speaker_turn_next, seek });
+                     for (int j = i0; j < (int) tokens_cur.size(); j++) {
+                         result_all.back().tokens.push_back(tokens_cur[j]);
+                     }
+@@ -7907,7 +7950,7 @@
+             // [EXPERIMENTAL] Token-level timestamps with DTW
+             {
+                 const int n_segments = state->result_all.size() - n_segments_before;
+-                if (ctx->params.dtw_token_timestamps && n_segments) {
++                if (ctx->params.dtw_token_timestamps && n_segments && !params.ivrit_window) {
+                     const int n_frames = std::min(std::min(WHISPER_CHUNK_SIZE * 100, seek_delta), seek_end - seek);
+                     whisper_exp_compute_token_level_timestamps_dtw(
+                             ctx, state, params, result_all.size() - n_segments, n_segments, seek, n_frames, 7, params.n_threads);
+@@ -7937,6 +7980,9 @@
+             seek += seek_delta;
+ 
+             WHISPER_LOG_DEBUG("seek = %d, seek_delta = %d\n", seek, seek_delta);
++            if (params.ivrit_window) {
++                break;
++            }
+         }
+     }
+ 
+@@ -8052,6 +8098,7 @@
+             // correct the segment timestamp taking into account the offset
+             result.t0 += chunk_offset_t;
+             result.t1 += chunk_offset_t;
++            result.seek += chunk_offset_t;
+ 
+             // make sure that segments are not overlapping
+             if (!ctx->state->result_all.empty()) {
+@@ -8202,6 +8249,53 @@
+     return whisper_full_get_segment_t0_from_state(ctx->state, i_segment);
+ }
+ 
++int64_t whisper_full_get_segment_seek_from_state(struct whisper_state * state, int i_segment) {
++    return state->result_all[i_segment].seek;
++}
++
++int whisper_full_ivrit_sequence(struct whisper_context * ctx, const whisper_token_data ** tokens) {
++    *tokens = ctx->state->ivrit_sequence.data();
++    return (int) ctx->state->ivrit_sequence.size();
++}
++
++float whisper_full_ivrit_no_speech_prob(struct whisper_context * ctx) {
++    return ctx->state->no_speech_prob;
++}
++
++int whisper_full_ivrit_dtw(struct whisper_context * ctx, const whisper_token * tokens, int n_tokens,
++                           int seek, int n_frames, int64_t * t_dtw, int n_threads) {
++    whisper_state * state = ctx->state;
++    if (!ctx->params.dtw_token_timestamps || n_tokens <= 0 || n_frames <= 0) {
++        return -1;
++    }
++    // The tokens as one segment (and one more, which the DTW's walk may step into).
++    std::vector<whisper_segment> kept;
++    kept.swap(state->result_all);
++    whisper_segment segment{};
++    for (int i = 0; i < n_tokens; ++i) {
++        whisper_token_data d{};
++        d.id = tokens[i];
++        d.t_dtw = -1;
++        segment.tokens.push_back(d);
++    }
++    state->result_all.push_back(segment);
++    whisper_segment pad{};
++    pad.tokens.push_back(whisper_token_data{});
++    state->result_all.push_back(pad);
++    whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
++    params.language = whisper_lang_str(state->lang_id);
++    whisper_exp_compute_token_level_timestamps_dtw(ctx, state, params, 0, 1, seek, n_frames, 7, n_threads);
++    for (int i = 0; i < n_tokens; ++i) {
++        t_dtw[i] = state->result_all[0].tokens[i].t_dtw;
++    }
++    state->result_all.swap(kept);
++    return 0;
++}
++
++int64_t whisper_full_get_segment_seek(struct whisper_context * ctx, int i_segment) {
++    return ctx->state->result_all[i_segment].seek;
++}
++
+ int64_t whisper_full_get_segment_t1(struct whisper_context * ctx, int i_segment) {
+     return whisper_full_get_segment_t1_from_state(ctx->state, i_segment);
+ }
+@@ -9133,7 +9227,18 @@
+         return;
+     }
+     int filter_width = ((median_filter_user_data *) userdata)->filter_width;
+-    WHISPER_ASSERT(filter_width < a->ne[2]);
++    // ivrit-app: a window this short (its last tenth of a second) left as it is, as
++    // OpenAI's median_filter does, not an abort.
++    if (a->ne[2] <= filter_width/2) {
++        for (int64_t i = 0; i < a->ne[0]; ++i) {
++            for (int64_t j = 0; j < a->ne[1]; ++j) {
++                for (int64_t k = 0; k < a->ne[2]; ++k) {
++                    whisper_set_f32_nd(dst, i, j, k, 0, whisper_get_f32_nd(a, i, j, k, 0));
++                }
++            }
++        }
++        return;
++    }
+     WHISPER_ASSERT(filter_width % 2);
+     WHISPER_ASSERT(ggml_n_dims(a) == 3);
+     WHISPER_ASSERT(a->type == GGML_TYPE_F32);
+@@ -9190,12 +9295,15 @@
+     struct ggml_context * gctx = ggml_init(gparams);
+ 
+     // Build token sequence that will be passed to decoder
+-    // sot + [lang] + text result + eot
++    // sot + [lang] + [task] + text result + eot
+     std::vector<whisper_token> tokens = { whisper_token_sot(ctx), };
+     if (whisper_is_multilingual(ctx)) {
+         const int lang_id = whisper_lang_id(params.language);
+         state->lang_id = lang_id;
+         tokens.push_back(whisper_token_lang(ctx, lang_id));
++        // ivrit-app: the task too, as the decoder saw it and as OpenAI's and
++        // faster-whisper's alignment has it (words then time as theirs do).
++        tokens.push_back(params.translate ? whisper_token_translate(ctx) : whisper_token_transcribe(ctx));
+     }
+     const size_t sot_sequence_length = tokens.size();
+     tokens.push_back(whisper_token_not(ctx));

@@ -99,8 +99,12 @@ final class TurboGpu {
         new Level("Vulkan", false, NO_COOPMAT, NO_COOPMAT2, KEEP_ROBUSTNESS, NO_SUBGROUPS,
             "GGML_VK_DISABLE_INTEGER_DOT_PRODUCT", "GGML_VK_DISABLE_F16", "GGML_VK_DISABLE_FUSION"),
     };
-    /** These levels' version: a verdict from an earlier one starts over (Verdict.of). */
-    static final int LADDER = 6;
+    /**
+     * These levels' version: a verdict from an earlier one starts over (Verdict.of).
+     * 7: the check's run includes DTW's pass for word times (shell/native/transcript).
+     * 8: the GPU's run with beam search (Turbo.beams), the CPU's greedy.
+     */
+    static final int LADDER = 8;
 
     /** What was found on this phone: kept between runs, one at a time. */
     static final class Verdict {
@@ -383,6 +387,7 @@ final class TurboGpu {
             float[] sound = sample(context);
             String path = Turbo.file(context, variant).getPath();
             long[] took = new long[1];
+            // Each as it would transcribe: the CPU greedily, the GPU with beam search.
             String cpu = hear(path, -1, true, sound, took, within(progress, 1));
             v.cpuSeconds = took[0] / 1000.0;
             // Shaders take a while to build the first time; past these, the GPU has hung.
@@ -533,12 +538,13 @@ final class TurboGpu {
         if (handle == 0) throw new IllegalStateException("the Turbo model did not load" + (device >= 0 ? " on the GPU" : ""));
         try {
             long started = System.currentTimeMillis();
-            Object[] heard = Whisper.transcribe(handle, sound, Turbo.LANGUAGE, Turbo.threads(), Turbo.BEAMS, progress);
+            Object[] heard = Whisper.transcribe(handle, sound, Turbo.LANGUAGE, Turbo.threads(), Turbo.beams(device >= 0), progress,
+                0, true, new double[3], Whisper.prompt());
             took[0] = System.currentTimeMillis() - started;
             if (heard == null) throw new IllegalStateException("stopped");
             StringBuilder text = new StringBuilder();
-            for (Segments.Word w : TurboWords.words((byte[]) heard[0], (int[]) heard[1], (int[]) heard[2], ((int[]) heard[1]).length, 0)) {
-                text.append(w.text).append(' ');
+            for (TurboTranscript.Segment s : TurboTranscript.piece(heard)) {
+                for (Segments.Word w : s.words) text.append(w.text.trim()).append(' ');
             }
             return text.toString();
         } finally {

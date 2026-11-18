@@ -19,7 +19,8 @@ Target: Android phones from 2023 on, mid-range and up.
 | The native library: whisper.cpp with ggml's CPU and Vulkan backends, and the JNI bridge | `shell/android/app/src/main/cpp/` |
 | Which phones, the download, threads | `Turbo.java` |
 | GPU or CPU: the check, crash guard, the user's choice | `TurboGpu.java` |
-| Tokens into words; sound to 16 kHz | `TurboWords.java`, `Resampler.java` |
+| Words, segments and speakers as the server makes them (ports of faster-whisper, stable-ts and ivrit's diarization); sound to 16 kHz | `shell/native/` (its README), `TurboTranscript.java`, `Speakers.java`, `Resampler.java` |
+| The speaker model, converted from SpeechBrain's when the server starts, served at `/models/turbo/` too | `scripts/speaker_model.py`, `launch.sh` |
 | A recording through it, a few minutes at a time, with checkpoints | `LocalTranscribeWorker.transcribeTurbo` |
 | Settings: model, and where it runs | `web/transcription/settings.js`, `onDeviceModel` in `shell/native-api.json` |
 
@@ -44,9 +45,11 @@ Open to comment; each with what it rests on.
    instructions (a fast matrix path q5_1 lacks), so q8_0 should be faster on
    phones' CPUs as well. Cost: 874 MB to download against 624 MB.
 
-3. **Greedy decoding.** Beam search (5) made 3 fewer mistakes in 544 words
-   (3.68% against 4.23%, q5) and took 29% longer. Speed matters more on a
-   phone. `Turbo.BEAMS` changes it.
+3. **Beam search (5) on the GPU, greedy on the CPU** (`Turbo.beams`), as the
+   server decodes with beam 5. On the Galaxy S25's GPU (OpenCL) beam 5 took
+   0.6 of the recording's length; greedy 0.3-0.5, and on one recording 6% of
+   its words differed from the server's more (decision 15). On the CPU beam 5
+   took three times the recording's length, greedy about 1.1.
 
 4. **Who is offered Turbo:** arm64, CPU with dot products and half floats
    (`asimddp`, `asimdhp`), about 6 GB of memory (5 GiB reported). The
@@ -71,14 +74,14 @@ Open to comment; each with what it rests on.
    them on ivrit-ai's Hugging Face and point `Turbo.ensure` there. Not done:
    publishing under ivrit-ai's name is for you to decide.
 
-8. **Ten-minute pieces.** whisper.cpp hears a piece whole (its 30-second
-   windows carry context within it); each piece's last sentence, which may be
-   cut off, is heard again at the start of the next, and a checkpoint is kept
-   after each, so a stopped run resumes there. On the laptop, 120-second pieces
-   took 29% longer than one pass (4.6% WER against 3.3%: the windows fall
-   differently after a cut, so a few words change anywhere, not only at the
-   cuts); ten minutes keeps that to a few percent. Memory: about 70 MB of sound
-   and spectrogram a piece.
+8. **Ten-minute pieces.** The sound comes in ten-minute pieces, a checkpoint
+   after each, so a stopped run resumes there. The 30-second windows go on
+   across pieces as if there were none (decision 15): a piece stops where less
+   than a window is left, the next starts there, and what carries over (the
+   previous text, the last speech) is in the checkpoint. What still differs is
+   the spectrogram's level, scaled to each piece's loudest moment as Whisper
+   scales it to the whole file's. Memory: about 70 MB of sound and spectrogram a
+   piece.
 
 9. **Two GPU backends: WebGPU first, then Vulkan.** Both in the same library,
    with the same model file. WebGPU is ggml's WebGPU backend on Google's Dawn
@@ -187,6 +190,56 @@ Open to comment; each with what it rests on.
     same one); extensions that compiler lacks are left out by ggml's own tests.
     `-PturboVulkan=OFF` builds the CPU-only library, should the Vulkan build
     fail.
+15. **Transcripts as the server's, speakers and all.** The server's are the ivrit
+    package's: faster-whisper's words, stable-ts's silence snapping and
+    regrouping, ivrit's diarization (SpeechBrain's ECAPA voice prints, clustered).
+    Turbo's on the phone are now made the same way, by ports of exactly those
+    steps (`shell/native`, each tested against the Python it ports; its README
+    has the numbers), not by the app's own sentence rules (`Segments`, still the
+    zipformer's). In C, not Java, so the iPhone's app can use them, and outside
+    whisper.cpp, which they only call: whisper.cpp keeps a pinned release and
+    one more patch (DTW word times with flash attention, and each segment's
+    window start), not a fork.
+    - **Word times from DTW**, whisper.cpp's version of the cross-attention
+      alignment faster-whisper uses, with large-v3-turbo's alignment heads (ivrit's
+      Turbo keeps them: its config.json). The DTW pass is one more decoder pass a
+      window; with flash attention on, its alignment heads' weights are computed
+      beside the flash attention, in that pass only.
+    - **ECAPA runs on ggml**, already in the library, not ONNX Runtime: sherpa-onnx
+      links ONNX Runtime statically and exports none of it, and making an ONNX
+      file needs PyTorch, which the server has not. `scripts/speaker_model.py`
+      reads SpeechBrain's checkpoint with numpy and writes it with q8_0 matrices
+      (23 MB; its prints at cosine 0.9998 to SpeechBrain's).
+    - **A voice print a segment, after each piece**, while its sound is in memory;
+      the prints go into the checkpoint, and the speakers are found once, at the
+      end, as ivrit does over the whole file. No speaker model (the site still
+      making it, a failed download): the transcript comes without speakers.
+    - The server keeps speakers in on-device transcripts (`checked_local_results`),
+      ivrit's labels only (`SPEAKER_00`, …).
+    - The GPU check's ladder is 7: its run includes the DTW pass now.
+    - **faster-whisper's decoding loop, over whisper.cpp's model a window at a
+      time** (`shell/native/transcript`; patches/whisper-dtw-flash.patch's
+      `ivrit_window`). With whisper.cpp's own loop, transcripts drifted from the
+      server's after the first window (93-96% of words the same, whatever the
+      model's precision: f32 no better than q8_0), because whisper.cpp moves to
+      the next window at the last timestamp token and faster-whisper, with word
+      times on, at the last word's end; and retries on token entropy where
+      faster-whisper retries on the compression ratio, drops the prompt near the
+      end and at high temperatures, ranks beams on the text before the last
+      timestamp, and aligns over a different span. Now the window's start, the
+      prompt, the fallback, the no-speech skip, the segments and the alignment
+      are faster-whisper's; whisper.cpp decodes (its beam search) and aligns. On
+      the Galaxy S25 (q8_0, beam 5): 97.6-98.1% of the words the same as the
+      production server's (RunPod, fp16), 97-98% of their starts within 20 ms;
+      at the same speed. faster-whisper itself at int8 gets 94-99% against it.
+
+16. **Below whatever the phone is doing.** On the Galaxy S25 a transcription at
+    normal priority, all eight cores and the GPU, made the phone sluggish. The
+    transcribing thread (and ggml's, which take its priority) runs at nice 9,
+    just short of background priority, from which Android may keep threads to
+    the slow cores; and on Adreno the OpenCL context asks for low priority
+    (`cl_qcom_priority_hint`, patches/ggml-opencl-priority.patch), so the
+    phone's own drawing goes first. Idle, the phone still gives it all it has.
 
 ## Verified, and not yet
 
