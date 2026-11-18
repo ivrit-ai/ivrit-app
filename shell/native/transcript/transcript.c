@@ -3,11 +3,14 @@
 // faster_transcribe), each window decoded by whisper.cpp; the words through
 // whisperwords, the kept segments through stablets.
 
+#define _POSIX_C_SOURCE 200809L
+
 #include "transcript.h"
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <zlib.h>
 
 #include "whisperwords.h"
@@ -298,7 +301,9 @@ int tr_piece_make(struct whisper_context *ctx, struct whisper_full_params params
         int next_seek;
         bool single_ending;
         size_t count = split(d.tokens, d.n, beg, seek, frames, spans, &next_seek, &single_ending);
-        rc = window_words(ctx, params.n_threads, d.tokens, spans, count, seek, frames, &speech, results);
+        // The DTW is a decoder pass: the decoder's threads.
+        const int dtw_threads = params.ivrit_decode_threads > 0 ? params.ivrit_decode_threads : params.n_threads;
+        rc = window_words(ctx, dtw_threads, d.tokens, spans, count, seek, frames, &speech, results);
         if (rc == 0) {
             // With word times, the next window starts at the last word's end.
             if (!single_ending && speech > seek / 100.0) next_seek = (int) llround(speech * 100);
@@ -327,7 +332,13 @@ int tr_piece_make(struct whisper_context *ctx, struct whisper_full_params params
     st_finish(r, work.after);
     double *starts, *ends;
     size_t silences;
-    if (!st_silence(pcm, n, ST_Q_LEVELS, ST_K_SIZE, offset, &starts, &ends, &silences)) {
+    const long long at = llround((offset - work.origin) * WHISPER_SAMPLE_RATE);
+    const size_t first = at > 0 ? (size_t) at : 0;
+    bool found = work.total > first
+        ? st_silence_in(pcm, first + n <= work.total ? n : work.total - first, first, work.total, work.level,
+                        ST_Q_LEVELS, ST_K_SIZE, work.origin, &starts, &ends, &silences)
+        : st_silence(pcm, n, ST_Q_LEVELS, ST_K_SIZE, offset, &starts, &ends, &silences);
+    if (!found) {
         st_free(r);
         return TR_NO_MEMORY;
     }
@@ -347,4 +358,50 @@ int tr_piece_make(struct whisper_context *ctx, struct whisper_full_params params
     *state = work;
     out->result = r;
     return 0;
+}
+
+static double now_ms(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1e3 + t.tv_nsec / 1e6;
+}
+
+int tr_tune_decoder(struct whisper_context *ctx, const float *pcm, size_t n, int max_threads) {
+    static const int CANDIDATES[] = {2, 3, 4, 5, 6, 8};
+    if (max_threads < 1 || whisper_pcm_to_mel(ctx, pcm, (int) (n < WINDOW * HOP ? n : WINDOW * HOP), max_threads) != 0
+        || whisper_encode(ctx, 0, max_threads) != 0) {
+        return 0;
+    }
+    const whisper_token prompt[] = {whisper_token_sot(ctx), whisper_token_lang(ctx, whisper_lang_id("he")),
+                                    whisper_token_transcribe(ctx), whisper_token_beg(ctx)};
+    whisper_token step[5];
+    for (int i = 0; i < 5; i++) step[i] = whisper_token_beg(ctx) + 1 + i;
+    int best = 0;
+    double best_ms = 0;
+    for (size_t c = 0; c < sizeof CANDIDATES / sizeof CANDIDATES[0]; c++) {
+        const int threads = CANDIDATES[c];
+        if (threads > max_threads) break;
+        if (whisper_decode(ctx, prompt, 4, 0, threads) != 0) return 0;
+        // Two steps to settle, then the median of twelve.
+        double times[12];
+        int past = 4;
+        for (int k = 0; k < 14; k++, past += 5) {
+            double t0 = now_ms();
+            if (whisper_decode(ctx, step, 5, past, threads) != 0) return 0;
+            if (k >= 2) times[k - 2] = now_ms() - t0;
+        }
+        for (int i = 1; i < 12; i++) {
+            for (int j = i; j > 0 && times[j - 1] > times[j]; j--) {
+                double t = times[j];
+                times[j] = times[j - 1];
+                times[j - 1] = t;
+            }
+        }
+        double ms = (times[5] + times[6]) / 2;
+        if (best == 0 || ms < best_ms) {
+            best = threads;
+            best_ms = ms;
+        }
+    }
+    return best;
 }

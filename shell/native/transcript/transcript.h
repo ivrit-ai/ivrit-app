@@ -35,6 +35,12 @@ void tr_context_params(struct whisper_context_params *params);
 typedef struct {
     double last_speech;  // the end of the speech so far, seconds into the file
     double after;        // where the transcript so far ends (stable-ts keeps times after it)
+    // The whole file's sample count and loudness level (st_level_end), so that
+    // silence is found as stable-ts finds it over the whole file (0: each piece's
+    // own), and where in the file its first sample is (seconds).
+    size_t total;
+    float level;
+    double origin;
     int n_prompt;
     whisper_token prompt[TR_PROMPT];
 } tr_state;
@@ -54,6 +60,14 @@ typedef struct {
 // may also throw: the caller catches it). The state is updated only on success.
 int tr_piece_make(struct whisper_context *ctx, struct whisper_full_params params, const float *pcm, size_t n,
                   double offset, bool last, tr_state *state, tr_piece *out);
+
+// The decoder's fastest thread count on this device, at most max_threads: the
+// first window of pcm (16 kHz) encoded, then a beam search's steps (five tokens at
+// a time) timed on 2, 3, 4, 5, 6 and 8 threads. Its small steps run fastest on
+// fewer threads than the encoder's, by how many depends on the device (on a
+// Galaxy S25: 4-6 of 8, eight being three times slower). A second or two; 0 when
+// it could not tell.
+int tr_tune_decoder(struct whisper_context *ctx, const float *pcm, size_t n, int max_threads);
 
 #ifdef __cplusplus
 }

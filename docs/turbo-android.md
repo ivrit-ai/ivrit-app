@@ -78,9 +78,12 @@ Open to comment; each with what it rests on.
    after each, so a stopped run resumes there. The 30-second windows go on
    across pieces as if there were none (decision 15): a piece stops where less
    than a window is left, the next starts there, and what carries over (the
-   previous text, the last speech) is in the checkpoint. What still differs is
-   the spectrogram's level, scaled to each piece's loudest moment as Whisper
-   scales it to the whole file's. Memory: about 70 MB of sound and spectrogram a
+   previous text, the last speech) is in the checkpoint. stable-ts finds silence
+   against the whole file's loudness and length, so the file is decoded once
+   first for those (a minute's work for an hour, shown as preparing); they go
+   into the checkpoint too. What still differs is the spectrogram's floor, set
+   from each piece's loudest moment as Whisper sets it from the whole file's: a
+   comma here and there. Memory: about 70 MB of sound and spectrogram a
    piece.
 
 9. **Two GPU backends: WebGPU first, then Vulkan.** Both in the same library,
@@ -210,7 +213,10 @@ Open to comment; each with what it rests on.
       file needs PyTorch, which the server has not. `scripts/speaker_model.py`
       reads SpeechBrain's checkpoint with numpy and writes it with q8_0 matrices
       (23 MB; its prints at cosine 0.9998 to SpeechBrain's).
-    - **A voice print a segment, after each piece**, while its sound is in memory;
+    - **A voice print a segment, after each piece**, while its sound is in memory,
+      all of a piece's at once, each core taking whole segments (the model is a
+      chain of small steps that threads only wait on; on the S25 3.2 s for 213 s
+      of speech, 107 s before);
       the prints go into the checkpoint, and the speakers are found once, at the
       end, as ivrit does over the whole file. No speaker model (the site still
       making it, a failed download): the transcript comes without speakers.
@@ -240,6 +246,18 @@ Open to comment; each with what it rests on.
     the slow cores; and on Adreno the OpenCL context asks for low priority
     (`cl_qcom_priority_hint`, patches/ggml-opencl-priority.patch), so the
     phone's own drawing goes first. Idle, the phone still gives it all it has.
+
+17. **The encoder on the GPU, the decoder on the CPU, its threads tuned per
+    phone.** On the Galaxy S25's GPU (OpenCL) a beam-5 decoder step took 65 ms,
+    on its CPU 17-22 ms with 4-6 threads (and 55 ms with all 8: its steps are
+    too small to share eight ways); the encoder was four times faster on the
+    GPU. With the decoder's weights and caches on the CPU
+    (patches/whisper-dtw-flash.patch's `ivrit_decoder_cpu`) a 4.4-minute
+    recording took 93 s instead of 172 s, the same words. Phones differ, so the
+    GPU check times its run both ways and keeps the faster (`decoderCpu`, ladder
+    9), and the decoder's thread count is timed on each phone
+    (`tr_tune_decoder`, a second, once per system build, kept with the verdict);
+    the encoder keeps `Turbo.threads()`.
 
 ## Verified, and not yet
 

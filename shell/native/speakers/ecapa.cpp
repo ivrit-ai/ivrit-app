@@ -1,9 +1,12 @@
 // SpeechBrain's ECAPA_TDNN (lobes/models/ECAPA_TDNN.py) on ggml, with the weights
 // scripts/speaker_model.py writes, for one segment's features at a time. Tensors
-// are [channels, frames] (channels fastest). A convolution is a matrix product per
-// tap, over the frames padded by reflection (SpeechBrain's Conv1d pads "same" that
-// way); batch norm is the scale and shift it folds into.
+// are [channels, frames] (channels fastest). A convolution is one matrix product
+// over each frame's taps side by side (gathered with reflection at the edges, as
+// SpeechBrain's Conv1d pads "same"), its weights' taps put side by side on loading;
+// batch norm is the scale and shift it folds into.
 
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -11,6 +14,7 @@
 #include <cstring>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ggml-alloc.h"
@@ -25,7 +29,9 @@ struct sp_model {
     ggml_backend_buffer_t buffer = nullptr;
     ggml_gallocr_t alloc = nullptr;
     std::map<std::string, ggml_tensor *> tensors;
+    std::map<std::string, int64_t> taps;  // a convolution's, its weights [in * taps, out]
     int threads = 1;
+    bool gpu = false;
 };
 
 static const int CHANNELS = 1024, SCALE = 8, MFA = 3072, ATTENTION = 128;
@@ -40,7 +46,27 @@ void sp_free(sp_model *m) {
     delete m;
 }
 
+static sp_model *load(const char *path, int threads, int gpu);
+
 sp_model *sp_load(const char *path, int threads) {
+    return load(path, threads, -1);
+}
+
+sp_model *sp_load_gpu(const char *path, int gpu) {
+    return gpu >= 0 ? load(path, 1, gpu) : nullptr;
+}
+
+static ggml_backend_t gpu_backend(int index) {
+    for (size_t i = 0, k = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+        if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) continue;
+        if ((int) k++ == index) return ggml_backend_dev_init(dev, nullptr);
+    }
+    return nullptr;
+}
+
+static sp_model *load(const char *path, int threads, int gpu) {
     FILE *f = fopen(path, "rb");
     if (!f) return nullptr;
     struct entry {
@@ -84,28 +110,45 @@ sp_model *sp_load(const char *path, int threads) {
     }
     sp_model *m = new sp_model();
     m->threads = threads > 0 ? threads : 1;
+    m->gpu = gpu >= 0;
     ggml_init_params params = {ggml_tensor_overhead() * (entries.size() + 1), nullptr, true};
     m->weights = ggml_init(params);
-    m->backend = ggml_backend_cpu_init();
+    m->backend = m->gpu ? gpu_backend(gpu) : ggml_backend_cpu_init();
     if (!m->weights || !m->backend) {
         fclose(f);
         sp_free(m);
         return nullptr;
     }
-    ggml_backend_cpu_set_n_threads(m->backend, m->threads);
+    if (!m->gpu) ggml_backend_cpu_set_n_threads(m->backend, m->threads);
     for (const entry &e : entries) {
-        ggml_tensor *t = ggml_new_tensor(m->weights, (ggml_type) e.type, (int) e.ne.size(), e.ne.data());
+        // A convolution's [in, out, taps] as [in * taps, out]: its taps side by side.
+        bool taps = e.ne.size() == 3 && e.ne[2] > 1;
+        int64_t ne[2] = {taps ? e.ne[0] * e.ne[2] : 0, taps ? e.ne[1] : 0};
+        ggml_tensor *t = taps ? ggml_new_tensor(m->weights, (ggml_type) e.type, 2, ne)
+                              : ggml_new_tensor(m->weights, (ggml_type) e.type, (int) e.ne.size(), e.ne.data());
         ggml_set_name(t, e.name.c_str());
         m->tensors[e.name] = t;
+        m->taps[e.name] = taps ? e.ne[2] : 1;
     }
     m->buffer = ggml_backend_alloc_ctx_tensors(m->weights, m->backend);
-    std::vector<char> data;
+    std::vector<char> data, side;
     for (const entry &e : entries) {
         data.resize(e.bytes);
         if (!m->buffer || fseek(f, e.at, SEEK_SET) != 0 || fread(data.data(), 1, e.bytes, f) != e.bytes) {
             fclose(f);
             sp_free(m);
             return nullptr;
+        }
+        int64_t taps = m->taps[e.name];
+        if (taps > 1) {
+            // Row (out o, tap k) of the file's to column k of the weights' row o.
+            const int64_t out = e.ne[1];
+            const size_t row = ggml_row_size((ggml_type) e.type, e.ne[0]);
+            side.resize(e.bytes);
+            for (int64_t o = 0; o < out; o++) {
+                for (int64_t k = 0; k < taps; k++) memcpy(&side[(o * taps + k) * row], &data[(k * out + o) * row], row);
+            }
+            data.swap(side);
         }
         ggml_backend_tensor_set(m->tensors[e.name], data.data(), 0, e.bytes);
     }
@@ -121,7 +164,7 @@ struct builder {
     sp_model *m;
     ggml_context *ctx;
     int frames;
-    std::map<int, ggml_tensor *> reflect;  // pad -> indices, set once allocated
+    std::map<std::pair<int, int>, ggml_tensor *> taps;  // (dilation, taps) -> frame indices, set once allocated
 
     ggml_tensor *w(const std::string &name) {
         auto it = m->tensors.find(name);
@@ -134,27 +177,18 @@ struct builder {
 
     // Conv1d, stride 1, dilation d, "same" with reflection: [in, T] -> [out, T].
     ggml_tensor *conv(ggml_tensor *x, const std::string &name, int dilation) {
-        ggml_tensor *weight = w(name + ".w");  // [in, out, taps]
-        const int64_t in = weight->ne[0], out = weight->ne[1], taps = weight->ne[2];
-        ggml_tensor *y = nullptr;
-        if (taps == 1) {
-            y = ggml_mul_mat(ctx, ggml_view_2d(ctx, weight, in, out, weight->nb[1], 0), x);
-        } else {
-            const int pad = dilation * (int) (taps - 1) / 2;
-            ggml_tensor *&idx = reflect[pad];
+        ggml_tensor *weight = w(name + ".w");  // [in * taps, out]
+        const int64_t n = m->taps[name + ".w"];
+        if (n > 1) {
+            // Each frame's taps side by side: [in, T * taps] gathered, read as [in * taps, T].
+            ggml_tensor *&idx = taps[{dilation, (int) n}];
             if (!idx) {
-                idx = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, frames + 2 * pad);
+                idx = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, frames * n);
                 ggml_set_input(idx);
             }
-            ggml_tensor *padded = ggml_get_rows(ctx, x, idx);  // [in, T + 2 pad]
-            for (int64_t k = 0; k < taps; k++) {
-                ggml_tensor *tap = ggml_view_2d(ctx, weight, in, out, weight->nb[1], k * weight->nb[2]);
-                ggml_tensor *shifted = ggml_view_2d(ctx, padded, in, frames, padded->nb[1], k * dilation * padded->nb[1]);
-                ggml_tensor *part = ggml_mul_mat(ctx, tap, shifted);
-                y = y ? ggml_add(ctx, y, part) : part;
-            }
+            x = ggml_reshape_2d(ctx, ggml_get_rows(ctx, x, idx), x->ne[0] * n, frames);
         }
-        return ggml_add(ctx, y, w(name + ".b"));
+        return ggml_add(ctx, ggml_mul_mat(ctx, weight, x), w(name + ".b"));
     }
 
     ggml_tensor *norm(ggml_tensor *x, const std::string &name) {
@@ -233,7 +267,9 @@ struct builder {
 
 }  // namespace
 
-bool sp_embed(sp_model *m, const float *pcm, size_t n, float out[SP_DIM]) {
+// A voice print on a given CPU backend and allocator (each worker its own).
+static bool embed_with(sp_model *m, ggml_backend_t backend, ggml_gallocr_t alloc, const float *pcm, size_t n,
+                       float out[SP_DIM]) {
     size_t frames = 0;
     float *feats = sp_features(pcm, n, &frames);
     if (!feats) return false;
@@ -256,25 +292,72 @@ bool sp_embed(sp_model *m, const float *pcm, size_t n, float out[SP_DIM]) {
     ggml_set_output(embedding);
     ggml_cgraph *graph = ggml_new_graph_custom(ctx, nodes, false);
     ggml_build_forward_expand(graph, embedding);
-    bool ok = ggml_gallocr_alloc_graph(m->alloc, graph);
+    bool ok = ggml_gallocr_alloc_graph(alloc, graph);
     if (ok) {
         ggml_backend_tensor_set(input, feats, 0, frames * 80 * sizeof(float));
-        for (auto &[pad, idx] : b.reflect) {
-            std::vector<int32_t> v(frames + 2 * pad);
-            for (size_t j = 0; j < v.size(); j++) {
-                long t = (long) j - pad;
-                if (t < 0) t = -t;
-                if (t >= (long) frames) t = 2 * ((long) frames - 1) - t;
-                v[j] = (int32_t) t;
+        for (auto &[key, idx] : b.taps) {
+            const int dilation = key.first, n_taps = key.second, pad = dilation * (n_taps - 1) / 2;
+            std::vector<int32_t> v((size_t) frames * n_taps);
+            for (size_t t = 0; t < frames; t++) {
+                for (int k = 0; k < n_taps; k++) {
+                    long j = (long) t - pad + (long) k * dilation;
+                    if (j < 0) j = -j;
+                    if (j >= (long) frames) j = 2 * ((long) frames - 1) - j;
+                    v[t * n_taps + k] = (int32_t) j;
+                }
             }
             ggml_backend_tensor_set(idx, v.data(), 0, v.size() * sizeof(int32_t));
         }
-        ok = ggml_backend_graph_compute(m->backend, graph) == GGML_STATUS_SUCCESS;
+        ok = ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS;
         if (ok) ggml_backend_tensor_get(embedding, out, 0, SP_DIM * sizeof(float));
     }
     ggml_free(ctx);
     free(feats);
     return ok;
+}
+
+bool sp_embed(sp_model *m, const float *pcm, size_t n, float out[SP_DIM]) {
+    return embed_with(m, m->backend, m->alloc, pcm, n, out);
+}
+
+void sp_embed_many(sp_model *m, const float *const *pcm, const size_t *n, size_t count, float *out, bool *ok) {
+    // The model is a chain of small steps, which threads mostly wait on: each
+    // worker takes whole segments on one core instead (the same prints).
+    if (m->gpu) {
+        // The GPU takes them one after another.
+        for (size_t i = 0; i < count; i++) ok[i] = embed_with(m, m->backend, m->alloc, pcm[i], n[i], out + i * SP_DIM);
+        return;
+    }
+    // Longest first: each worker's memory sized once, by its first, and no long one
+    // left for last.
+    size_t workers = (size_t) m->threads < count ? (size_t) m->threads : count;
+    std::vector<size_t> order(count);
+    for (size_t i = 0; i < count; i++) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return n[a] > n[b]; });
+    std::atomic<size_t> next{0};
+    auto work = [&](ggml_backend_t backend, ggml_gallocr_t alloc) {
+        for (size_t k; (k = next++) < count;) {
+            size_t i = order[k];
+            ok[i] = backend && alloc && embed_with(m, backend, alloc, pcm[i], n[i], out + i * SP_DIM);
+        }
+    };
+    std::vector<std::thread> threads;
+    std::vector<ggml_backend_t> backends;
+    std::vector<ggml_gallocr_t> allocs;
+    for (size_t w = 0; w < workers; w++) {
+        ggml_backend_t backend = ggml_backend_cpu_init();
+        if (backend) ggml_backend_cpu_set_n_threads(backend, 1);
+        ggml_gallocr_t alloc = backend ? ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend)) : nullptr;
+        backends.push_back(backend);
+        allocs.push_back(alloc);
+    }
+    for (size_t w = 1; w < workers; w++) threads.emplace_back(work, backends[w], allocs[w]);
+    if (workers > 0) work(backends[0], allocs[0]);
+    for (std::thread &t : threads) t.join();
+    for (size_t w = 0; w < workers; w++) {
+        if (allocs[w]) ggml_gallocr_free(allocs[w]);
+        if (backends[w]) ggml_backend_free(backends[w]);
+    }
 }
 
 bool sp_segment_sound(double start, double end, double offset, size_t n, size_t *from, size_t *to) {

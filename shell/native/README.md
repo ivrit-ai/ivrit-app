@@ -56,15 +56,23 @@ end within 20 ms of the server's; 95-96% of segment ends within 0.1 s. For
 scale, faster-whisper itself on the laptop: float32 99.2-99.6%, int8 94.4-99.4%.
 With whisper.cpp's own decoding loop it was 93.9-95.6%, at any precision (f32 no
 better than q8_0): the loop, not the arithmetic, made most of the difference.
-Speakers: the same as the server's for 96-98% of its speech (the rest falling
-between the device's segments).
+Speakers: the same as the server's for 97.5-98.6% of its speech (the rest falling
+between the device's segments). On the Galaxy S25 the voice prints of a 4.4-minute
+recording (213 s of speech) take 3.2 s: a piece's segments at once, each of the
+eight cores taking whole segments (`sp_embed_many`), the features with an FFT; one
+segment at a time over all the cores took 107 s.
 
 ## Where it knowingly differs
 
 - A long recording goes through whisper.cpp ten minutes at a time, its windows
   falling as they would in one pass (the prompt and the speech so far carried
-  over). stable-ts scales silence by the loudest thousandth of the whole file;
-  here, of each piece.
+  over). stable-ts finds silence against the whole file's loudest thousandth and
+  on a grid over its whole length: the app reads the file once first for both
+  (`st_level`, `st_silence_in`), so each piece's silences are the whole file's.
+  On a 14-minute recording, against one pass: 98.9% of words the same, 97.6% of
+  starts within 20 ms (85.5% without the first read). What is left: Whisper's
+  spectrogram floor, 80 dB under the loudest moment of the piece rather than the
+  file, which turns a comma here and there.
 - scikit-learn computes in float32 where this computes in double; when two methods
   find the same speakers, which one's numbering wins comes down to float32 noise
   there, so speakers may be numbered differently (SPEAKER_00 for SPEAKER_02).

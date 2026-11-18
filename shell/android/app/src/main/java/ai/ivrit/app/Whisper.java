@@ -34,8 +34,20 @@ final class Whisper {
     /** Starts GPU device `index` (of gpus()) and lets it go: its description; throws when ggml failed. */
     static native String probe(int index);
 
-    /** A model file loaded on GPU device `device` (of gpus(); -1: the CPU), with flash attention or not; 0 when it would not load. */
-    static native long load(String path, int device, boolean flash);
+    /**
+     * A model file loaded on GPU device `device` (of gpus(); -1: the CPU), with flash
+     * attention or not, and on a GPU with the decoder on the CPU all the same or not
+     * (decoderCpu: a phone's GPU encodes faster, its CPU may take the decoder's small
+     * steps faster); 0 when it would not load.
+     */
+    static native long load(String path, int device, boolean flash, boolean decoderCpu);
+
+    /**
+     * The decoder's fastest thread count on this phone, at most `threads`, timed on
+     * the first window of `n` samples of 16 kHz sound; 0 when it could not tell.
+     * Throws when whisper.cpp failed.
+     */
+    static native int tuneDecoder(long handle, float[] pcm, int n, int threads);
 
     /** stderr and whisper.cpp's whole log into this file from now on (TurboGpu reads it after a crash). */
     static native void logTo(String path);
@@ -54,12 +66,26 @@ final class Whisper {
      * {byte[] text, int[] ends, double[] times, int[] segments} (turbo.c says how
      * they are laid out; TurboTranscript reads them), or null once stopped. state:
      * {the speech's end so far, the transcript's end so far, where the next piece
-     * starts}: the first two read, all three written. prompt: {how many, then the
+     * starts, the file's sample count and level (levelEnd; 0 when not known), where
+     * its sound starts}: the first three written, all but the third read. prompt: {how many, then the
      * tokens} of the previous text it goes on from (PROMPT at most, as faster-whisper
      * prompts), PROMPT + 1 long, read and written.
+     * decodeThreads: the decoder's threads (tuneDecoder; 0: threads).
      */
-    static native Object[] transcribe(long handle, float[] pcm, String language, int threads, int beams, Listener listener,
-                                      double offset, boolean last, double[] state, int[] prompt);
+    static native Object[] transcribe(long handle, float[] pcm, String language, int threads, int decodeThreads, int beams,
+                                      Listener listener, double offset, boolean last, double[] state, int[] prompt);
+
+    /**
+     * The whole file's loudness, for silence found as over the whole file: levelNew
+     * (about how many samples it has), its 16 kHz sound in order through levelAdd,
+     * then levelEnd: {the sample count, the level}, or null where it cannot be told
+     * (it frees the handle either way).
+     */
+    static native long levelNew(long expected);
+
+    static native void levelAdd(long handle, float[] pcm, int n);
+
+    static native double[] levelEnd(long handle);
 
     /** transcript.h's TR_PROMPT. */
     static final int PROMPT = 223;

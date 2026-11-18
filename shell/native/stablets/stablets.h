@@ -47,6 +47,24 @@ const st_word *st_segment(const st_result *r, size_t i, size_t *n);
 bool st_silence(const float *pcm, size_t n, int q_levels, int k_size, double offset,
                 double **starts, double **ends, size_t *count);
 
+// The same for a piece of a longer file, as stable-ts has it over the whole file:
+// pcm is the file's samples [first, first + n) of `total`, and `level` the file's
+// (st_level_end). Times are the file's, plus `offset`. Near the piece's edges (a
+// few hundredths of a second) the averaging sees only the piece.
+bool st_silence_in(const float *pcm, size_t n, size_t first, size_t total, float level, int q_levels, int k_size,
+                   double offset, double **starts, double **ends, size_t *count);
+
+// A file's loudness level for st_silence_in (its loudest thousandth: the
+// k-th largest |sample|, k = a thousandth of them), its sound added piece by
+// piece. `expected`: about how many samples the file has (its duration); the
+// level is exact for up to 1.5 times that.
+typedef struct st_level st_level;
+st_level *st_level_new(size_t expected);
+bool st_level_add(st_level *l, const float *pcm, size_t n);  // false when out of memory
+// The file's sample count and level; false when it cannot be told exactly (the
+// file far longer than expected, or under a thousand samples). Frees l.
+bool st_level_end(st_level *l, size_t *total, float *level);
+
 // WhisperResult.suppress_silence, word level (as adjust_by_silence calls it).
 void st_suppress_silence(st_result *r, const double *starts, const double *ends, size_t count,
                          double min_word_dur, double nonspeech_error, bool use_word_position);

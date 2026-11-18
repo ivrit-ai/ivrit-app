@@ -173,49 +173,87 @@ static bool loudness_threshold(const float *a, size_t n, float *out) {
     return true;
 }
 
-// audio2loudness: |x| scaled by its loudest thousandth, linearly resampled to one
-// value per 320 samples (+1). NULL with *size 0 when that is two values or fewer.
+// F.interpolate(mode='linear', align_corners=False) from `total` samples to
+// `count`, as torch computes it: output i from samples *i0 and *i1, weighted.
+static void source(size_t i, size_t total, size_t count, size_t *i0, size_t *i1, float *l0, float *l1) {
+    float scale = (float) total / (float) count;
+    float src = scale * ((float) i + 0.5f) - 0.5f;
+    if (src < 0) src = 0;
+    *i0 = (size_t) src;
+    if (*i0 > total - 1) *i0 = total - 1;
+    *l1 = src - (float) *i0;
+    if (*l1 < 0) *l1 = 0;
+    if (*l1 > 1) *l1 = 1;
+    *l0 = 1.0f - *l1;
+    *i1 = *i0 + (*i0 < total - 1 ? 1 : 0);
+}
+
+// audio2loudness: |x| scaled by the file's loudest thousandth (`threshold`),
+// linearly resampled to one value per 320 samples (+1), for the file's samples
+// [first, first + n) of `total` in pcm: the values whose samples are all there,
+// *lo the first's index. NULL with *size 0 when the file has two values or fewer.
+static float *loudness_in(const float *pcm, size_t n, size_t first, size_t total, float threshold, size_t *lo,
+                          size_t *size, bool *oom) {
+    *size = 0;
+    *lo = 0;
+    *oom = false;
+    double tokens = nearbyint((double) total / SAMPLES_PER_TOKEN) + 1;
+    if (tokens <= 2 || n == 0) return NULL;
+    size_t count = (size_t) tokens;
+    size_t i0, i1;
+    float l0, l1;
+    // The values whose two samples are in the piece.
+    float scale = (float) total / (float) count;
+    size_t a = (size_t) ((double) first / scale);
+    a = a > 2 ? a - 2 : 0;
+    for (source(a, total, count, &i0, &i1, &l0, &l1); a < count && i0 < first;) {
+        a++;
+        if (a < count) source(a, total, count, &i0, &i1, &l0, &l1);
+    }
+    size_t b = a;
+    while (b < count) {
+        source(b, total, count, &i0, &i1, &l0, &l1);
+        if (i1 >= first + n) break;
+        b++;
+    }
+    if (b <= a) return NULL;
+    float *out = calloc(b - a, sizeof *out);
+    if (!out) {
+        *oom = true;
+        return NULL;
+    }
+    *lo = a;
+    *size = b - a;
+    if (threshold < 1e-5f) return out;
+    float scaled = threshold * 1.75f;
+    float divisor = 1.0f < scaled ? 1.0f : scaled;
+    for (size_t i = a; i < b; i++) {
+        source(i, total, count, &i0, &i1, &l0, &l1);
+        out[i - a] = l0 * (fabsf(pcm[i0 - first]) / divisor) + l1 * (fabsf(pcm[i1 - first]) / divisor);
+    }
+    return out;
+}
+
+// audio2loudness over the whole of pcm.
 static float *audio2loudness(const float *pcm, size_t n, size_t *size, bool *oom) {
     *size = 0;
     *oom = false;
-    double tokens = nearbyint((double) n / SAMPLES_PER_TOKEN) + 1;
-    if (tokens <= 2) return NULL;
-    size_t count = (size_t) tokens;
+    if (nearbyint((double) n / SAMPLES_PER_TOKEN) + 1 <= 2) return NULL;
     float *a = malloc((n ? n : 1) * sizeof *a);
-    float *out = calloc(count, sizeof *out);
     float threshold;
-    if (!a || !out) goto oom;
+    if (!a) {
+        *oom = true;
+        return NULL;
+    }
     for (size_t i = 0; i < n; i++) a[i] = fabsf(pcm[i]);
-    if (!loudness_threshold(a, n, &threshold)) goto oom;
-    *size = count;
-    if (threshold < 1e-5f) {
-        free(a);
-        return out;
-    }
-    float scaled = threshold * 1.75f;
-    float divisor = 1.0f < scaled ? 1.0f : scaled;
-    for (size_t i = 0; i < n; i++) a[i] = a[i] / divisor;
-    // F.interpolate(mode='linear', align_corners=False), as torch computes it.
-    float scale = (float) n / (float) count;
-    for (size_t i = 0; i < count; i++) {
-        float src = scale * ((float) i + 0.5f) - 0.5f;
-        if (src < 0) src = 0;
-        size_t i0 = (size_t) src;
-        if (i0 > n - 1) i0 = n - 1;
-        float l1 = src - (float) i0;
-        if (l1 < 0) l1 = 0;
-        if (l1 > 1) l1 = 1;
-        float l0 = 1.0f - l1;
-        size_t i1 = i0 + (i0 < n - 1 ? 1 : 0);
-        out[i] = l0 * a[i0] + l1 * a[i1];
-    }
+    bool ok = loudness_threshold(a, n, &threshold);
     free(a);
-    return out;
-oom:
-    free(a);
-    free(out);
-    *oom = true;
-    return NULL;
+    if (!ok) {
+        *oom = true;
+        return NULL;
+    }
+    size_t lo;
+    return loudness_in(pcm, n, 0, n, threshold, &lo, size, oom);
 }
 
 // mask2timing: each run of true values, start and end, in seconds (/50 as numpy does).
@@ -228,14 +266,10 @@ static size_t runs(const bool *mask, size_t size, size_t *from, size_t *to) {
     return count;
 }
 
-bool st_silence(const float *pcm, size_t n, int q_levels, int k_size, double offset,
-                double **starts, double **ends, size_t *count) {
-    *starts = *ends = NULL;
-    *count = 0;
-    size_t size;
-    bool oom;
-    float *loud = audio2loudness(pcm, n, &size, &oom);
-    if (!loud) return !oom;
+// wav2mask and mask2timing over loudness values, the first value number `lo`
+// (times from lo / 50, plus `offset`). Frees loud.
+static bool silences(float *loud, size_t size, size_t lo, int q_levels, int k_size, double offset,
+                     double **starts, double **ends, size_t *count) {
     bool *mask = malloc(size * sizeof *mask);
     size_t *from = malloc(size * sizeof *from);
     size_t *to = malloc(size * sizeof *to);
@@ -272,9 +306,11 @@ bool st_silence(const float *pcm, size_t n, int q_levels, int k_size, double off
         size_t sounds = runs(mask, size, from, to);
         for (size_t i = 0; i < size; i++) mask[i] = false;
         for (size_t k = 0; k < sounds; k++) {
-            double s = (double) from[k] / TOKENS_PER_SECOND, e = (double) to[k] / TOKENS_PER_SECOND;
+            // In the file's seconds, as stable-ts has them: the length test rounds
+            // differently far into the file.
+            double s = (double) (lo + from[k]) / TOKENS_PER_SECOND, e = (double) (lo + to[k]) / TOKENS_PER_SECOND;
             if (!(e - s > 0.1)) continue;
-            size_t mi = (size_t) nearbyint(s * TOKENS_PER_SECOND), me = (size_t) nearbyint(e * TOKENS_PER_SECOND);
+            size_t mi = (size_t) nearbyint(s * TOKENS_PER_SECOND) - lo, me = (size_t) nearbyint(e * TOKENS_PER_SECOND) - lo;
             for (size_t i = mi; i <= me && i < size; i++) mask[i] = true;
         }
         bool silent = false;
@@ -295,8 +331,8 @@ bool st_silence(const float *pcm, size_t n, int q_levels, int k_size, double off
         goto done;
     }
     for (size_t k = 0; k < silences; k++) {
-        (*starts)[k] = (double) from[k] / TOKENS_PER_SECOND;
-        (*ends)[k] = (double) to[k] / TOKENS_PER_SECOND;
+        (*starts)[k] = (double) (lo + from[k]) / TOKENS_PER_SECOND;
+        (*ends)[k] = (double) (lo + to[k]) / TOKENS_PER_SECOND;
         if (offset) {
             (*starts)[k] += offset;
             (*ends)[k] += offset;
@@ -309,6 +345,97 @@ done:
     free(from);
     free(to);
     free(padded);
+    return ok;
+}
+
+bool st_silence(const float *pcm, size_t n, int q_levels, int k_size, double offset,
+                double **starts, double **ends, size_t *count) {
+    *starts = *ends = NULL;
+    *count = 0;
+    size_t size;
+    bool oom;
+    float *loud = audio2loudness(pcm, n, &size, &oom);
+    if (!loud) return !oom;
+    return silences(loud, size, 0, q_levels, k_size, offset, starts, ends, count);
+}
+
+bool st_silence_in(const float *pcm, size_t n, size_t first, size_t total, float level, int q_levels, int k_size,
+                   double offset, double **starts, double **ends, size_t *count) {
+    *starts = *ends = NULL;
+    *count = 0;
+    size_t size, lo;
+    bool oom;
+    float *loud = loudness_in(pcm, n, first, total, level, &lo, &size, &oom);
+    if (!loud) return !oom;
+    return silences(loud, size, lo, q_levels, k_size, offset, starts, ends, count);
+}
+
+// ---- the file's level, piece by piece --------------------------------------------
+
+// The largest |sample|s so far, a min-heap of at most `cap`.
+struct st_level {
+    float *heap;
+    size_t n, cap;
+    size_t total;
+};
+
+st_level *st_level_new(size_t expected) {
+    st_level *l = calloc(1, sizeof *l);
+    if (!l) return NULL;
+    l->cap = (size_t) ((double) expected * 1.5 * 0.001) + 16;
+    l->heap = malloc(l->cap * sizeof *l->heap);
+    if (!l->heap) {
+        free(l);
+        return NULL;
+    }
+    return l;
+}
+
+static void sift_down(float *h, size_t n, size_t i) {
+    for (;;) {
+        size_t m = i, a = 2 * i + 1, b = a + 1;
+        if (a < n && h[a] < h[m]) m = a;
+        if (b < n && h[b] < h[m]) m = b;
+        if (m == i) return;
+        float t = h[i];
+        h[i] = h[m];
+        h[m] = t;
+        i = m;
+    }
+}
+
+bool st_level_add(st_level *l, const float *pcm, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        float v = fabsf(pcm[i]);
+        if (l->n < l->cap) {
+            size_t k = l->n++;
+            l->heap[k] = v;
+            while (k > 0 && l->heap[(k - 1) / 2] > l->heap[k]) {
+                float t = l->heap[k];
+                l->heap[k] = l->heap[(k - 1) / 2];
+                l->heap[(k - 1) / 2] = t;
+                k = (k - 1) / 2;
+            }
+        } else if (v > l->heap[0]) {
+            l->heap[0] = v;
+            sift_down(l->heap, l->n, 0);
+        }
+    }
+    l->total += n;
+    return true;
+}
+
+bool st_level_end(st_level *l, size_t *total, float *level) {
+    size_t k = (size_t) ((double) l->total * 0.001);
+    bool ok = k > 0 && k <= l->n;
+    if (ok) {
+        // The k-th largest: sorted largest first, as loudness_threshold has it.
+        qsort(l->heap, l->n, sizeof *l->heap, cmp_desc);
+        *total = l->total;
+        *level = l->heap[k - 1];
+    }
+    free(l->heap);
+    free(l);
     return ok;
 }
 

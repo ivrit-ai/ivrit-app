@@ -36,6 +36,13 @@ final class Speakers {
      */
     static native float[] print(long handle, float[] pcm, int length, double offset, double start, double end);
 
+    /**
+     * The prints of the segments starts[i]..ends[i] all at once, as print would make
+     * them one by one (the threads each taking whole segments): 192 floats each, one
+     * after another, the first NaN where a segment is too short to print.
+     */
+    static native float[] prints(long handle, float[] pcm, int length, double offset, double[] starts, double[] ends);
+
     /** Each print's speaker, 0, 1, …, or -1 where missing: prints are 192 floats each, one after another. */
     static native int[] cluster(float[] prints, boolean[] clustered, boolean[] missing);
 }

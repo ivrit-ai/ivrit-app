@@ -23,6 +23,7 @@
 
 // guard.cpp: the same calls, with what they throw caught.
 struct whisper_context *guarded_init(const char *path, struct whisper_context_params params, char *error, size_t size);
+int guarded_tune(struct whisper_context *ctx, const float *pcm, size_t n, int threads, char *error, size_t size);
 int guarded_piece(struct whisper_context *ctx, struct whisper_full_params params, const float *pcm, size_t n, double offset,
                   bool last, tr_state *state, tr_piece *out, char *error, size_t size);
 size_t guarded_gpus(const char **names, const char **descriptions, size_t max, char *error, size_t size);
@@ -130,13 +131,17 @@ JNIEXPORT jstring JNICALL Java_ai_ivrit_app_Whisper_probe(JNIEnv *env, jclass cl
     return (*env)->NewStringUTF(env, index >= 0 && (size_t) index < n && index < MAX_GPUS ? descriptions[index] : "");
 }
 
-JNIEXPORT jlong JNICALL Java_ai_ivrit_app_Whisper_load(JNIEnv *env, jclass cls, jstring path, jint device, jboolean flash) {
+// decoderCpu: on a GPU device, the decoder on the CPU all the same (its weights and
+// caches there), the encoder on the GPU.
+JNIEXPORT jlong JNICALL Java_ai_ivrit_app_Whisper_load(JNIEnv *env, jclass cls, jstring path, jint device, jboolean flash,
+                                                       jboolean decoderCpu) {
     (void) cls;
     whisper_log_set(on_log, NULL);
     struct whisper_context_params params = whisper_context_default_params();
     params.use_gpu = device >= 0;
     params.gpu_device = device >= 0 ? device : 0;
     params.flash_attn = flash == JNI_TRUE;
+    params.ivrit_decoder_cpu = device >= 0 && decoderCpu == JNI_TRUE;
     tr_context_params(&params);
     const char *file = (*env)->GetStringUTFChars(env, path, NULL);
     char error[512] = "";
@@ -184,13 +189,15 @@ JNIEXPORT jstring JNICALL Java_ai_ivrit_app_Whisper_system(JNIEnv *env, jclass c
 // each word's start and end (seconds into the file, two a word), and how many words
 // each segment has. `offset`: where in the file the sound starts; `last`: nothing
 // comes after it. state: {the speech's end so far, the transcript's end so far,
-// where the next piece starts}, the first two read and all three written; prompt:
+// where the next piece starts, the file's sample count and level (levelEnd; 0: not
+// known), where its sound starts}, all but the third read and the first three
+// written; prompt:
 // {how many, then the tokens} of the previous text faster-whisper prompts with
 // (TR_PROMPT at most), read and written. Null when stopped; throws when whisper.cpp
 // fails, with what it threw if it did.
 JNIEXPORT jobjectArray JNICALL Java_ai_ivrit_app_Whisper_transcribe(
-        JNIEnv *env, jclass cls, jlong handle, jfloatArray pcm, jstring language, jint threads, jint beams, jobject listener,
-        jdouble offset, jboolean last, jdoubleArray state, jintArray prompt) {
+        JNIEnv *env, jclass cls, jlong handle, jfloatArray pcm, jstring language, jint threads, jint decodeThreads, jint beams,
+        jobject listener, jdouble offset, jboolean last, jdoubleArray state, jintArray prompt) {
     (void) cls;
     turbo *t = (turbo *) (intptr_t) handle;
     atomic_store(&t->stop, false);
@@ -199,6 +206,7 @@ JNIEXPORT jobjectArray JNICALL Java_ai_ivrit_app_Whisper_transcribe(
         whisper_full_default_params(beams > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
     if (beams > 1) params.beam_search.beam_size = beams;
     params.n_threads = threads;
+    params.ivrit_decode_threads = decodeThreads > 0 ? decodeThreads : 0;
     params.suppress_nst = true;
     params.print_progress = false;
     params.print_timestamps = false;
@@ -216,10 +224,13 @@ JNIEXPORT jobjectArray JNICALL Java_ai_ivrit_app_Whisper_transcribe(
     params.abort_callback_user_data = t;
 
     tr_state kept = {0};
-    jdouble times[3];
-    (*env)->GetDoubleArrayRegion(env, state, 0, 2, times);
+    jdouble times[6];
+    (*env)->GetDoubleArrayRegion(env, state, 0, 6, times);
     kept.last_speech = times[0];
     kept.after = times[1];
+    kept.total = times[3] > 0 ? (size_t) times[3] : 0;
+    kept.level = (float) times[4];
+    kept.origin = times[5];
     jint saved[TR_PROMPT + 1];
     (*env)->GetIntArrayRegion(env, prompt, 0, TR_PROMPT + 1, saved);
     kept.n_prompt = saved[0] < 0 ? 0 : saved[0] > TR_PROMPT ? TR_PROMPT : saved[0];
@@ -287,4 +298,49 @@ JNIEXPORT jobjectArray JNICALL Java_ai_ivrit_app_Whisper_transcribe(
     }
     st_free(piece.result);
     return out;
+}
+
+// The whole file's loudness level, its sound added piece by piece (st_level):
+// levelNew(about how many samples), levelAdd for each piece in order, then
+// levelEnd: {the sample count, the level}, or null where it cannot be told; it frees.
+JNIEXPORT jlong JNICALL Java_ai_ivrit_app_Whisper_levelNew(JNIEnv *env, jclass cls, jlong expected) {
+    (void) env;
+    (void) cls;
+    return (jlong) (intptr_t) st_level_new(expected > 0 ? (size_t) expected : 0);
+}
+
+JNIEXPORT void JNICALL Java_ai_ivrit_app_Whisper_levelAdd(JNIEnv *env, jclass cls, jlong handle, jfloatArray pcm, jint n) {
+    (void) cls;
+    jfloat *samples = (*env)->GetFloatArrayElements(env, pcm, NULL);
+    st_level_add((st_level *) (intptr_t) handle, samples, (size_t) n);
+    (*env)->ReleaseFloatArrayElements(env, pcm, samples, JNI_ABORT);
+}
+
+JNIEXPORT jdoubleArray JNICALL Java_ai_ivrit_app_Whisper_levelEnd(JNIEnv *env, jclass cls, jlong handle) {
+    (void) cls;
+    size_t total;
+    float level;
+    if (!st_level_end((st_level *) (intptr_t) handle, &total, &level)) return NULL;
+    jdoubleArray out = (*env)->NewDoubleArray(env, 2);
+    if (!out) return NULL;
+    jdouble values[2] = {(jdouble) total, (jdouble) level};
+    (*env)->SetDoubleArrayRegion(env, out, 0, 2, values);
+    return out;
+}
+
+// The decoder's fastest thread count here (tr_tune_decoder), from the sound's first
+// window: 0 when it could not tell; throws when whisper.cpp threw.
+JNIEXPORT jint JNICALL Java_ai_ivrit_app_Whisper_tuneDecoder(JNIEnv *env, jclass cls, jlong handle, jfloatArray pcm, jint n,
+                                                            jint threads) {
+    (void) cls;
+    turbo *t = (turbo *) (intptr_t) handle;
+    jfloat *samples = (*env)->GetFloatArrayElements(env, pcm, NULL);
+    char error[512] = "";
+    int best = guarded_tune(t->ctx, samples, (size_t) n, threads, error, sizeof error);
+    (*env)->ReleaseFloatArrayElements(env, pcm, samples, JNI_ABORT);
+    if (best < 0) {
+        throw_state(env, error[0] ? error : "tuning failed");
+        return 0;
+    }
+    return best;
 }

@@ -25,6 +25,18 @@ extern "C" struct whisper_context *guarded_init(const char *path, struct whisper
     return nullptr;
 }
 
+// tr_tune_decoder's result, or -1 when it threw.
+extern "C" int guarded_tune(struct whisper_context *ctx, const float *pcm, size_t n, int threads, char *error, size_t size) {
+    try {
+        return tr_tune_decoder(ctx, pcm, n, threads);
+    } catch (const std::exception &e) {
+        say(error, size, e.what());
+    } catch (...) {
+        say(error, size, "unknown exception");
+    }
+    return -1;
+}
+
 // tr_piece_make's result (its windows through whisper_full), or -100 when it threw.
 extern "C" int guarded_piece(struct whisper_context *ctx, struct whisper_full_params params, const float *pcm, size_t n,
                              double offset, bool last, tr_state *state, tr_piece *out, char *error, size_t size) {

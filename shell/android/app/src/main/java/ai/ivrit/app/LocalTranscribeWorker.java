@@ -316,6 +316,43 @@ public class LocalTranscribeWorker extends Worker {
     }
 
     /**
+     * The whole file's 16 kHz sample count, loudness level (Whisper.levelEnd) and
+     * where its sound starts (seconds), decoded once before transcribing: stable-ts
+     * finds silence against the whole file's loudest moment and over its length,
+     * which the pieces alone cannot tell. {0, 0, 0} where they cannot be told (the
+     * duration unknown, the file far longer than it said).
+     */
+    private double[] fileLevel(Context context, Uri source, double duration) throws Exception {
+        double[] none = {0, 0, 0};
+        if (duration <= 0) return none;
+        long handle = Whisper.levelNew((long) (duration * Resampler.RATE));
+        if (handle == 0) return none;
+        double[] origin = {-1};
+        Resampler[] resampler = {null};
+        double[] level;
+        try {
+            AudioDecoder.decode(context, source, 0, (samples, sampleRate, at) -> {
+                if (isStopped()) throw new InterruptedException("stopped");
+                if (origin[0] < 0) origin[0] = at - samples.length / (double) sampleRate;
+                if (resampler[0] == null || resampler[0].from != sampleRate) {
+                    if (resampler[0] != null) addLevel(handle, resampler[0].flush());
+                    resampler[0] = new Resampler(sampleRate);
+                }
+                addLevel(handle, resampler[0].push(samples));
+                progress("preparing", Math.min(0.99, at / duration), null);
+            });
+            if (resampler[0] != null) addLevel(handle, resampler[0].flush());
+        } finally {
+            level = Whisper.levelEnd(handle); // frees it, read through or not
+        }
+        return level == null ? none : new double[] {level[0], level[1], origin[0]};
+    }
+
+    private static void addLevel(long handle, float[] samples) {
+        if (samples.length > 0) Whisper.levelAdd(handle, samples, samples.length);
+    }
+
+    /**
      * transcribeTurbo below whatever the phone is doing: this thread, and the ones
      * whisper.cpp starts from it (which take its priority), just short of background
      * priority, from which Android may keep them to the slow cores. Idle, the
@@ -337,10 +374,11 @@ public class LocalTranscribeWorker extends Worker {
         Checkpoint done = engine.equals(kept.engine) && kept.turbo != null ? kept : new Checkpoint();
         List<TurboTranscript.Segment> segments = TurboTranscript.load(done.turbo);
         double from = done.offset;
-        double[] state = {done.turbo != null ? done.lastSpeech : from, done.after, from};
         int[] prompt = done.turbo != null ? done.prompt : Whisper.prompt();
-        // Speakers too, as the server tells them, where the speaker model came.
-        final long speakers = speakerModel(context);
+        // The whole file's length and loudness, read once (and kept in the checkpoint).
+        double[] file = done.turbo != null && done.samples > 0 ? new double[] {done.samples, done.level, done.origin}
+            : fileLevel(context, source, duration);
+        double[] state = {done.turbo != null ? done.lastSpeech : from, done.after, from, file[0], file[1], file[2]};
         // On the GPU where it passed its check on this phone (TurboGpu), once checked.
         String processor = Store.turboProcessor(context);
         TurboGpu.Verdict verdict = TurboGpu.decide(context, variant, processor, fraction -> progress("checking", fraction, null));
@@ -350,23 +388,24 @@ public class LocalTranscribeWorker extends Worker {
         int device = gpu ? TurboGpu.device(verdict) : -1;
         if (device < 0) gpu = false;
         if (gpu) TurboGpu.log(context);
-        long loaded = Whisper.load(path, device, !gpu || verdict.level().flash);
+        long loaded = Whisper.load(path, device, !gpu || verdict.level().flash, gpu && verdict.decoderCpu);
         if (loaded == 0 && gpu) {
             gpu = false; // no room on the GPU: the CPU, then
-            loaded = Whisper.load(path, -1, true);
+            loaded = Whisper.load(path, -1, true, false);
         }
+        // The decoder's threads as tuned on this phone; tuned on the first piece if not yet.
+        int[] decodeThreads = {verdict.decodeThreads};
         // A GPU run's pieces are watched for a hang (TurboGpu.Watchdog).
         TurboGpu.Verdict watch = gpu ? verdict : null;
         // Checked when it downloaded: not loading is the phone short of memory.
-        if (loaded == 0) {
-            Speakers.free(speakers);
-            throw new IllegalStateException("the Turbo model did not load");
-        }
+        if (loaded == 0) throw new IllegalStateException("the Turbo model did not load");
         long handle = loaded;
         synchronized (this) {
             turbo = handle;
         }
         if (gpu) TurboGpu.started(context);
+        // Speakers too, as the server tells them, where the speaker model came.
+        final long speakers = speakerModel(context);
         long started = System.currentTimeMillis();
         int threads = Turbo.threads();
         try {
@@ -387,11 +426,11 @@ public class LocalTranscribeWorker extends Worker {
                     sound.resampler = new Resampler(sampleRate);
                 }
                 sound.add(sound.resampler.push(samples));
-                if (sound.seconds() >= Turbo.CHUNK_SECONDS) hearTurbo(context, handle, speakers, threads, sound, segments, state, prompt, false, duration, from, started, variant, watch);
+                if (sound.seconds() >= Turbo.CHUNK_SECONDS) hearTurbo(context, handle, speakers, threads, decodeThreads, sound, segments, state, prompt, false, duration, from, started, variant, watch);
             });
             if (sound.resampler != null) sound.add(sound.resampler.flush());
             if (sound.start < 0) sound.start = from;
-            hearTurbo(context, handle, speakers, threads, sound, segments, state, prompt, true, duration, from, started, variant, watch);
+            hearTurbo(context, handle, speakers, threads, decodeThreads, sound, segments, state, prompt, true, duration, from, started, variant, watch);
         } catch (IllegalStateException e) {
             // ggml failing on the GPU (guard.cpp): the next level next time; this
             // recording again, from its last checkpoint, on the CPU (retried).
@@ -428,6 +467,8 @@ public class LocalTranscribeWorker extends Worker {
             .put("cores", Runtime.getRuntime().availableProcessors())
             .put("memory", Turbo.memory(context))
             .put("beams", Turbo.beams(gpu))
+            .put("decodeThreads", decodeThreads[0])
+            .put("decoderCpu", gpu && verdict.decoderCpu)
             .put("speakers", speakers != 0)
             .put("system", Whisper.system()));
         return TurboTranscript.json(segments, speakers != 0 && !segments.isEmpty() ? TurboTranscript.speakers(segments) : null);
@@ -448,18 +489,23 @@ public class LocalTranscribeWorker extends Worker {
      * The sound so far through the Turbo model, keeping what may be cut off for next
      * time; each new segment's voice print taken while its sound is here.
      */
-    private void hearTurbo(Context context, long handle, long speakers, int threads, Sound sound, List<TurboTranscript.Segment> segments,
+    private void hearTurbo(Context context, long handle, long speakers, int threads, int[] decodeThreads, Sound sound,
+                           List<TurboTranscript.Segment> segments,
                            double[] state, int[] prompt, boolean last, double duration, double from, long started, String variant,
                            TurboGpu.Verdict watch) throws Exception {
         if (isStopped()) throw new InterruptedException("stopped");
         if (sound.length < Resampler.RATE / 10) return; // nothing to speak of
         double start = sound.start;
         double seconds = sound.seconds();
+        if (decodeThreads[0] <= 0) {
+            decodeThreads[0] = Whisper.tuneDecoder(handle, sound.samples, sound.length, threads);
+            if (decodeThreads[0] > 0) TurboGpu.tuned(context, variant, decodeThreads[0]);
+        }
         Object[] heard;
         // On the GPU: a piece taking over twice its length (plus two minutes) has hung.
         try (TurboGpu.Watchdog ignored = watch == null ? null
                 : new TurboGpu.Watchdog(context, variant, watch, "run", (long) (2000 * seconds) + 120_000)) {
-            heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, threads, Turbo.beams(watch != null), percent -> {
+            heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, threads, decodeThreads[0], Turbo.beams(watch != null), percent -> {
                 if (duration <= 0) return;
                 double fraction = Math.min(1, (start + seconds * percent / 100.0) / duration);
                 double spent = (System.currentTimeMillis() - started) / 1000.0;
@@ -469,13 +515,22 @@ public class LocalTranscribeWorker extends Worker {
         }
         if (heard == null) throw new InterruptedException("stopped");
         List<TurboTranscript.Segment> piece = TurboTranscript.piece(heard);
-        for (TurboTranscript.Segment s : piece) {
+        if (speakers != 0 && !piece.isEmpty()) {
             if (isStopped()) throw new InterruptedException("stopped");
-            if (speakers != 0) s.print = Speakers.print(speakers, sound.samples, sound.length, sound.start, s.start(), s.end());
+            double[] starts = new double[piece.size()], ends = new double[piece.size()];
+            for (int i = 0; i < starts.length; i++) {
+                starts[i] = piece.get(i).start();
+                ends[i] = piece.get(i).end();
+            }
+            float[] prints = Speakers.prints(speakers, sound.samples, sound.length, sound.start, starts, ends);
+            for (int i = 0; i < starts.length; i++) {
+                if (!Float.isNaN(prints[i * 192])) piece.get(i).print = java.util.Arrays.copyOfRange(prints, i * 192, (i + 1) * 192);
+            }
         }
         segments.addAll(piece);
         sound.keepFrom(state[2]);
-        if (!last) Checkpoint.saveTurbo(context, key, engine, TurboTranscript.save(segments), state[2], state[0], state[1], prompt);
+        if (!last) Checkpoint.saveTurbo(context, key, engine, TurboTranscript.save(segments), state[2], state[0], state[1], prompt,
+            new double[] {state[3], state[4], state[5]});
     }
 
     /** The server's refusal, worth showing as is. */

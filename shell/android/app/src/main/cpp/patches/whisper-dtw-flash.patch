@@ -1,6 +1,19 @@
 --- a/include/whisper.h	2026-10-06 17:10:35.000000000 +0300
-+++ b/include/whisper.h	2026-11-18 09:46:42.370866051 +0200
-@@ -588,6 +588,15 @@
++++ b/include/whisper.h	2026-11-18 13:46:20.744494168 +0200
+@@ -126,6 +126,12 @@
+         struct whisper_aheads dtw_aheads;
+ 
+         size_t dtw_mem_size; // TODO: remove
++
++        // ivrit-app: the decoder (its weights, caches and graphs) on the CPU while the
++        // encoder is on the GPU: a phone's GPU encodes faster, its CPU takes the
++        // decoder's small steps faster. The cross-attention keys and values are
++        // computed on the GPU, once a window, into the CPU's memory.
++        bool ivrit_decoder_cpu;
+     };
+ 
+     typedef struct whisper_token_data {
+@@ -588,6 +594,18 @@
          const char * vad_model_path;              // Path to VAD model
  
          whisper_vad_params vad_params;
@@ -13,10 +26,13 @@
 +        // no failure for a missing timestamp or the token limit, no stop at the
 +        // window's end, no DTW (whisper_full_ivrit_dtw).
 +        bool ivrit_window;
++        // ivrit-app: the decoder's threads (0: n_threads), fewer being faster for
++        // its small steps.
++        int ivrit_decode_threads;
      };
  
      // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see whisper_free_context_params & whisper_free_params()
-@@ -640,6 +649,19 @@
+@@ -640,6 +658,19 @@
      WHISPER_API int64_t whisper_full_get_segment_t0           (struct whisper_context * ctx, int i_segment);
      WHISPER_API int64_t whisper_full_get_segment_t0_from_state(struct whisper_state * state, int i_segment);
  
@@ -37,7 +53,7 @@
      WHISPER_API int64_t whisper_full_get_segment_t1_from_state(struct whisper_state * state, int i_segment);
  
 --- a/src/whisper.cpp	2026-10-06 17:10:35.000000000 +0300
-+++ b/src/whisper.cpp	2026-11-18 09:46:42.434182222 +0200
++++ b/src/whisper.cpp	2026-11-18 13:46:57.749271979 +0200
 @@ -473,6 +473,10 @@
      std::vector<whisper_token_data> tokens;
  
@@ -60,7 +76,28 @@
      // prompt history split into static prefix (prompt_past0) and dynamic rolling context (prompt_past1)
      std::vector<whisper_token>   prompt_past0; // static carried initial prompt (if enabled)
      std::vector<whisper_token>   prompt_past1; // dynamic context from decoded output
-@@ -2435,7 +2443,10 @@
+@@ -1722,10 +1730,19 @@
+ 
+     // Create a list of available bufts, in priority order
+     buft_list_t buft_list = make_buft_list(wctx.params);
++    // ivrit-app: the CPU's alone, for the decoder's weights when it runs there
++    buft_list_t cpu_buft_list;
++    for (const auto & p : buft_list) {
++        if (ggml_backend_dev_type(p.first) == GGML_BACKEND_DEVICE_TYPE_CPU) {
++            cpu_buft_list.push_back(p);
++        }
++    }
+ 
+     auto create_tensor = [&](asr_tensor type, asr_system system, ggml_tensor * meta, int layer = 0) -> ggml_tensor * {
+         ggml_op op = ASR_TENSOR_INFO.at(type);
+-        ggml_backend_buffer_type_t buft = select_weight_buft(hparams, meta, op, buft_list);
++        const bool on_cpu = wctx.params.ivrit_decoder_cpu && (system == ASR_SYSTEM_DECODER || (system == ASR_SYSTEM_CROSS &&
++            type != ASR_TENSOR_ATTN_KEY_WEIGHT && type != ASR_TENSOR_ATTN_VALUE_WEIGHT && type != ASR_TENSOR_ATTN_VALUE_BIAS));
++        ggml_backend_buffer_type_t buft = select_weight_buft(hparams, meta, op, on_cpu ? cpu_buft_list : buft_list);
+         if (!buft) {
+             throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", ASR_TENSOR_NAMES.at(system).at(type)));
+         }
+@@ -2435,7 +2452,10 @@
              memset(dst, 0, ggml_nbytes(mel));
  
              const int i0 = std::min(mel_offset,           mel_inp.n_len);
@@ -72,7 +109,7 @@
  
              for (int j = 0; j < mel_inp.n_mel; ++j) {
                  for (int i = i0; i < i1; ++i) {
-@@ -2758,6 +2769,33 @@
+@@ -2758,6 +2778,33 @@
                  cur = ggml_flash_attn_ext(ctx0, Q, Kcross, Vcross, nullptr, KQscale, 0.0f, 0.0f);
  
                  cur = ggml_reshape_2d(ctx0, cur, n_state, n_tokens);
@@ -106,7 +143,54 @@
              } else {
                  struct ggml_tensor * Kcross =
                      ggml_view_3d(ctx0, wstate.kv_cross.k,
-@@ -3814,11 +3852,6 @@
+@@ -3464,7 +3511,9 @@
+     // at this point, we don't know yet how many decoders will be used
+     // later during decoding, if more decoders are used, we will recreate the KV cache respectively
+     state->kv_self_n_dec = 1;
+-    if (!whisper_kv_cache_init(state->kv_self, state->backends[0], ctx->itype,
++    // ivrit-app: the decoder's caches where it runs
++    ggml_backend_t decoder_backend = ctx->params.ivrit_decoder_cpu ? state->backends.back() : state->backends[0];
++    if (!whisper_kv_cache_init(state->kv_self, decoder_backend, ctx->itype,
+                 ctx->model.hparams.n_text_state,
+                 ctx->model.hparams.n_text_layer,
+                 GGML_PAD(ctx->model.hparams.n_text_ctx, 256))) {
+@@ -3478,7 +3527,7 @@
+         WHISPER_LOG_INFO("%s: kv self size  = %7.2f MB\n", __func__, memory_size / 1e6);
+     }
+ 
+-    if (!whisper_kv_cache_init(state->kv_cross, state->backends[0], ctx->itype,
++    if (!whisper_kv_cache_init(state->kv_cross, decoder_backend, ctx->itype,
+                 ctx->model.hparams.n_text_state,
+                 ctx->model.hparams.n_text_layer,
+                 GGML_PAD(ctx->model.hparams.n_audio_ctx, 256))) {
+@@ -3508,7 +3557,7 @@
+ 
+     // [EXPERIMENTAL] Token-level timestamps with DTW
+     if (ctx->params.dtw_token_timestamps) {
+-        if (!aheads_masks_init(ctx->params, ctx->model.hparams, state->aheads_masks, state->backends[0])) {
++        if (!aheads_masks_init(ctx->params, ctx->model.hparams, state->aheads_masks, decoder_backend)) {
+             WHISPER_LOG_ERROR("%s: aheads_masks_init() failed for alignment heads masks\n", __func__);
+             whisper_free_state(state);
+             return nullptr;
+@@ -3626,7 +3675,8 @@
+ 
+     // decoder allocator
+     {
+-        bool ok = whisper_sched_graph_init(state->sched_decode, state->backends,
++        bool ok = whisper_sched_graph_init(state->sched_decode,
++                ctx->params.ivrit_decoder_cpu ? std::vector<ggml_backend_t>{state->backends.back()} : state->backends,
+                 [&]() {
+                     const auto & hparams = ctx->model.hparams;
+ 
+@@ -3724,6 +3774,7 @@
+             /*.heads            =*/ NULL,
+         },
+         /*.dtw_mem_size         =*/ 1024*1024*128,
++        /*.ivrit_decoder_cpu    =*/ false,
+     };
+     return result;
+ }
+@@ -3814,11 +3865,6 @@
  struct whisper_context * whisper_init_with_params_no_state(struct whisper_model_loader * loader, struct whisper_context_params params) {
      ggml_time_init();
  
@@ -118,25 +202,27 @@
      WHISPER_LOG_INFO("%s: use gpu    = %d\n", __func__, params.use_gpu);
      WHISPER_LOG_INFO("%s: flash attn = %d\n", __func__, params.flash_attn);
      WHISPER_LOG_INFO("%s: gpu_device = %d\n", __func__, params.gpu_device);
-@@ -6172,6 +6205,8 @@
+@@ -6172,6 +6218,9 @@
          /*.vad_model_path              =*/ nullptr,
  
          /* vad_params =*/ whisper_vad_default_params(),
 +
 +        /* ivrit_window =*/ false,
++        /* ivrit_decode_threads =*/ 0,
      };
  
      switch (strategy) {
-@@ -7173,6 +7208,8 @@
+@@ -7173,6 +7222,9 @@
      }
  
      int seek = seek_start;
 +    state->ivrit_mel_end = params.ivrit_window ? seek_end : 0;
++    const int decode_threads = params.ivrit_decode_threads > 0 ? params.ivrit_decode_threads : params.n_threads;
 +    state->ivrit_sequence.clear();
  
      std::vector<whisper_token> prompt;
      prompt.reserve(whisper_n_text_ctx(ctx));
-@@ -7282,7 +7319,7 @@
+@@ -7282,7 +7334,7 @@
              {
                  prompt.clear();
  
@@ -145,7 +231,25 @@
                      const bool can_take0 = params.carry_initial_prompt && !prompt_past0.empty();
                      const bool can_take1 = !prompt_past1.empty();
  
-@@ -7561,9 +7598,9 @@
+@@ -7322,7 +7374,7 @@
+                     // overallocate to workaround KV cache fragmentation issues
+                     const int factor = n_decoders_cur > 1 ? n_decoders_cur + 2 : 1;
+ 
+-                    if (!whisper_kv_cache_init(state->kv_self, state->backends[0], ctx->itype,
++                    if (!whisper_kv_cache_init(state->kv_self, ctx->params.ivrit_decoder_cpu ? state->backends.back() : state->backends[0], ctx->itype,
+                                 ctx->model.hparams.n_text_state,
+                                 ctx->model.hparams.n_text_layer,
+                                 GGML_PAD(ctx->model.hparams.n_text_ctx, 256)*factor)) {
+@@ -7338,7 +7390,7 @@
+ 
+                 whisper_batch_prep_legacy(state->batch, prompt.data(), prompt.size(), 0, 0);
+ 
+-                if (!whisper_decode_internal(*ctx, *state, state->batch, params.n_threads, false, params.abort_callback, params.abort_callback_user_data)) {
++                if (!whisper_decode_internal(*ctx, *state, state->batch, decode_threads, false, params.abort_callback, params.abort_callback_user_data)) {
+                     WHISPER_LOG_ERROR("%s: failed to decode\n", __func__);
+                     return -8;
+                 }
+@@ -7561,9 +7613,9 @@
                          // end of segment
                          if (token.id == whisper_token_eot(ctx) ||               // end of text token
                             (params.max_tokens > 0 && i >= params.max_tokens) || // max tokens per segment reached
@@ -157,7 +261,7 @@
                                  if (seek + seek_delta + delta_min >= seek_end) {
                                      result_len = i + 1;
                                  } else {
-@@ -7593,7 +7630,7 @@
+@@ -7593,7 +7645,7 @@
  
                      // sometimes, the decoding can get stuck in a repetition loop
                      // this is an attempt to mitigate such cases - we flag the decoding as failed and use a fallback strategy
@@ -166,7 +270,16 @@
                          WHISPER_LOG_DEBUG("%s: decoder %d: failed due to repetition loop\n", __func__, j);
                          failed = true;
                          continue;
-@@ -7713,6 +7750,9 @@
+@@ -7650,7 +7702,7 @@
+ 
+                     assert(batch.n_tokens > 0);
+ 
+-                    if (!whisper_decode_internal(*ctx, *state, state->batch, params.n_threads, false, params.abort_callback, params.abort_callback_user_data)) {
++                    if (!whisper_decode_internal(*ctx, *state, state->batch, decode_threads, false, params.abort_callback, params.abort_callback_user_data)) {
+                         WHISPER_LOG_ERROR("%s: failed to decode\n", __func__);
+                         return -9;
+                     }
+@@ -7713,6 +7765,9 @@
                          continue;
                      }
  
@@ -176,7 +289,7 @@
                      decoder.sequence.tokens.resize(decoder.sequence.result_len);
                      whisper_sequence_score(params, decoder.sequence);
  
-@@ -7773,6 +7813,9 @@
+@@ -7773,6 +7828,9 @@
              const auto result_len = best_decoder.sequence.result_len;
  
              const auto & tokens_cur = best_decoder.sequence.tokens;
@@ -186,7 +299,7 @@
  
              // [EXPERIMENTAL] Token-level timestamps with DTW
              const auto n_segments_before = state->result_all.size();
-@@ -7834,7 +7877,7 @@
+@@ -7834,7 +7892,7 @@
  
                              //printf("tt0 = %d, tt1 = %d, text = %s, token = %s, token_id = %d, tid = %d\n", tt0, tt1, text.c_str(), ctx->vocab.id_to_token[tokens_cur[i].id].c_str(), tokens_cur[i].id, tokens_cur[i].tid);
  
@@ -195,7 +308,7 @@
                              for (int j = i0; j <= i; j++) {
                                  result_all.back().tokens.push_back(tokens_cur[j]);
                              }
-@@ -7882,7 +7925,7 @@
+@@ -7882,7 +7940,7 @@
                          fflush(stdout);
                      }
  
@@ -204,7 +317,7 @@
                      for (int j = i0; j < (int) tokens_cur.size(); j++) {
                          result_all.back().tokens.push_back(tokens_cur[j]);
                      }
-@@ -7907,7 +7950,7 @@
+@@ -7907,7 +7965,7 @@
              // [EXPERIMENTAL] Token-level timestamps with DTW
              {
                  const int n_segments = state->result_all.size() - n_segments_before;
@@ -213,7 +326,7 @@
                      const int n_frames = std::min(std::min(WHISPER_CHUNK_SIZE * 100, seek_delta), seek_end - seek);
                      whisper_exp_compute_token_level_timestamps_dtw(
                              ctx, state, params, result_all.size() - n_segments, n_segments, seek, n_frames, 7, params.n_threads);
-@@ -7937,6 +7980,9 @@
+@@ -7937,6 +7995,9 @@
              seek += seek_delta;
  
              WHISPER_LOG_DEBUG("seek = %d, seek_delta = %d\n", seek, seek_delta);
@@ -223,7 +336,7 @@
          }
      }
  
-@@ -8052,6 +8098,7 @@
+@@ -8052,6 +8113,7 @@
              // correct the segment timestamp taking into account the offset
              result.t0 += chunk_offset_t;
              result.t1 += chunk_offset_t;
@@ -231,7 +344,7 @@
  
              // make sure that segments are not overlapping
              if (!ctx->state->result_all.empty()) {
-@@ -8202,6 +8249,53 @@
+@@ -8202,6 +8264,53 @@
      return whisper_full_get_segment_t0_from_state(ctx->state, i_segment);
  }
  
@@ -285,7 +398,7 @@
  int64_t whisper_full_get_segment_t1(struct whisper_context * ctx, int i_segment) {
      return whisper_full_get_segment_t1_from_state(ctx->state, i_segment);
  }
-@@ -9133,7 +9227,18 @@
+@@ -9133,7 +9242,18 @@
          return;
      }
      int filter_width = ((median_filter_user_data *) userdata)->filter_width;
@@ -305,7 +418,7 @@
      WHISPER_ASSERT(filter_width % 2);
      WHISPER_ASSERT(ggml_n_dims(a) == 3);
      WHISPER_ASSERT(a->type == GGML_TYPE_F32);
-@@ -9190,12 +9295,15 @@
+@@ -9190,12 +9310,15 @@
      struct ggml_context * gctx = ggml_init(gparams);
  
      // Build token sequence that will be passed to decoder

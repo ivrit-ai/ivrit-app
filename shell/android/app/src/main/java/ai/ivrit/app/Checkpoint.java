@@ -31,6 +31,7 @@ final class Checkpoint {
     double lastSpeech; // the Turbo model's: where its speech, and its transcript, end
     double after;
     int[] prompt = Whisper.prompt(); // the Turbo model's previous text (Whisper.transcribe)
+    double samples, level, origin; // the file's (Whisper.levelEnd, where its sound starts); 0: not known
     double offset; // seconds into the file where the next stream starts
     String engine = LocalModel.ENGINE; // what made the pieces
 
@@ -82,6 +83,9 @@ final class Checkpoint {
             cp.turbo = o.optJSONArray("segments");
             cp.lastSpeech = o.optDouble("lastSpeech", 0);
             cp.after = o.optDouble("after", 0);
+            cp.samples = o.optDouble("samples", 0);
+            cp.level = o.optDouble("level", 0);
+            cp.origin = o.optDouble("origin", 0);
             JSONArray prompt = o.optJSONArray("prompt");
             for (int i = 0; prompt != null && i < prompt.length() && i < cp.prompt.length; i++) cp.prompt[i] = prompt.getInt(i);
             cp.offset = o.optDouble("offset", 0);
@@ -121,12 +125,13 @@ final class Checkpoint {
 
     /** The Turbo model's segments so far (TurboTranscript.save), and where in the file it goes on from. */
     static void saveTurbo(Context context, String key, String engine, JSONArray segments, double resumeAt,
-                          double lastSpeech, double after, int[] prompt) {
+                          double lastSpeech, double after, int[] prompt, double[] file) {
         try {
             JSONArray tokens = new JSONArray();
             for (int i = 0; i <= prompt[0]; i++) tokens.put(prompt[i]);
             write(context, key, new JSONObject().put("segments", segments).put("offset", resumeAt)
-                .put("lastSpeech", lastSpeech).put("after", after).put("prompt", tokens).put("engine", engine));
+                .put("lastSpeech", lastSpeech).put("after", after).put("prompt", tokens)
+                .put("samples", file[0]).put("level", file[1]).put("origin", file[2]).put("engine", engine));
         } catch (Exception ignored) {
             // Only a faster restart is lost.
         }

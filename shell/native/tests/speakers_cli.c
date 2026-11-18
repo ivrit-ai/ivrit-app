@@ -35,7 +35,8 @@ static float *read_wav(const char *path, size_t *n) {
 
 int main(int argc, char **argv) {
     if (argc < 5) return 2;
-    sp_model *m = sp_load(argv[1], atoi(argv[4]));
+    // GPU=n: on ggml's GPU device n instead.
+    sp_model *m = getenv("GPU") ? sp_load_gpu(argv[1], atoi(getenv("GPU"))) : sp_load(argv[1], atoi(argv[4]));
     if (!m) {
         fprintf(stderr, "no model\n");
         return 1;
@@ -71,9 +72,19 @@ int main(int argc, char **argv) {
     float *prints = calloc(count * SP_DIM, sizeof *prints);
     bool *clustered = calloc(count, sizeof *clustered), *missing = calloc(count, sizeof *missing);
     int *labels = malloc(count * sizeof *labels);
+    // All at once, as the app prints a piece's segments (sp_embed_many).
+    const float **sounds = calloc(count, sizeof *sounds);
+    size_t *lengths = calloc(count, sizeof *lengths);
+    bool *printed = calloc(count, sizeof *printed), *sound = calloc(count, sizeof *sound);
     for (size_t i = 0; i < count; i++) {
         size_t a, b;
-        missing[i] = !sp_segment_sound(starts[i], ends[i], 0, n, &a, &b) || !sp_embed(m, pcm + a, b - a, prints + i * SP_DIM);
+        sound[i] = sp_segment_sound(starts[i], ends[i], 0, n, &a, &b);
+        sounds[i] = pcm + a;
+        lengths[i] = sound[i] ? b - a : 0;
+    }
+    sp_embed_many(m, sounds, lengths, count, prints, printed);
+    for (size_t i = 0; i < count; i++) {
+        missing[i] = !sound[i] || !printed[i];
         clustered[i] = !missing[i] && ends[i] - starts[i] >= SP_MIN_CLUSTERED;
     }
     int speakers = sp_cluster(prints, clustered, missing, count, labels);

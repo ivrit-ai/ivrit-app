@@ -3,9 +3,11 @@
 // its power, 80 triangular mel filters from 0 to 8 kHz, in decibels no more than
 // 80 below the loudest, then each filter's mean over the frames taken off
 // (InputNormalization, sentence, no std). The filter bank is computed in float32,
-// in torch's order of operations; the transforms in double.
+// in torch's order of operations; the transforms in double (a mixed-radix FFT,
+// 400 = 4 * 4 * 5 * 5).
 
 #include <math.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -44,40 +46,68 @@ static void filter_bank(float *fb) {
     }
 }
 
-float *sp_features(const float *pcm, size_t n, size_t *frames) {
-    static float fb[N_BINS * N_MELS];
-    static double window[N_FFT], cosine[N_FFT], sine[N_FFT];
-    static int ready = 0;
-    if (!ready) {
-        filter_bank(fb);
-        for (int i = 0; i < N_FFT; i++) {
-            // torch.hamming_window(400), periodic: arange * (2 pi / N), cos, * -0.46, + 0.54.
-            window[i] = cosf((float) i * (float) (2 * PI / N_FFT)) * -0.46f + 0.54f;
-            cosine[i] = cos(2 * PI * i / N_FFT);
-            sine[i] = sin(2 * PI * i / N_FFT);
-        }
-        ready = 1;
+typedef struct {
+    double r, i;
+} cpx;
+
+static float fb[N_BINS * N_MELS];
+static double window[N_FFT];
+static cpx twiddle[N_FFT];  // e^(-2 pi i k / N)
+static const int FACTORS[] = {4, 100, 4, 25, 5, 5, 5, 1};  // radix, then what is left
+static pthread_once_t ready = PTHREAD_ONCE_INIT;
+
+static void prepare(void) {
+    filter_bank(fb);
+    for (int i = 0; i < N_FFT; i++) {
+        // torch.hamming_window(400), periodic: arange * (2 pi / N), cos, * -0.46, + 0.54.
+        window[i] = cosf((float) i * (float) (2 * PI / N_FFT)) * -0.46f + 0.54f;
+        twiddle[i] = (cpx) {cos(2 * PI * i / N_FFT), -sin(2 * PI * i / N_FFT)};
     }
+}
+
+// Decimation in time, radix by radix (as KissFFT does it): out = DFT(in), in read
+// `stride` apart.
+static void fft(cpx *out, const cpx *in, size_t stride, const int *factors) {
+    const int p = factors[0], m = factors[1];
+    if (m == 1) {
+        for (int k = 0; k < p; k++) out[k] = in[k * stride];
+    } else {
+        for (int k = 0; k < p; k++) fft(out + k * m, in + k * stride, stride * p, factors + 2);
+    }
+    cpx scratch[5];
+    for (int u = 0; u < m; u++) {
+        for (int q = 0; q < p; q++) scratch[q] = out[u + q * m];
+        for (int q1 = 0, k = u; q1 < p; q1++, k += m) {
+            cpx sum = scratch[0];
+            size_t t = 0;
+            for (int q = 1; q < p; q++) {
+                t += stride * (size_t) k;
+                if (t >= N_FFT) t %= N_FFT;
+                cpx w = twiddle[t], x = scratch[q];
+                sum.r += x.r * w.r - x.i * w.i;
+                sum.i += x.r * w.i + x.i * w.r;
+            }
+            out[k] = sum;
+        }
+    }
+}
+
+float *sp_features(const float *pcm, size_t n, size_t *frames) {
+    pthread_once(&ready, prepare);
     size_t t_count = 1 + n / HOP;
     float *out = malloc(t_count * N_MELS * sizeof *out);
     if (!out) return NULL;
-    double x[N_FFT];
+    cpx x[N_FFT], spectrum[N_FFT];
     float power[N_BINS];
     float loudest = -INFINITY;
     for (size_t t = 0; t < t_count; t++) {
         long first = (long) (t * HOP) - N_FFT / 2;
         for (int i = 0; i < N_FFT; i++) {
             long j = first + i;
-            x[i] = j >= 0 && (size_t) j < n ? pcm[j] * window[i] : 0;
+            x[i] = (cpx) {j >= 0 && (size_t) j < n ? pcm[j] * window[i] : 0, 0};
         }
-        for (int k = 0; k < N_BINS; k++) {
-            double re = 0, im = 0;
-            for (int i = 0, at = 0; i < N_FFT; i++, at = (at + k) % N_FFT) {
-                re += x[i] * cosine[at];
-                im -= x[i] * sine[at];
-            }
-            power[k] = (float) (re * re + im * im);
-        }
+        fft(spectrum, x, 1, FACTORS);
+        for (int k = 0; k < N_BINS; k++) power[k] = (float) (spectrum[k].r * spectrum[k].r + spectrum[k].i * spectrum[k].i);
         float *row = out + t * N_MELS;
         for (int m = 0; m < N_MELS; m++) {
             double sum = 0;
