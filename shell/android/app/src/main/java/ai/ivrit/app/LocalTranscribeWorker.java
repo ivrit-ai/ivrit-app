@@ -56,7 +56,8 @@ public class LocalTranscribeWorker extends Worker {
     private static final String TAG = "IvritLocal";
     private static final double BLOCK_SECONDS = 4;
     // One recording through the model at a time; the others wait their turn.
-    private static final java.util.concurrent.Semaphore TURN = new java.util.concurrent.Semaphore(1, true);
+    // (PrepareWorker takes it too: the model is one recording's, or getting ready, at a time.)
+    static final java.util.concurrent.Semaphore TURN = new java.util.concurrent.Semaphore(1, true);
 
     public LocalTranscribeWorker(@NonNull Context context, @NonNull WorkerParameters params) {
         super(context, params);
@@ -71,6 +72,11 @@ public class LocalTranscribeWorker extends Worker {
         String variant = Turbo.chosen(context);
         boolean benchmark = "benchmark".equals(input.getString("kind"));
         boolean download = !benchmark && variant != null && !Turbo.ready(context, variant);
+        if (!benchmark) {
+            // This phone transcribes recordings: from now on Turbo is made ready ahead (PrepareWorker).
+            Store.setUsedOnDevice(context);
+            PrepareWorker.schedule(context);
+        }
         OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(LocalTranscribeWorker.class)
             .setInputData(input)
             .addTag("local:" + input.getString("key"))
@@ -155,7 +161,13 @@ public class LocalTranscribeWorker extends Worker {
             }
             if (benchmark) source = Uri.fromFile(Benchmark.ensure(context, (done, total) -> progress("downloading", done / (double) Math.max(1, total), null)));
             double duration = AudioDecoder.duration(context, source);
-            JSONArray segments = variant != null ? turboYielding(context, kind, source, duration, variant) : transcribe(context, source, duration);
+            // A benchmark measures the phone, so it runs at normal priority (asked for, and
+            // watched); a recording yields to whatever the phone is doing.
+            if (benchmark) bench.put("conditions", new JSONObject().put("start", Benchmark.conditions(context)));
+            JSONArray segments = variant == null ? transcribe(context, source, duration)
+                : benchmark ? transcribeTurbo(context, kind, source, duration, variant)
+                : turboYielding(context, kind, source, duration, variant);
+            if (benchmark) bench.getJSONObject("conditions").put("end", Benchmark.conditions(context));
             if (isStopped()) return Result.success();
             if (benchmark) {
                 StringBuilder text = new StringBuilder();
@@ -350,12 +362,15 @@ public class LocalTranscribeWorker extends Worker {
      * The whole file's 16 kHz sample count, loudness level (Whisper.levelEnd) and
      * where its sound starts (seconds), decoded once before transcribing: stable-ts
      * finds silence against the whole file's loudest moment and over its length,
-     * which the pieces alone cannot tell. {0, 0, 0} where they cannot be told (the
-     * duration unknown, the file far longer than it said).
+     * which the pieces alone cannot tell. {0, 0, 0} where it fits in one piece (no
+     * need) or they cannot be told (the duration unknown, the file far longer than it
+     * said).
      */
     private double[] fileLevel(Context context, Uri source, double duration) throws Exception {
         double[] none = {0, 0, 0};
-        if (duration <= 0) return none;
+        // A recording heard in one piece finds silence over all of it anyway: the same
+        // as this read would give (stablets' tests), without reading it twice.
+        if (duration <= 0 || duration < Turbo.CHUNK_SECONDS - 30) return none;
         long handle = Whisper.levelNew((long) (duration * Resampler.RATE));
         if (handle == 0) return none;
         double[] origin = {-1};

@@ -365,7 +365,7 @@
         "android"
       ],
       "feature": "benchmark",
-      "note": "The on-device benchmark (the Lab page): ivrit.ai's benchmark recording (ivrit-ai/turbo-benchmark) transcribed with the Turbo model as a recording is, timed stage by stage and not saved; the Turbo model and the recording download first if missing (any network: it was asked for). Its progress and result come as the \"benchmark\" event.",
+      "note": "The on-device benchmark (the Lab page): ivrit.ai's benchmark recording (ivrit-ai/turbo-benchmark) transcribed with the Turbo model as a recording is, timed stage by stage at normal priority (unlike a recording, which yields), with the phone's heat and charging at its start and end, and not saved; the Turbo model and the recording download first if missing (any network: it was asked for). Its progress and result come as the \"benchmark\" event.",
       "options": {},
       "result": {
         "key": "string: the run, as the benchmark events name it"
@@ -431,7 +431,7 @@
         "android"
       ],
       "feature": "benchmark",
-      "about": "{key, phase: \"queued\" | \"downloading\" | \"checking\" | \"preparing\" | \"transcribing\" | \"speakers\" | \"done\" | \"failed\", fraction (0-1), secondsLeft?, error? (failed), result? (done: {seconds, audioSeconds, stages {prepare, load, transcribe, prints, cluster, check, tune}, transcript, segments, speakersFound, device {manufacturer, model, soc?, android, sdk, cores, memory}, app, engine, run (the local-turbo report: processor, backend, gpu, threads, decodeThreads, decoderCpu, beams, …)})}"
+      "about": "{key, phase: \"queued\" | \"downloading\" | \"checking\" | \"preparing\" | \"transcribing\" | \"speakers\" | \"done\" | \"failed\", fraction (0-1), secondsLeft?, error? (failed), result? (done: {seconds, audioSeconds, stages {prepare, load, transcribe, prints, cluster, check, tune}, transcript, segments, speakersFound, conditions {start, end: {thermalStatus?, batteryC?, charging?, screenOn?}}, device {manufacturer, model, soc?, android, sdk, cores, memory}, app, engine, run (the local-turbo report: processor, backend, gpu, threads, decodeThreads, decoderCpu, beams, …)})}"
     }
   }
 }

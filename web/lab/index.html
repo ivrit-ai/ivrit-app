@@ -249,6 +249,8 @@
         document.head.append(Object.assign(document.createElement("style"), { textContent: STYLE }));
         const $ = (id) => document.getElementById(id);
         $("phone-bench").hidden = false;
+        // Settings' "speed test for this phone" comes straight here.
+        if (location.hash === "#phone-bench") $("phone-bench").scrollIntoView();
         const PHASES = {
           queued: "ממתין", downloading: "מוריד", checking: "בודק את המעבד הגרפי", preparing: "קורא את ההקלטה",
           transcribing: "מתמלל", speakers: "מזהה דוברים", done: "מסיים",

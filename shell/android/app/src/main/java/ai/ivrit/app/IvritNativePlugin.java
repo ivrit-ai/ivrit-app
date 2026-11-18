@@ -71,6 +71,8 @@ public class IvritNativePlugin extends Plugin {
         // Watched folders: looked at whenever the app opens, and every 15 minutes.
         FolderWatchWorker.schedule(getContext());
         FolderWatchWorker.checkNow(getContext());
+        // Turbo ready ahead where this phone transcribes recordings (on Wi-Fi, charging).
+        PrepareWorker.schedule(getContext());
     }
 
     @Override
@@ -151,6 +153,7 @@ public class IvritNativePlugin extends Plugin {
             for (String variant : Turbo.VARIANTS) if (!variant.equals(model)) Turbo.forget(context, variant);
         }
         if (processor != null) Store.setTurboProcessor(context, processor);
+        if (model != null || processor != null) PrepareWorker.schedule(context);
         String chosen = Store.onDeviceModel(context);
         JSObject result = new JSObject()
             .put("model", chosen)
@@ -275,7 +278,10 @@ public class IvritNativePlugin extends Plugin {
         JSArray sources = call.getArray("sources");
         Store.configure(getContext(), call.getString("locale"), call.getString("communicator"), sources == null ? null : (JSONArray) sources);
         Store.configureUploads(getContext(), call.getString("site"), call.getString("appToken"));
-        if (call.hasOption("localOnly")) Store.setLocalOnly(getContext(), Boolean.TRUE.equals(call.getBoolean("localOnly", false)));
+        if (call.hasOption("localOnly")) {
+            Store.setLocalOnly(getContext(), Boolean.TRUE.equals(call.getBoolean("localOnly", false)));
+            PrepareWorker.schedule(getContext());
+        }
         call.resolve();
     }
 

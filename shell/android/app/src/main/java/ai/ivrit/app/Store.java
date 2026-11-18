@@ -69,6 +69,15 @@ final class Store {
         return prefs(context).getBoolean("local_only", false);
     }
 
+    /** A recording was transcribed on this phone (PrepareWorker.relevant). */
+    static void setUsedOnDevice(Context context) {
+        prefs(context).edit().putBoolean("used_on_device", true).apply();
+    }
+
+    static boolean usedOnDevice(Context context) {
+        return prefs(context).getBoolean("used_on_device", false);
+    }
+
     /** The Turbo model this phone transcribes recordings with: one of Turbo.VARIANTS. */
     static void setOnDeviceModel(Context context, String model) {
         prefs(context).edit().putString("on_device_model", model).apply();

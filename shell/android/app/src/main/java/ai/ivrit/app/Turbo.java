@@ -33,6 +33,11 @@ final class Turbo {
 
     /** The first is the default: as accurate as the full model, and fastest on ARM (ggml repacks it). */
     static final String[] VARIANTS = {"q8_0", "q5_1"};
+
+    /** A variant's download, as Settings tells it (scripts/turbo_model.py's files). */
+    static int megabytes(String variant) {
+        return "q5_1".equals(variant) ? 624 : 874;
+    }
     static final String LANGUAGE = "he";
     /**
      * Beam search (5), as the server: on the GPU (OpenCL, Galaxy S25) it took about

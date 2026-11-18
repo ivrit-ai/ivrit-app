@@ -273,6 +273,32 @@ final class TurboGpu {
     }
 
     /**
+     * Ready ahead (PrepareWorker): the GPU checked where it will be (decide), and the
+     * decoder's threads tuned where the check did not (no GPU, or the CPU chosen), on
+     * the check's own recording.
+     */
+    static void prepare(Context context, String variant, String processor, Progress checking) throws Exception {
+        Verdict v = decide(context, variant, processor, checking);
+        if (v.decodeThreads > 0) return;
+        long handle = Whisper.load(Turbo.file(context, variant).getPath(), -1, true, false);
+        if (handle == 0) throw new IllegalStateException("the Turbo model did not load");
+        try {
+            float[] sound = sample(context);
+            int threads = Whisper.tuneDecoder(handle, sound, sound.length, Turbo.threads());
+            if (threads > 0) tuned(context, variant, threads);
+        } finally {
+            Whisper.free(handle);
+        }
+    }
+
+    /** Nothing left for a recording to do first: the GPU checked (unless the CPU was chosen), the decoder tuned. */
+    static boolean prepared(Context context, String variant) {
+        Verdict v = load(context);
+        if (v == null || !key(variant).equals(v.key) || v.decodeThreads <= 0) return false;
+        return v.state != null || CPU.equals(Store.turboProcessor(context));
+    }
+
+    /**
      * The decoder's threads tuned on this phone where the check did not (no GPU, or
      * the CPU chosen): kept with the verdict, for its system build.
      */

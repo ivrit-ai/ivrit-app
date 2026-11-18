@@ -19,6 +19,20 @@ const where = (run) =>
     ? `מעבד גרפי${run.run.backend ? ` (${run.run.backend})` : ""}${run.run.decoderCpu ? ", מפענח במעבד" : ""}`
     : "מעבד";
 
+// Android's thermal status (0 none … 6 shutdown): from 2, moderate, the phone slows itself down.
+const HOT = 2;
+const hottest = (run) => Math.max(run.conditions?.start?.thermalStatus ?? 0, run.conditions?.end?.thermalStatus ?? 0);
+const THERMAL = ["רגיל", "חם קצת", "חם (מאט)", "חם מאוד (מאט)", "חם מאוד (מאט)", "חם מאוד (מאט)", "חם מאוד (מאט)"];
+
+function conditions(run) {
+  const s = run.conditions?.start, e = run.conditions?.end;
+  if (!s || !e) return "";
+  const temp = (c) => (c?.batteryC == null ? "?" : `${c.batteryC.toFixed(0)}°`);
+  return `<dt>חום</dt><dd>${esc(THERMAL[hottest(run)] ?? "?")} · סוללה ${temp(s)} ← ${temp(e)}</dd>
+    <dt>בטעינה</dt><dd>${s.charging ? "כן" : "לא"}</dd>
+    <dt>מסך דלוק</dt><dd>${s.screenOn || e.screenOn ? "כן" : "לא"}</dd>`;
+}
+
 export function card(run, url) {
   const accuracy = run.wer == null ? "—" : `${((1 - run.wer) * 100).toFixed(1)}%`;
   const stages = run.stages || {};
@@ -26,7 +40,8 @@ export function card(run, url) {
   return `<div class="bench-card">
     <div class="bench-big">${clock(run.seconds)}</div>
     <div class="bench-sub">5 דקות של עברית, פי ${speed(run).toFixed(2)} ממהירות הדיבור</div>
-    <div class="bench-verified ${run.verified ? "ok" : ""}">${run.verified ? "✓ מאומת על ידי Google Play" : "לא מאומת: לא נכנס לטבלה"}</div>
+    <div class="bench-verified ${run.verified ? "ok" : ""}">${run.verified ? "✓ מאומת על ידי Google Play" : "לא מאומת"}</div>
+    ${hottest(run) >= HOT ? `<div class="bench-hot">הטלפון התחמם במהלך הבדיקה והאט את עצמו: התוצאה איטית מהרגיל.</div>` : ""}
     <dl class="bench-facts">
       <dt>דיוק</dt><dd>${accuracy}</dd>
       <dt>דוברים</dt><dd>${esc(run.speakersFound ?? "—")}</dd>
@@ -43,6 +58,7 @@ export function card(run, url) {
         ${run.run?.gpu ? `<dt>מעבד גרפי</dt><dd>${esc(run.run.gpu)}</dd>` : ""}
         <dt>תהליכונים</dt><dd>${esc(run.run?.threads)} / מפענח ${esc(run.run?.decodeThreads)}</dd>
         <dt>Android</dt><dd>${esc(run.device?.android)}</dd>
+        ${conditions(run)}
       </dl>
     </details>
     ${url ? `<p class="bench-link"><a href="${esc(url)}">${esc(url)}</a></p>` : ""}
@@ -70,6 +86,7 @@ export const STYLE = `
   .bench-sub { text-align: center; color: var(--ink-2); margin: 6px 0 6px; }
   .bench-verified { text-align: center; font-size: 13px; color: var(--muted); margin: 0 0 14px; }
   .bench-verified.ok { color: var(--ok); }
+  .bench-hot { text-align: center; font-size: 13px; color: var(--danger); margin: -8px 0 14px; }
   .bench-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; font-size: 15px; }
   .bench-facts dt { color: var(--muted); }
   .bench-facts dd { margin: 0; overflow-wrap: anywhere; }

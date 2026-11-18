@@ -151,5 +151,10 @@ async function phoneModel(host, onModel) {
   return el("div", { class: "stack" }, [
     el("label", { class: "tr-field" }, [el("span", { text: tr("phoneModelTitle") }), model, note]),
     processorField,
+    // How fast this phone transcribes, and how it does among others.
+    el("div", { class: "row" }, [
+      el("a", { class: "btn", href: "/lab/#phone-bench", text: tr("phoneBenchmark") }),
+      el("a", { class: "btn quiet", href: "/bench/", text: tr("phoneLeaderboard") }),
+    ]),
   ]);
 }

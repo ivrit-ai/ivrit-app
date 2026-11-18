@@ -68,10 +68,16 @@ Open to comment; each with what it rests on.
    can run Turbo it is the model for recordings (shared, watched, handed over),
    with no choice of the zipformer any more (builds up to 259 offered it, and had
    it by default: the site moves those to Turbo); the zipformer transcribes live,
-   and recordings only on phones that cannot run Turbo. The model downloads the
-   first time it is used (Settings says how large it is and suggests Wi-Fi);
-   resumed where it broke off, checked against the server's hash. Only the chosen
-   size is kept; choosing another lets go of it.
+   and recordings only on phones that cannot run Turbo. Where the phone
+   transcribes recordings (on-device only, a folder watched for it, no account,
+   or once it has), Turbo is made ready ahead (`PrepareWorker`, queued at the
+   app's start and when those settings change): the model and the speaker model
+   downloaded, the GPU checked, the decoder's threads tuned, on Wi-Fi and while
+   charging only, in a quiet notification that says what it downloads and how
+   large; so a recording starts at full speed. What it has not done, a recording
+   still does first (its first download waiting for Wi-Fi). Downloads resume
+   where they broke off and are checked against the server's hash. Only the
+   chosen size is kept; choosing another lets go of it.
 
 7. **The server makes the quantized files** from ivrit-ai's f16, pinned by hash,
    on start-up (about a minute), as the lab's models are made. Better: publish
@@ -83,8 +89,9 @@ Open to comment; each with what it rests on.
    across pieces as if there were none (decision 15): a piece stops where less
    than a window is left, the next starts there, and what carries over (the
    previous text, the last speech) is in the checkpoint. stable-ts finds silence
-   against the whole file's loudness and length, so the file is decoded once
-   first for those (a minute's work for an hour, shown as preparing); they go
+   against the whole file's loudness and length, so a file longer than a piece
+   is decoded once first for those (a minute's work for an hour, shown as
+   preparing; a shorter one is all one piece, which finds them itself); they go
    into the checkpoint too. What still differs is the spectrogram's floor, set
    from each piece's loudest moment as Whisper sets it from the whole file's: a
    comma here and there. Memory: about 70 MB of sound and spectrogram a

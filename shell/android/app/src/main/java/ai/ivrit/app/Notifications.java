@@ -185,6 +185,44 @@ final class Notifications {
         return builder.build();
     }
 
+    /** "Getting transcription on this phone ready": the download (its size) or the GPU's check, how far, a way to stop. */
+    static android.app.Notification prepareProgress(Context context, String phase, int percent, int megabytes, PendingIntent cancel) {
+        ensureWorkChannel(context);
+        String text = "checking".equals(phase)
+            ? context.getString(R.string.local_checking, Math.max(0, percent))
+            : context.getString(R.string.prepare_download, megabytes, Math.max(0, percent));
+        return new NotificationCompat.Builder(context, WORK_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_ivrit)
+            .setContentTitle(context.getString(R.string.prepare_title))
+            .setContentText(text)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setProgress(100, Math.max(0, percent), false)
+            .addAction(0, context.getString(R.string.local_stop), cancel)
+            .setContentIntent(linkIntent(context, "#transcribe"))
+            .build();
+    }
+
+    /** Ready: quietly said once, gone at a tap. */
+    static void showPrepared(Context context) {
+        ensureWorkChannel(context);
+        if (!allowed(context)) return;
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, WORK_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_ivrit)
+            .setContentTitle(context.getString(R.string.prepare_ready))
+            .setContentText(context.getString(R.string.prepare_ready_text))
+            .setSilent(true)
+            .setAutoCancel(true)
+            .setContentIntent(linkIntent(context, "#transcribe"));
+        try {
+            NotificationManagerCompat.from(context).notify("turbo-ready".hashCode(), builder.build());
+        } catch (SecurityException ignored) {
+            // Notifications not allowed after all: only the word is lost.
+        }
+    }
+
     static void cancelLocalProgress(Context context, String key) {
         NotificationManagerCompat.from(context).cancel(localProgressId(key));
     }
