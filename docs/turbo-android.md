@@ -20,7 +20,7 @@ Target: Android phones from 2023 on, mid-range and up.
 | Which phones, the download, threads | `Turbo.java` |
 | GPU or CPU: the check, crash guard, the user's choice | `TurboGpu.java` |
 | Words, segments and speakers as the server makes them (ports of faster-whisper, stable-ts and ivrit's diarization); sound to 16 kHz | `shell/native/` (its README), `TurboTranscript.java`, `Speakers.java`, `Resampler.java` |
-| The speaker model, converted from SpeechBrain's when the server starts, served at `/models/turbo/` too | `scripts/speaker_model.py`, `launch.sh` |
+| The speaker model, converted from SpeechBrain's, on Hugging Face (`ivrit-ai/spkrec-ecapa-voxceleb-ggml`), downloaded pinned to its revision and hash | `scripts/speaker_model.py`, `Speakers.java` |
 | A recording through it, a few minutes at a time, with checkpoints | `LocalTranscribeWorker.transcribeTurbo` |
 | Settings: model, and where it runs | `web/transcription/settings.js`, `onDeviceModel` in `shell/native-api.json` |
 
@@ -212,14 +212,16 @@ Open to comment; each with what it rests on.
       links ONNX Runtime statically and exports none of it, and making an ONNX
       file needs PyTorch, which the server has not. `scripts/speaker_model.py`
       reads SpeechBrain's checkpoint with numpy and writes it with q8_0 matrices
-      (23 MB; its prints at cosine 0.9998 to SpeechBrain's).
+      (23 MB; its prints at cosine 0.9998 to SpeechBrain's), uploaded to Hugging
+      Face (`ivrit-ai/spkrec-ecapa-voxceleb-ggml`, Apache-2.0 as SpeechBrain's),
+      where the app downloads it, pinned to a revision and its hash.
     - **A voice print a segment, after each piece**, while its sound is in memory,
       all of a piece's at once, each core taking whole segments (the model is a
       chain of small steps that threads only wait on; on the S25 3.2 s for 213 s
       of speech, 107 s before);
       the prints go into the checkpoint, and the speakers are found once, at the
-      end, as ivrit does over the whole file. No speaker model (the site still
-      making it, a failed download): the transcript comes without speakers.
+      end, as ivrit does over the whole file. No speaker model (a failed
+      download): the transcript comes without speakers.
     - The server keeps speakers in on-device transcripts (`checked_local_results`),
       ivrit's labels only (`SPEAKER_00`, …).
     - The GPU check's ladder is 7: its run includes the DTW pass now.

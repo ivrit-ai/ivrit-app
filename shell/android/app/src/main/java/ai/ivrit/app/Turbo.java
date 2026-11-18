@@ -182,15 +182,25 @@ final class Turbo {
     /** One of the site's models (model), downloaded where it is missing, resumed where it broke off, checked. */
     static void download(Context context, String name, Progress progress) throws Exception {
         if (downloaded(context, name)) return;
+        String base = Store.site(context) + "/models/turbo/" + name;
+        download(context, name, base + ".bin", new JSONObject(fetch(base + ".json")), progress);
+    }
+
+    /**
+     * A model from `url` (pinned: Hugging Face's at a revision), kept as `name` (model),
+     * downloaded where it is missing, resumed where it broke off, checked against
+     * wanted's {bytes, sha256}.
+     */
+    static void download(Context context, String name, String url, JSONObject wanted, Progress progress) throws Exception {
+        if (downloaded(context, name)) return;
         File dir = dir(context);
         if (!dir.isDirectory() && !dir.mkdirs()) throw new java.io.IOException("no room for the Turbo model");
-        String base = Store.site(context) + "/models/turbo/" + name;
-        JSONObject wanted = new JSONObject(fetch(base + ".json"));
         long total = wanted.getLong("bytes");
         File part = new File(dir, model(context, name).getName() + ".part");
         long have = part.length() <= total ? part.length() : 0;
         if (dir.getUsableSpace() < total - have + (100L << 20)) throw new java.io.IOException("no room for the Turbo model");
-        HttpURLConnection connection = (HttpURLConnection) new URL(base + ".bin").openConnection();
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        connection.setInstanceFollowRedirects(true); // Hugging Face's files come from its CDN
         connection.setConnectTimeout(20000);
         connection.setReadTimeout(60000);
         if (have > 0) connection.setRequestProperty("Range", "bytes=" + have + "-");

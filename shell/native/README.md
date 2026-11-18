@@ -17,7 +17,9 @@ one static library, `ivritnative`, over whisper.cpp's and ggml's targets).
 | `transcript/` | the decoding loop over whisper.cpp's model a window at a time (where each window starts, the previous text as the prompt, the fallback to higher temperatures, the no-speech skip, the segments), each window's words through `whisperwords`, then `stablets` | faster-whisper 1.1.1, `generate_segments` and `generate_with_fallback`; stable-ts's `faster_transcribe` |
 
 The speaker model is SpeechBrain's checkpoint converted (numpy only, no PyTorch)
-by `scripts/speaker_model.py`, its large matrices q8_0: 23 MB.
+by `scripts/speaker_model.py`, its large matrices q8_0: 23 MB, on Hugging Face as
+[ivrit-ai/spkrec-ecapa-voxceleb-ggml](https://huggingface.co/ivrit-ai/spkrec-ecapa-voxceleb-ggml),
+where the apps download it from.
 
 whisper.cpp needs changes (`shell/android/app/src/main/cpp/patches/whisper-dtw-flash.patch`):
 

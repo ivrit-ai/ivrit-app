@@ -8,11 +8,15 @@ SpeechBrain publishes it as a PyTorch checkpoint. This reads it without PyTorch
 checked against its hash, and writes it as the phone runs it: each convolution as
 one matrix per tap, each batch norm folded into a scale and a shift (its running
 statistics, as in evaluation), and the large matrices quantized (q8_0, as
-turbo_model.py does whisper.cpp's), in the background as the server starts
-(launch.sh), next to the Turbo model.
+turbo_model.py does whisper.cpp's).
+
+The files are on Hugging Face, ivrit-ai/spkrec-ecapa-voxceleb-ggml (ecapa-q8_0.bin,
+ecapa-f16.bin, with a model card), where the apps download them from, pinned to a
+revision and checked by hash (Speakers.java): a new version made here is uploaded
+there, and the apps pointed at its revision.
 
 <out>/speakers-ecapa-<dtype>.bin, then <out>/speakers-ecapa-<dtype>.json ({bytes,
-sha256}) last: while it is missing, the model is not ready.
+sha256}) last.
 
     python3 scripts/speaker_model.py [--source URL-or-file] [--out /tmp/turbo-models] [q8_0 f16]
 
