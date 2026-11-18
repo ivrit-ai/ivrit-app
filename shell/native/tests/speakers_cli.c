@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
         missing[i] = !sound[i] || !printed[i];
         clustered[i] = !missing[i] && ends[i] - starts[i] >= SP_MIN_CLUSTERED;
     }
-    int speakers = sp_cluster(prints, clustered, missing, count, labels);
+    int speakers = sp_cluster(prints, clustered, missing, count, labels, NULL, NULL);
     printf("{\"speakers\": %d, \"segments\": [", speakers);
     for (size_t i = 0; i < count; i++) {
         printf("%s\n{\"label\": %d, \"print\": ", i ? "," : "", labels[i]);

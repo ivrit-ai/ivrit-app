@@ -62,16 +62,28 @@ public class LocalTranscribeWorker extends Worker {
         super(context, params);
     }
 
-    /** One more recording, after those already waiting. */
+    /**
+     * One more recording, after those already waiting. While the Turbo model is not
+     * downloaded yet (874 MB), it waits for Wi-Fi (an unmetered network) to fetch it,
+     * and pauses there if Wi-Fi goes, to resume the download where it stopped.
+     */
     static void enqueue(Context context, Data input) {
-        OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(LocalTranscribeWorker.class)
+        String variant = Turbo.chosen(context);
+        boolean benchmark = "benchmark".equals(input.getString("kind"));
+        boolean download = !benchmark && variant != null && !Turbo.ready(context, variant);
+        OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(LocalTranscribeWorker.class)
             .setInputData(input)
             .addTag("local:" + input.getString("key"))
             // Waiting its turn is a retry: looked at again every 20 seconds.
-            .setBackoffCriteria(androidx.work.BackoffPolicy.LINEAR, 20, java.util.concurrent.TimeUnit.SECONDS)
-            .build();
-        WorkManager.getInstance(context).enqueueUniqueWork("local-" + input.getString("key"), ExistingWorkPolicy.KEEP, request);
-        IvritNativePlugin.localTranscription(input.getString("key"), input.getString("name"), input.getString("folder"), "queued", 0, null, null);
+            .setBackoffCriteria(androidx.work.BackoffPolicy.LINEAR, 20, java.util.concurrent.TimeUnit.SECONDS);
+        if (download) {
+            builder.setConstraints(new androidx.work.Constraints.Builder()
+                .setRequiredNetworkType(androidx.work.NetworkType.UNMETERED).build());
+        }
+        WorkManager.getInstance(context).enqueueUniqueWork("local-" + input.getString("key"), ExistingWorkPolicy.KEEP, builder.build());
+        if (benchmark) IvritNativePlugin.benchmark(input.getString("key"), "queued", 0, null, null);
+        else IvritNativePlugin.localTranscription(input.getString("key"), input.getString("name"), input.getString("folder"),
+            download && !Store.unmetered(context) ? "wifi" : "queued", 0, null, null);
     }
 
     static Data.Builder input(String kind, String key, String source, String name, String type, String folder, boolean saveAudio, String origin) {
@@ -93,6 +105,9 @@ public class LocalTranscribeWorker extends Worker {
     private String folder;
     private long told;
     private String engine = LocalModel.ENGINE;
+    // A benchmark's (Benchmark) result as it is made, and each stage's milliseconds; null otherwise.
+    private JSONObject bench;
+    private long tuneMs, transcribeMs, printsMs;
     // The Turbo model while it is loaded, so stopping the work stops it (onStopped).
     private long turbo;
 
@@ -105,12 +120,13 @@ public class LocalTranscribeWorker extends Worker {
         name = input.getString("name");
         folder = input.getString("folder");
         String kind = input.getString("kind");
-        Uri source = sourceUri(input.getString("source"));
+        // A benchmark's recording comes with it (Benchmark), once Turbo is there.
+        Uri source = "benchmark".equals(kind) ? Uri.EMPTY : sourceUri(input.getString("source"));
         if (source == null) return done(kind, input, null, "gone");
         // Another recording has the model: this one waits its turn, without holding
         // one of WorkManager's few threads (uploads and folder checks need them).
         if (!TURN.tryAcquire()) {
-            IvritNativePlugin.localTranscription(key, name, folder, "queued", 0, null, null);
+            tell(kind, "queued", 0, null, null);
             return Result.retry();
         }
         try {
@@ -128,15 +144,30 @@ public class LocalTranscribeWorker extends Worker {
         }
         try {
             String variant = Turbo.chosen(context);
+            boolean benchmark = "benchmark".equals(kind);
+            if (benchmark && variant == null) return done(kind, input, null, "unsupported");
+            if (benchmark) bench = new JSONObject();
             if (variant != null) {
                 engine = Turbo.engine(variant);
                 Turbo.ensure(context, variant, (done, total) -> progress("downloading", done / (double) Math.max(1, total), null));
             } else {
                 LocalModel.ensure(context, (done, total) -> progress("model", done / (double) Math.max(1, total), null));
             }
+            if (benchmark) source = Uri.fromFile(Benchmark.ensure(context, (done, total) -> progress("downloading", done / (double) Math.max(1, total), null)));
             double duration = AudioDecoder.duration(context, source);
             JSONArray segments = variant != null ? turboYielding(context, kind, source, duration, variant) : transcribe(context, source, duration);
             if (isStopped()) return Result.success();
+            if (benchmark) {
+                StringBuilder text = new StringBuilder();
+                for (int i = 0; i < segments.length(); i++) text.append(segments.getJSONObject(i).optString("text")).append(' ');
+                bench.put("transcript", text.toString().trim())
+                    .put("segments", segments.length())
+                    .put("device", Benchmark.device(context))
+                    .put("app", appVersion(context))
+                    .put("engine", engine)
+                    .put("audioSeconds", duration);
+                return done(kind, input, "benchmark", null);
+            }
             progress("saving", 1, null);
             String resultsId;
             try {
@@ -376,12 +407,16 @@ public class LocalTranscribeWorker extends Worker {
         double from = done.offset;
         int[] prompt = done.turbo != null ? done.prompt : Whisper.prompt();
         // The whole file's length and loudness, read once (and kept in the checkpoint).
+        long preparing = System.currentTimeMillis();
         double[] file = done.turbo != null && done.samples > 0 ? new double[] {done.samples, done.level, done.origin}
             : fileLevel(context, source, duration);
+        long prepareMs = System.currentTimeMillis() - preparing;
+        long checking = System.currentTimeMillis();
         double[] state = {done.turbo != null ? done.lastSpeech : from, done.after, from, file[0], file[1], file[2]};
         // On the GPU where it passed its check on this phone (TurboGpu), once checked.
         String processor = Store.turboProcessor(context);
         TurboGpu.Verdict verdict = TurboGpu.decide(context, variant, processor, fraction -> progress("checking", fraction, null));
+        long checkMs = System.currentTimeMillis() - checking;
         boolean gpu = TurboGpu.onGpu(verdict, processor);
         long loading = System.currentTimeMillis();
         String path = Turbo.file(context, variant).getPath();
@@ -449,7 +484,7 @@ public class LocalTranscribeWorker extends Worker {
         }
         double heard = duration > 0 ? duration - from : 0;
         double took = (System.currentTimeMillis() - started) / 1000.0;
-        post(context, "local-turbo", new JSONObject()
+        JSONObject run = new JSONObject()
             .put("kind", kind)
             .put("engine", engine)
             .put("seconds", heard)
@@ -470,8 +505,34 @@ public class LocalTranscribeWorker extends Worker {
             .put("decodeThreads", decodeThreads[0])
             .put("decoderCpu", gpu && verdict.decoderCpu)
             .put("speakers", speakers != 0)
-            .put("system", Whisper.system()));
-        return TurboTranscript.json(segments, speakers != 0 && !segments.isEmpty() ? TurboTranscript.speakers(segments) : null);
+            .put("system", Whisper.system());
+        post(context, "local-turbo", run);
+        // Who speaks when, over the whole recording at once: the last step, told as its own.
+        int[] labels = null;
+        long clustering = System.currentTimeMillis();
+        if (speakers != 0 && !segments.isEmpty()) {
+            progress("speakers", 0, null);
+            labels = TurboTranscript.speakers(segments, percent -> progress("speakers", percent / 100.0, null));
+        }
+        long clusterMs = System.currentTimeMillis() - clustering;
+        if (bench != null) {
+            java.util.Set<Integer> found = new java.util.HashSet<>();
+            if (labels != null) for (int label : labels) if (label >= 0) found.add(label);
+            // The stages, seconds: the run itself (prepare to speakers), and what only a
+            // phone's first run pays (the GPU check, tuning the decoder's threads).
+            bench.put("run", run)
+                .put("speakersFound", found.size())
+                .put("stages", new JSONObject()
+                    .put("prepare", prepareMs / 1000.0)
+                    .put("load", (started - loading) / 1000.0)
+                    .put("transcribe", (transcribeMs - tuneMs) / 1000.0)
+                    .put("prints", printsMs / 1000.0)
+                    .put("cluster", clusterMs / 1000.0)
+                    .put("check", checkMs / 1000.0)
+                    .put("tune", tuneMs / 1000.0))
+                .put("seconds", (prepareMs + (started - loading) + transcribeMs - tuneMs + printsMs + clusterMs) / 1000.0);
+        }
+        return TurboTranscript.json(segments, labels);
     }
 
     /** The speaker model loaded (Speakers), downloaded first if need be; 0 when it is not to be had. */
@@ -498,10 +559,13 @@ public class LocalTranscribeWorker extends Worker {
         double start = sound.start;
         double seconds = sound.seconds();
         if (decodeThreads[0] <= 0) {
+            long tuning = System.currentTimeMillis();
             decodeThreads[0] = Whisper.tuneDecoder(handle, sound.samples, sound.length, threads);
+            tuneMs += System.currentTimeMillis() - tuning;
             if (decodeThreads[0] > 0) TurboGpu.tuned(context, variant, decodeThreads[0]);
         }
         Object[] heard;
+        long transcribing = System.currentTimeMillis();
         // On the GPU: a piece taking over twice its length (plus two minutes) has hung.
         try (TurboGpu.Watchdog ignored = watch == null ? null
                 : new TurboGpu.Watchdog(context, variant, watch, "run", (long) (2000 * seconds) + 120_000)) {
@@ -513,8 +577,10 @@ public class LocalTranscribeWorker extends Worker {
                 progress("transcribing", fraction, share > 0.03 ? spent * (1 - fraction) / share : null);
             }, start, last, state, prompt);
         }
+        transcribeMs += System.currentTimeMillis() - transcribing;
         if (heard == null) throw new InterruptedException("stopped");
         List<TurboTranscript.Segment> piece = TurboTranscript.piece(heard);
+        long printing = System.currentTimeMillis();
         if (speakers != 0 && !piece.isEmpty()) {
             if (isStopped()) throw new InterruptedException("stopped");
             double[] starts = new double[piece.size()], ends = new double[piece.size()];
@@ -527,6 +593,7 @@ public class LocalTranscribeWorker extends Worker {
                 if (!Float.isNaN(prints[i * 192])) piece.get(i).print = java.util.Arrays.copyOfRange(prints, i * 192, (i + 1) * 192);
             }
         }
+        printsMs += System.currentTimeMillis() - printing;
         segments.addAll(piece);
         sound.keepFrom(state[2]);
         if (!last) Checkpoint.saveTurbo(context, key, engine, TurboTranscript.save(segments), state[2], state[0], state[1], prompt,
@@ -661,6 +728,10 @@ public class LocalTranscribeWorker extends Worker {
             });
             IvritNativePlugin.watchChanged(watchId);
         }
+        if ("benchmark".equals(kind)) {
+            tell(kind, resultsId != null ? "done" : "failed", 1, null, why);
+            return Result.success();
+        }
         if (resultsId == null && why != null && !"gone".equals(why)) Notifications.showLocalFailed(context, key, name, why);
         IvritNativePlugin.localTranscription(key, name, folder, resultsId != null ? "done" : "failed", 1, resultsId, why);
         return Result.success();
@@ -675,7 +746,13 @@ public class LocalTranscribeWorker extends Worker {
         } catch (Exception ignored) {
             // The notification is only a view of the work.
         }
-        IvritNativePlugin.localTranscription(key, name, folder, phase, fraction, null, secondsLeft == null ? null : String.valueOf(Math.round(secondsLeft)));
+        tell(getInputData().getString("kind"), phase, fraction, null, secondsLeft == null ? null : String.valueOf(Math.round(secondsLeft)));
+    }
+
+    /** To the page: a recording's progress (localTranscription), or a benchmark's (benchmark). */
+    private void tell(String kind, String phase, double fraction, String resultsId, String extra) {
+        if ("benchmark".equals(kind)) IvritNativePlugin.benchmark(key, phase, fraction, "done".equals(phase) ? bench : null, extra);
+        else IvritNativePlugin.localTranscription(key, name, folder, phase, fraction, resultsId, extra);
     }
 
     private ForegroundInfo foreground(int percent, String phase, Double secondsLeft) {

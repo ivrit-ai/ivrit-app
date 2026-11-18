@@ -18,10 +18,10 @@ import org.json.JSONObject;
 /**
  * ivrit.ai's Turbo model (whisper-large-v3-turbo, trained further on Hebrew) on the
  * phone, with whisper.cpp (Whisper): far more accurate than the zipformer
- * (LocalModel), and far larger and slower, so the user chooses it (the web app's
- * Settings, onDeviceModel), and it is offered only on phones that can run it
- * (supported): arm64 with dot products and half floats, and about 6 GB of memory,
- * as it takes about 1 GB while it works.
+ * (LocalModel), with speakers, and far larger and slower. It transcribes every
+ * recording on phones that can run it (supported): arm64 with dot products and half
+ * floats, and about 6 GB of memory, as it takes about 1 GB while it works. The
+ * zipformer transcribes live, and recordings on the phones that cannot.
  *
  * The model is ggml's q8_0 or q5_1 (scripts/turbo_model.py), served by the site at
  * /models/turbo/ and downloaded the first time it is used, resumed where a download
@@ -31,7 +31,6 @@ import org.json.JSONObject;
 final class Turbo {
     private Turbo() {}
 
-    static final String ZIPFORMER = "zipformer";
     /** The first is the default: as accurate as the full model, and fastest on ARM (ggml repacks it). */
     static final String[] VARIANTS = {"q8_0", "q5_1"};
     static final String LANGUAGE = "he";
@@ -62,7 +61,7 @@ final class Turbo {
         return "whisper-turbo-he-" + variant;
     }
 
-    /** The Turbo model chosen, or null for the zipformer (also when this phone cannot run it). */
+    /** The Turbo model to transcribe recordings with, or null for the zipformer where this phone cannot run it. */
     static String chosen(Context context) {
         String model = Store.onDeviceModel(context);
         return Arrays.asList(VARIANTS).contains(model) && supported(context) ? model : null;

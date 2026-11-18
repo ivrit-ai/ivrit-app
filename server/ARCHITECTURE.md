@@ -121,6 +121,7 @@ build_bundle.py           PyInstaller bundling script
 | Push | `GET /sw.js` (unauthenticated), `GET /push/config`, `POST /push/subscribe` |
 | Share target | `POST /share-target` (unauthenticated fallback; the worker normally answers it) |
 | System | `GET /languages`, `POST /client_heartbeat`, `GET /stats` |
+| On-device benchmark (`bench.py`, app site only, unauthenticated) | `POST /bench/results` (a phone's run of ivrit-ai/turbo-benchmark: stored in `bench_results`, its transcript scored here against `bench/benchmark-he.txt`), `GET /bench/results/{id}`, `GET /bench/top` (each phone's fastest run); pages at `/bench/` (web/bench/) and the app's Lab page |
 
 ## Job Queue
 
@@ -165,6 +166,8 @@ Jobs go through: upload -> pre-transcoding (ffmpeg to OPUS) -> queue -> RunPod/l
 | `RUNPOD_API_KEY` | (required in cloud) | Default RunPod API key |
 | `RUNPOD_ENDPOINT_ID` | (required in cloud) | Default RunPod endpoint ID |
 | `RUNPOD_TEMPLATE_ID` | (none) | RunPod template ID for auto-creating user endpoints |
+| `PLAY_INTEGRITY_PROJECT` | (none) | The Google Cloud project number linked to the Android app in the Play Console (App integrity), which the app asks Play Integrity with for the benchmark (`bench.py`); with the next, results Play vouches for are verified, and only those make the leaderboard |
+| `PLAY_INTEGRITY_SERVICE_ACCOUNT` | (none) | That project's service account key (its JSON), which decodes the app's Play Integrity tokens |
 | `RUNPOD_KEY_ENCRYPTION_KEY` | (required outside local mode) | Fernet key encrypting users' stored RunPod keys. Startup fails if unset or malformed. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Changing it makes every stored key unreadable (users are asked to re-enter theirs) |
 | `SESSION_ENCRYPTION_KEY` | (required outside local mode) | Fernet key encrypting the session cookie (email, Google refresh token, RunPod key). Startup fails if unset or malformed. Generate the same way as `RUNPOD_KEY_ENCRYPTION_KEY` but use a distinct value. Changing it signs every user out once; nothing stored is lost. Must be set before deploying code that requires it |
 | `BASE_URL` | (required in cloud) | Public base URL of the service |

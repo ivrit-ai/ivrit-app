@@ -120,15 +120,15 @@ public class IvritNativePlugin extends Plugin {
 
     private JSArray features() {
         JSArray features = new JSArray();
-        features.put("watchFolders").put("localTranscription").put("appSettings").put("saveFiles");
+        features.put("watchFolders").put("localTranscription").put("appSettings").put("saveFiles").put("shareText").put("integrity");
         if (LocalModel.bundled(getContext())) features.put("bundledModel");
-        if (Turbo.supported(getContext())) features.put("turboModel");
+        if (Turbo.supported(getContext())) features.put("turboModel").put("benchmark");
         return features;
     }
 
     /**
-     * The model this phone transcribes with: "zipformer", or the Turbo model ("q8_0",
-     * "q5_1"; Turbo), whether that one is downloaded, where it runs ("auto", "cpu",
+     * The Turbo model this phone transcribes recordings with ("q8_0", "q5_1"; Turbo;
+     * the zipformer is live transcription's only), whether that one is downloaded, where it runs ("auto", "cpu",
      * "gpu"; TurboGpu) and what the GPU's check found. Given `model` or `processor`,
      * chooses it; choosing a model lets go of any other Turbo model downloaded.
      */
@@ -141,7 +141,7 @@ public class IvritNativePlugin extends Plugin {
         }
         String model = call.getString("model");
         String processor = call.getString("processor");
-        if ((model != null && !Turbo.ZIPFORMER.equals(model) && !java.util.Arrays.asList(Turbo.VARIANTS).contains(model))
+        if ((model != null && !java.util.Arrays.asList(Turbo.VARIANTS).contains(model))
             || (processor != null && !java.util.Arrays.asList(TurboGpu.PROCESSORS).contains(processor))) {
             call.reject("unknown model or processor", "bad_request");
             return;
@@ -154,7 +154,7 @@ public class IvritNativePlugin extends Plugin {
         String chosen = Store.onDeviceModel(context);
         JSObject result = new JSObject()
             .put("model", chosen)
-            .put("ready", Turbo.ZIPFORMER.equals(chosen) || Turbo.ready(context, chosen))
+            .put("ready", Turbo.ready(context, chosen))
             .put("processor", Store.turboProcessor(context));
         TurboGpu.Verdict verdict = TurboGpu.load(context);
         if (verdict != null && verdict.state != null && verdict.key.endsWith(" " + chosen)) {
@@ -548,6 +548,76 @@ public class IvritNativePlugin extends Plugin {
 
     /** What the page last heard of each recording on its way, so My files can show them. */
     private static final java.util.Map<String, JSObject> local = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * The benchmark (Benchmark): ivrit.ai's recording transcribed with Turbo as a
+     * recording is, timed and not saved; {key}, its progress and result in "benchmark".
+     */
+    @PluginMethod
+    public void benchmark(PluginCall call) {
+        Context context = getContext();
+        if (!Turbo.supported(context)) {
+            call.reject("this phone cannot run the Turbo model", "unsupported");
+            return;
+        }
+        String key = "bench-" + java.util.UUID.randomUUID();
+        LocalTranscribeWorker.enqueue(context, LocalTranscribeWorker
+            .input("benchmark", key, "", context.getString(R.string.benchmark_title), "audio/flac", "", false, "benchmark").build());
+        call.resolve(new JSObject().put("key", key));
+    }
+
+    /** From LocalTranscribeWorker: a benchmark's phase (as localTranscription's), and its result once done. */
+    static void benchmark(String key, String phase, double fraction, org.json.JSONObject result, String error) {
+        JSObject data = new JSObject().put("key", key).put("phase", phase).put("fraction", fraction);
+        if (error != null) data.put("transcribing".equals(phase) ? "secondsLeft" : "error", error);
+        if (result != null) {
+            try {
+                data.put("result", new JSObject(result.toString()));
+            } catch (org.json.JSONException ignored) {
+                // Only the result is lost; the page says it failed.
+            }
+        }
+        IvritNativePlugin plugin = current;
+        if (plugin != null) plugin.notifyListeners("benchmark", data, true);
+    }
+
+    /**
+     * Google Play's word for a request from this app ({requestHash, cloudProjectNumber}:
+     * Play Integrity's standard request, its hash the caller's, as the site checks it):
+     * {token}, decoded and checked by the site. Rejects where Play cannot vouch (no Play
+     * services, the project not linked).
+     */
+    @PluginMethod
+    public void integrityToken(PluginCall call) {
+        String hash = call.getString("requestHash");
+        Long project = call.getLong("cloudProjectNumber");
+        if (hash == null || project == null || project <= 0) {
+            call.reject("requestHash and cloudProjectNumber are needed", "bad_request");
+            return;
+        }
+        com.google.android.play.core.integrity.StandardIntegrityManager manager =
+            com.google.android.play.core.integrity.IntegrityManagerFactory.createStandard(getContext());
+        manager.prepareIntegrityToken(com.google.android.play.core.integrity.StandardIntegrityManager.PrepareIntegrityTokenRequest
+                .builder().setCloudProjectNumber(project).build())
+            .addOnSuccessListener(provider -> provider.request(
+                    com.google.android.play.core.integrity.StandardIntegrityManager.StandardIntegrityTokenRequest
+                        .builder().setRequestHash(hash).build())
+                .addOnSuccessListener(token -> call.resolve(new JSObject().put("token", token.token())))
+                .addOnFailureListener(e -> call.reject(String.valueOf(e.getMessage()), "unavailable")))
+            .addOnFailureListener(e -> call.reject(String.valueOf(e.getMessage()), "unavailable"));
+    }
+
+    /** Text (a link with it) to another app, through the share sheet: {title, text}. */
+    @PluginMethod
+    public void shareText(PluginCall call) {
+        Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, call.getString("text", ""));
+        String title = call.getString("title");
+        if (title != null) send.putExtra(Intent.EXTRA_SUBJECT, title);
+        Intent chooser = Intent.createChooser(send, title);
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(chooser);
+        call.resolve();
+    }
 
     /** A shared recording, transcribed on the phone: {id, folder, saveAudio, origin}. */
     @PluginMethod

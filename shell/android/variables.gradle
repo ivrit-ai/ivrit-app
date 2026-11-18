@@ -18,4 +18,5 @@ ext {
     googleIdVersion = '1.2.1'
     playServicesAuthVersion = '21.4.0'
     workVersion = '2.11.2'
+    playIntegrityVersion = '1.4.0'
 }

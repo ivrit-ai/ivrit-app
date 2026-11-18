@@ -190,13 +190,13 @@
         "android"
       ],
       "feature": "turboModel",
-      "note": "The model the phone transcribes recordings with, in the background (shared, watched, handed over): the zipformer, or ivrit.ai's Turbo model (whisper.cpp; scripts/turbo_model.py's quantizations), which only phones that can run it offer, and where that runs: the GPU (Vulkan) once it has passed a check on the phone (TurboGpu), or the CPU. The Turbo model downloads the first time it transcribes; choosing another lets go of it.",
+      "note": "The model the phone transcribes recordings with, in the background (shared, watched, handed over): ivrit.ai's Turbo model (whisper.cpp; scripts/turbo_model.py's quantizations), on phones that can run it (elsewhere, and live, the zipformer), and where that runs: the GPU once it has passed a check on the phone (TurboGpu), or the CPU. The Turbo model downloads the first time it transcribes; choosing another lets go of it. Builds up to 259 also offered \"zipformer\" (and had it by default).",
       "options": {
-        "model": "string, optional: \"zipformer\" | \"q8_0\" | \"q5_1\", to choose it",
+        "model": "string, optional: \"q8_0\" | \"q5_1\", to choose it",
         "processor": "string, optional: \"auto\" (the GPU when it passed its check and is faster) | \"cpu\" | \"gpu\" (whenever it gives the right words), to choose it"
       },
       "result": {
-        "model": "\"zipformer\" | \"q8_0\" | \"q5_1\": the one chosen",
+        "model": "\"q8_0\" | \"q5_1\": the one chosen",
         "ready": "boolean: it needs no download",
         "processor": "\"auto\" | \"cpu\" | \"gpu\": the one chosen",
         "gpu": "optional, once the GPU was checked with this model: {name, state: \"faster\" | \"slower\" | \"wrong\" | \"failed\" | \"crashed\" | \"none\", cpuSeconds, gpuSeconds} (the check's 12 seconds of Hebrew)"
@@ -359,6 +359,50 @@
       "note": "The app's page in the phone's settings, for its permissions (the microphone).",
       "options": {},
       "result": {}
+    },
+    "benchmark": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "benchmark",
+      "note": "The on-device benchmark (the Lab page): ivrit.ai's benchmark recording (ivrit-ai/turbo-benchmark) transcribed with the Turbo model as a recording is, timed stage by stage and not saved; the Turbo model and the recording download first if missing (any network: it was asked for). Its progress and result come as the \"benchmark\" event.",
+      "options": {},
+      "result": {
+        "key": "string: the run, as the benchmark events name it"
+      },
+      "rejects": [
+        "unsupported"
+      ]
+    },
+    "shareText": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "shareText",
+      "note": "Text (with a link in it) to another app, through the share sheet: Android's WebView has no Web Share.",
+      "options": {
+        "title": "string, optional: the subject",
+        "text": "string: what is shared"
+      },
+      "result": {}
+    },
+    "integrityToken": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "integrity",
+      "note": "Google Play's word for a request from this app: Play Integrity's standard request, with the caller's hash (the benchmark: the SHA-256 of its result as posted) and the Cloud project linked to the app (GET /bench/config). The site decodes and checks the token (server/bench.py).",
+      "options": {
+        "requestHash": "string: what the token is bound to",
+        "cloudProjectNumber": "number: the linked Google Cloud project"
+      },
+      "result": {
+        "token": "string"
+      },
+      "rejects": [
+        "bad_request",
+        "unavailable"
+      ]
     }
   },
   "events": {
@@ -380,7 +424,14 @@
         "android"
       ],
       "feature": "localTranscription",
-      "about": "{key, name, folder, phase: \"queued\" | \"model\" | \"transcribing\" | \"saving\" | \"done\" | \"failed\", fraction (0-1), secondsLeft?, resultsId? (done), error? (failed)}"
+      "about": "{key, name, folder, phase: \"queued\" | \"wifi\" | \"model\" | \"downloading\" | \"checking\" | \"preparing\" | \"speakers\" | \"transcribing\" | \"saving\" | \"done\" | \"failed\", fraction (0-1), secondsLeft?, resultsId? (done), error? (failed)}"
+    },
+    "benchmark": {
+      "platforms": [
+        "android"
+      ],
+      "feature": "benchmark",
+      "about": "{key, phase: \"queued\" | \"downloading\" | \"checking\" | \"preparing\" | \"transcribing\" | \"speakers\" | \"done\" | \"failed\", fraction (0-1), secondsLeft?, error? (failed), result? (done: {seconds, audioSeconds, stages {prepare, load, transcribe, prints, cluster, check, tune}, transcript, segments, speakersFound, device {manufacturer, model, soc?, android, sdk, cores, memory}, app, engine, run (the local-turbo report: processor, backend, gpu, threads, decodeThreads, decoderCpu, beams, …)})}"
     }
   }
 }

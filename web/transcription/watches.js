@@ -124,7 +124,7 @@ async function addSheet(existing) {
   const where = el("select", { class: "tr-select", "aria-label": tr("whereTitle") }, [
     el("option", { value: "auto", text: tr("watchWhereAuto") }),
     el("option", { value: "server", text: tr("watchWhereServer") }),
-    el("option", { value: "device", text: tr("watchWhereDevice") }),
+    el("option", { value: "device", text: tr(host.deviceSpeakers?.() ? "watchWhereDeviceSpeakers" : "watchWhereDevice") }),
   ]);
   where.value = existing?.where || "auto";
   const whereField = el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("whereTitle") }), where]);

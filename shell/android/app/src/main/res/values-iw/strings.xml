@@ -8,6 +8,8 @@
     <string name="local_preparing">מכין את ההקלטה</string>
     <string name="local_model">מוריד את מודל התמלול (פעם אחת) · %1$d%%</string>
     <string name="local_checking">בודק את המעבד הגרפי של הטלפון · %1$d%%</string>
+    <string name="local_speakers">מזהה את הדוברים · %1$d%%</string>
+    <string name="benchmark_title">בדיקת מהירות של ivrit.ai</string>
     <string name="local_percent">%1$d%%</string>
     <string name="local_percent_left">%1$d%% · עוד כ-%2$d דקות</string>
     <string name="local_saving">שומר בקבצים שלי</string>

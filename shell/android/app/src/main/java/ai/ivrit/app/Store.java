@@ -69,13 +69,25 @@ final class Store {
         return prefs(context).getBoolean("local_only", false);
     }
 
-    /** The model this phone transcribes with: Turbo.ZIPFORMER, or one of Turbo.VARIANTS. */
+    /** The Turbo model this phone transcribes recordings with: one of Turbo.VARIANTS. */
     static void setOnDeviceModel(Context context, String model) {
         prefs(context).edit().putString("on_device_model", model).apply();
     }
 
+    /**
+     * Turbo, the first of Turbo.VARIANTS unless another was chosen. The zipformer
+     * (once the default, and a choice) transcribes only live, and recordings only
+     * where Turbo cannot run (Turbo.chosen).
+     */
+    /** On Wi-Fi (an unmetered network) now. */
+    static boolean unmetered(Context context) {
+        android.net.ConnectivityManager cm = (android.net.ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        return cm != null && cm.getActiveNetwork() != null && !cm.isActiveNetworkMetered();
+    }
+
     static String onDeviceModel(Context context) {
-        return prefs(context).getString("on_device_model", Turbo.ZIPFORMER);
+        String model = prefs(context).getString("on_device_model", Turbo.VARIANTS[0]);
+        return java.util.Arrays.asList(Turbo.VARIANTS).contains(model) ? model : Turbo.VARIANTS[0];
     }
 
     /** Where the Turbo model runs: TurboGpu.AUTO, CPU or GPU. */

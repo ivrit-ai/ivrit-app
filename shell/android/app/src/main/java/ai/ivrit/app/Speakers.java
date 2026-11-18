@@ -47,6 +47,9 @@ final class Speakers {
      */
     static native float[] prints(long handle, float[] pcm, int length, double offset, double[] starts, double[] ends);
 
-    /** Each print's speaker, 0, 1, …, or -1 where missing: prints are 192 floats each, one after another. */
-    static native int[] cluster(float[] prints, boolean[] clustered, boolean[] missing);
+    /**
+     * Each print's speaker, 0, 1, …, or -1 where missing: prints are 192 floats each,
+     * one after another. `progress` (may be null) is told how far it got, 0 to 100.
+     */
+    static native int[] cluster(float[] prints, boolean[] clustered, boolean[] missing, Whisper.Listener progress);
 }

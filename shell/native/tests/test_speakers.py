@@ -41,7 +41,7 @@ lib = ctypes.CDLL(lib_path)
 lib.sp_features.argtypes = [ctypes.POINTER(ctypes.c_float), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
 lib.sp_features.restype = ctypes.POINTER(ctypes.c_float)
 lib.sp_cluster.argtypes = [ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_bool), ctypes.POINTER(ctypes.c_bool),
-                           ctypes.c_size_t, ctypes.POINTER(ctypes.c_int)]
+                           ctypes.c_size_t, ctypes.POINTER(ctypes.c_int), ctypes.c_void_p, ctypes.c_void_p]
 cli = os.path.join(tmp, "speakers_cli")
 objs = []
 for src in ("speakers/features.c", "speakers/cluster.c", "tests/speakers_cli.c"):
@@ -84,7 +84,7 @@ def c_labels(prints, clustered, missing):
     flat = np.ascontiguousarray(np.array([np.zeros(192) if p is None else p for p in prints]), dtype=np.float32)
     labels = (ctypes.c_int * n)()
     lib.sp_cluster(flat.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), (ctypes.c_bool * n)(*clustered),
-                   (ctypes.c_bool * n)(*missing), n, labels)
+                   (ctypes.c_bool * n)(*missing), n, labels, None, None)
     return list(labels)
 
 

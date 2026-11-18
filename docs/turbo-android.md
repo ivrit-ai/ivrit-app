@@ -64,10 +64,14 @@ Open to comment; each with what it rests on.
    so a small core helps more than it holds back. Reported with each run, to
    tune from phones' numbers.
 
-6. **The model downloads the first time it is used**, after the user chose it
-   in Settings (which says how large it is and suggests Wi-Fi); resumed where
-   it broke off, checked against the server's hash. Only the chosen model is
-   kept; choosing another lets go of it.
+6. **Turbo transcribes every recording, the zipformer only live.** On phones that
+   can run Turbo it is the model for recordings (shared, watched, handed over),
+   with no choice of the zipformer any more (builds up to 259 offered it, and had
+   it by default: the site moves those to Turbo); the zipformer transcribes live,
+   and recordings only on phones that cannot run Turbo. The model downloads the
+   first time it is used (Settings says how large it is and suggests Wi-Fi);
+   resumed where it broke off, checked against the server's hash. Only the chosen
+   size is kept; choosing another lets go of it.
 
 7. **The server makes the quantized files** from ivrit-ai's f16, pinned by hash,
    on start-up (about a minute), as the lab's models are made. Better: publish
@@ -260,6 +264,17 @@ Open to comment; each with what it rests on.
     9), and the decoder's thread count is timed on each phone
     (`tr_tune_decoder`, a second, once per system build, kept with the verdict);
     the encoder keeps `Turbo.threads()`.
+18. **A benchmark anyone can run**, from the Lab page in the app: ivrit.ai's
+    benchmark recording (five minutes, two speakers, from the eval-d1 set,
+    published as `ivrit-ai/turbo-benchmark` with its reference) through Turbo as a
+    recording goes (`Benchmark.java`, LocalTranscribeWorker's "benchmark" kind),
+    timed stage by stage and not saved. The site scores the transcript against
+    the reference, keeps the run (`server/bench.py`) and gives it a page to share
+    (`/bench/?id=…`); `/bench/` ranks each phone's fastest run, with the model and
+    the app's version beside it, as both will change. Only runs Google Play vouches
+    for rank (Play Integrity: the genuine app from Play, on a phone passing Google's
+    device check, bound to the very result by its hash); a key in the app could be
+    pulled out of it, Play's word cannot. iPhone, once it has Turbo: App Attest.
 
 ## Verified, and not yet
 

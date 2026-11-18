@@ -89,6 +89,7 @@ import readable_doc
 import search_index
 import hub
 import app_site
+import bench
 
 # Parse CLI arguments for configuration
 parser = argparse.ArgumentParser(description='Transcription service with rate limiting')
@@ -5944,6 +5945,7 @@ if APP_SITE:
 # Last: the app's pages answer whatever path no route above claims.
 if APP_SITE:
     app_site.install_routes(app, GOOGLE_CLIENT_ID)
+    bench.install(app, db)
     app_site.mount_pages(app)
 
 

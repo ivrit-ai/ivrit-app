@@ -164,6 +164,7 @@ final class Notifications {
         // "downloading": the Turbo model; "checking": its one check of the GPU (TurboGpu).
         if ("model".equals(phase) || "downloading".equals(phase)) text = context.getString(R.string.local_model, Math.max(0, percent));
         else if ("checking".equals(phase)) text = context.getString(R.string.local_checking, Math.max(0, percent));
+        else if ("speakers".equals(phase)) text = context.getString(R.string.local_speakers, Math.max(0, percent));
         else if ("saving".equals(phase)) text = context.getString(R.string.local_saving);
         else if ("transcribing".equals(phase)) {
             text = secondsLeft == null

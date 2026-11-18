@@ -27,6 +27,8 @@ const LANGUAGE_NAMES = { he: "עברית", en: "English", fr: "Français", es: "
 const ACTIVE = new Set(["Queued", "Being processed", "Transcoding..."]);
 
 let host = null;
+// Whether what this device transcribes comes with speakers (the phone's Turbo model).
+const speakersHere = () => Boolean(host?.deviceSpeakers?.());
 let root = null;
 let boot = null;
 let config = null; // /languages
@@ -90,7 +92,7 @@ async function drawDeviceNote() {
   if (boot?.device) {
     const action = host.deviceAction?.();
     box.replaceChildren(el("div", { class: "card tr-device-note" }, [
-      el("p", { class: "muted", text: tr("deviceFilesNote") }),
+      el("p", { class: "muted", text: tr(speakersHere() ? "deviceFilesNoteSpeakers" : "deviceFilesNote") }),
       action ? el("div", { class: "row" }, [el("button", { class: "btn", type: "button", text: action.label, onclick: action.run })]) : null,
     ]));
     return;
@@ -623,10 +625,12 @@ function pendingCard(id, p) {
   ]);
 }
 
-// On this device: the recording read, the model fetched (once), transcribed, saved.
+// On this device: the recording read, the model fetched (once), transcribed, its speakers told apart, saved.
 function localStatus(p, percent) {
   if (p.phase === "handing") return tr("statusLocalHanding", { progress: percent ?? 0 });
   if (p.phase === "queued") return tr("statusLocalQueued");
+  // The Turbo model's first download waits for Wi-Fi.
+  if (p.phase === "wifi") return tr("statusLocalWifi");
   if (p.phase === "model") return tr(bundled() ? "statusLocalModelBundled" : "statusLocalModel", { progress: percent ?? 0 });
   // The phone's Turbo model: downloaded, and its GPU checked, the first time.
   if (p.phase === "downloading") return tr("statusLocalModel", { progress: percent ?? 0 });
@@ -635,6 +639,8 @@ function localStatus(p, percent) {
     const status = tr("statusLocalTranscribing", { progress: percent ?? 0 });
     return p.left == null ? status : `${status} · ${eta(p.left)}`;
   }
+  // Who speaks when, over the whole recording, once it is transcribed (Turbo).
+  if (p.phase === "speakers") return tr("statusLocalSpeakers", { progress: percent ?? 0 });
   if (p.phase === "saving") return tr("statusLocalSaving");
   return tr("statusLocalPreparing");
 }
@@ -813,7 +819,7 @@ function openNewSheet() {
       el("span", { class: "muted", text: tr("whereTitle") }),
       el("div", { class: "seg wide tr-where", role: "group" }, [
         option("server", tr("whereServer"), tr("whereServerSub")),
-        option("device", tr("whereDevice"), tr("whereDeviceSub")),
+        option("device", tr("whereDevice"), tr(speakersHere() ? "whereDeviceSubSpeakers" : "whereDeviceSub")),
       ]),
     );
   };
@@ -824,7 +830,7 @@ function openNewSheet() {
     list,
     more,
     el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("transcribeLanguage") }), select]),
-    onDevice ? el("p", { class: "muted", text: tr("localOnlyHint") }) : whereBox,
+    onDevice ? el("p", { class: "muted", text: tr(speakersHere() ? "localOnlyHintSpeakers" : "localOnlyHint") }) : whereBox,
     tree?.folders.length ? el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("saveTo") }), destination]) : null,
     el("label", { class: "tr-check" }, [keep, el("span", {}, [
       el("span", { text: tr(boot?.device ? "saveAudioHere" : "saveAudioInDrive") }),
@@ -946,7 +952,7 @@ function outOfTimeChoice() {
       host.sheet.close();
     };
     host.sheet.open(tr("outOfTimeTitle"), el("div", { class: "stack" }, [
-      el("p", { class: "muted", text: tr("outOfTimeBody") }),
+      el("p", { class: "muted", text: tr(speakersHere() ? "outOfTimeBodySpeakers" : "outOfTimeBody") }),
       el("button", { class: "btn primary", type: "button", text: tr("transcribeOnDevice"), onclick: pick("device") }),
       el("button", { class: "btn", type: "button", text: tr("useRunpodKey"), onclick: pick("runpod") }),
       el("button", { class: "btn quiet", type: "button", text: tr("notNow"), onclick: pick(null) }),

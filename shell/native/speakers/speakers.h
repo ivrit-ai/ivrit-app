@@ -54,8 +54,11 @@ float *sp_features(const float *pcm, size_t n, size_t *frames);
 // silhouette, Davies-Bouldin and Calinski-Harabasz scores; then every print gets
 // the speaker whose centroid it is closest to. labels[i]: 0, 1, … (SPEAKER_00, …),
 // or -1 for missing[i]. Returns the number of speakers, 0 when none were clustered,
-// -1 when out of memory.
-int sp_cluster(const float *prints, const bool *clustered, const bool *missing, size_t n, int *labels);
+// -1 when out of memory. progress (may be NULL): how far it got, 0 to 1, as it goes
+// (the distances first, then each number of speakers tried).
+typedef void (*sp_progress)(double fraction, void *user);
+int sp_cluster(const float *prints, const bool *clustered, const bool *missing, size_t n, int *labels,
+               sp_progress progress, void *user);
 
 #ifdef __cplusplus
 }

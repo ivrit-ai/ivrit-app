@@ -517,7 +517,8 @@ done:
     return score;
 }
 
-int sp_cluster(const float *prints, const bool *clustered, const bool *missing, size_t n, int *labels) {
+int sp_cluster(const float *prints, const bool *clustered, const bool *missing, size_t n, int *labels,
+               sp_progress progress, void *user) {
     const size_t dim = SP_DIM;
     size_t m = 0;
     for (size_t i = 0; i < n; i++) m += clustered[i] && !missing[i];
@@ -558,6 +559,7 @@ int sp_cluster(const float *prints, const bool *clustered, const bool *missing, 
         }
     }
     if (!linkage(dc, m, false, tree_cos) || !linkage(de, m, true, tree_ward)) goto done;
+    if (progress) progress(0.1, user);
     // KMeans' copy, centered, and its tolerance: 1e-4 of the mean variance.
     double meanv[SP_DIM] = {0}, var = 0;
     for (size_t i = 0; i < m; i++) {
@@ -590,6 +592,7 @@ int sp_cluster(const float *prints, const bool *clustered, const bool *missing, 
                 memcpy(best, cand, m * sizeof *best);
             }
         }
+        if (progress) progress(0.1 + 0.9 * (double) k / (double) most, user);
     }
     // _assign_speakers_to_all_segments: every print to its closest centroid (cosine).
     size_t count[SP_MAX_SPEAKERS] = {0};

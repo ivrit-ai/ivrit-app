@@ -35,11 +35,18 @@ export async function render(box, host, onChange) {
       host.toast(serverError(err.data, "errorInternalServer"));
     }
   });
+  // What transcribing here gives, speakers or not, as the phone's model has it.
+  const onDeviceSub = el("span", { class: "sub" });
+  const describeOnDevice = () => {
+    onDeviceSub.textContent = !local.supported() ? tr("localOnlyUnsupported")
+      : tr(host.deviceSpeakers?.() ? "localOnlyBodySpeakers" : "localOnlyBody");
+  };
+  describeOnDevice();
   const onDeviceBox = el("label", { class: "tr-check" }, [onDevice, el("span", {}, [
     el("span", { text: tr("localOnlyTitle") }),
-    el("span", { class: "sub", text: local.supported() ? tr("localOnlyBody") : tr("localOnlyUnsupported") }),
+    onDeviceSub,
   ])]);
-  const phoneModelBox = await phoneModel(host);
+  const phoneModelBox = await phoneModel(host, describeOnDevice);
   const status = boot.runpodKeyStatus || {};
   const balance = el("span", { class: "muted" });
   const input = el("input", { class: "tr-input", type: "password", autocomplete: "off", placeholder: tr("runpodKeyPlaceholder"), dir: "ltr" });
@@ -92,15 +99,15 @@ export async function render(box, host, onChange) {
   }
 }
 
-// The model the phone transcribes recordings with, in the background: the small one,
-// or ivrit.ai's Turbo model, far more accurate, slower, and a large download the first
-// time (sizes: scripts/turbo_model.py's files). Only on phones that can run it. Then
-// where Turbo runs: the GPU once it passed its check on the phone (automatic), the
-// CPU, or the GPU whenever it gives the right words; and what that check found.
-const PHONE_MODELS = { zipformer: null, q8_0: 875, q5_1: 625 };
+// The Turbo model the phone transcribes recordings with, in the background (the small
+// one is live transcription's only), a large download the first time (sizes:
+// scripts/turbo_model.py's files). Only on phones that can run it. Then where it runs:
+// the GPU once it passed its check on the phone (automatic), the CPU, or the GPU
+// whenever it gives the right words; and what that check found.
+const PHONE_MODELS = { q8_0: 875, q5_1: 625 };
 const PROCESSORS = ["auto", "cpu", "gpu"];
 
-async function phoneModel(host) {
+async function phoneModel(host, onModel) {
   const { el } = host;
   let current;
   try {
@@ -120,9 +127,7 @@ async function phoneModel(host) {
   const show = () => {
     model.value = current.model;
     processor.value = current.processor || "auto";
-    const turbo = current.model !== "zipformer";
-    note.textContent = tr(!turbo ? "phoneModelSmallBody" : current.ready ? "phoneModelTurboBody" : "phoneModelTurboDownload");
-    processorField.hidden = !turbo;
+    note.textContent = tr(current.ready ? "phoneModelTurboBody" : "phoneModelTurboDownload");
     const gpu = current.gpu;
     gpuNote.textContent = !gpu
       ? tr("phoneGpuUnchecked")
@@ -137,6 +142,7 @@ async function phoneModel(host) {
     } finally {
       model.disabled = processor.disabled = false;
       show();
+      onModel?.();
     }
   };
   model.addEventListener("change", choose(() => ({ model: model.value })));

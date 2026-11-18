@@ -197,6 +197,52 @@ class Database:
             updated_at,
         )
 
+    # ---- the on-device benchmark (bench.py) ----
+
+    async def add_bench_result(
+        self,
+        run_id: str,
+        created_at: int,
+        benchmark: str,
+        device: str,
+        engine: str,
+        app: str,
+        seconds: float,
+        wer: float,
+        verified: bool,
+        body: str,
+    ):
+        await self.execute(
+            "INSERT INTO bench_results (id, created_at, benchmark, device, engine, app, seconds, wer, verified, body) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            run_id,
+            created_at,
+            benchmark,
+            device,
+            engine,
+            app,
+            seconds,
+            wer,
+            verified,
+            body,
+        )
+
+    async def get_bench_result(self, run_id: str):
+        return await self.fetchrow("SELECT * FROM bench_results WHERE id = ?", run_id)
+
+    async def bench_board(self, benchmark: str, verified_only: bool, limit: int):
+        """Each phone's fastest run (of those verified, or of all), fastest first."""
+        return await self.fetch(
+            "SELECT * FROM bench_results b WHERE benchmark = ? AND (verified OR NOT ?) AND seconds = "
+            "(SELECT MIN(seconds) FROM bench_results c "
+            "WHERE c.benchmark = b.benchmark AND c.device = b.device AND (c.verified OR NOT ?)) "
+            "ORDER BY seconds LIMIT ?",
+            benchmark,
+            verified_only,
+            verified_only,
+            limit,
+        )
+
     # ---- web push subscriptions ----
 
     async def save_push_subscription(

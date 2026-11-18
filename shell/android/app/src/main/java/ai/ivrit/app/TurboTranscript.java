@@ -56,7 +56,7 @@ final class TurboTranscript {
     }
 
     /** The segments' speakers (Speakers.cluster): who is clustered, who is missing, and the prints. */
-    static int[] speakers(List<Segment> segments) {
+    static int[] speakers(List<Segment> segments, Whisper.Listener progress) {
         int n = segments.size();
         float[] prints = new float[n * 192];
         boolean[] clustered = new boolean[n];
@@ -67,7 +67,7 @@ final class TurboTranscript {
             clustered[i] = !missing[i] && s.end() - s.start() >= Speakers.MIN_CLUSTERED;
             if (!missing[i]) System.arraycopy(s.print, 0, prints, i * 192, 192);
         }
-        return Speakers.cluster(prints, clustered, missing);
+        return Speakers.cluster(prints, clustered, missing, progress);
     }
 
     /** The app's transcript; labels: each segment's speaker (-1: none), or null for none at all. */

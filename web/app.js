@@ -260,6 +260,9 @@ function whenever(iso) {
 // Where notifications come from: web push in a browser, Firebase in the app.
 // The rest of the page asks this, never the browser directly.
 let nativeStatus = null;
+// Whether the phone's own transcripts come with speakers (its Turbo model, not the
+// small one), as it last said (transcriptionHost.onDeviceModel).
+let deviceSpeakers = false;
 const notify = shell
   ? {
       supported: () => nativeStatus?.available !== false,
@@ -1654,7 +1657,18 @@ const transcriptionHost = {
   // The model the phone transcribes with, where it can run ivrit.ai's Turbo model
   // (the shell's "turboModel"), and where it runs: {model, ready, processor, gpu},
   // choosing what `choice` ({model} or {processor}) names.
-  onDeviceModel: (choice) => (shell && nativeStatus?.features?.includes("turboModel") ? shell.ivrit.onDeviceModel(choice ?? {}) : null),
+  onDeviceModel: async (choice) => {
+    if (!shell || !nativeStatus?.features?.includes("turboModel")) return null;
+    let current = await shell.ivrit.onDeviceModel(choice ?? {});
+    // Recordings are Turbo's, the small model live transcription's only: an app from
+    // before (which had the small one as a choice, and the default) moves to Turbo.
+    if (current?.model === "zipformer") current = await shell.ivrit.onDeviceModel({ model: "q8_0" });
+    deviceSpeakers = Boolean(current?.model && current.model !== "zipformer");
+    return current;
+  },
+  // Whether what this device transcribes comes with speakers (above), for the texts
+  // that say what transcribing here gives.
+  deviceSpeakers: () => deviceSpeakers,
   canOpenAppSettings: () => Boolean(shell && nativeStatus?.features?.includes("appSettings")),
   openAppSettings: () => shell?.ivrit.openAppSettings().catch(() => {}),
 };
@@ -1677,6 +1691,7 @@ async function showTranscribeApp() {
       configureShell();
     }
     $("transcribe-mount").hidden = false;
+    await withTimeout(Promise.resolve(transcriptionHost.onDeviceModel()).catch(() => null), 2000, null);
     await transcription.mount($("transcribe-mount"), transcriptionHost, bootData);
     // A transcript's link (a notification, or one from transcribe.ivrit.ai).
     const results = new URLSearchParams(location.search).get("results");
@@ -1763,6 +1778,7 @@ function showFiles() {
     device.setOwner(state.me?.sub);
     transcribeApi.useDevice(true);
     $("transcribe-mount").hidden = false;
+    await withTimeout(Promise.resolve(transcriptionHost.onDeviceModel()).catch(() => null), 2000, null);
     await transcription.mount($("transcribe-mount"), transcriptionHost, await transcribeApi.boot());
     return "device";
   })().then((where) => {

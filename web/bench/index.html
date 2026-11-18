@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>בדיקת מהירות · ivrit.ai</title>
+    <meta property="og:title" content="בדיקת מהירות לתמלול בטלפון · ivrit.ai" />
+    <meta property="og:description" content="כמה מהר הטלפון שלכם מתמלל 5 דקות של עברית עם מודל ה-Turbo של ivrit.ai." />
+    <link rel="stylesheet" href="/fonts/fonts.css" />
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/theme.css" />
+    <!-- The on-device benchmark's results (server/bench.py): one run (?id=, the link
+         a phone shares) and the leaderboard, each phone's fastest run. -->
+    <style>
+      .lab { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+      .lab h1 { font: 700 30px/1.2 var(--font-display); margin: 0 0 4px; }
+      .lab h2 { font: 700 20px/1.3 var(--font-display); margin: 28px 0 8px; }
+      .lab p { color: var(--ink-2); }
+      .note { font-size: 14px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main class="lab">
+      <p><a href="/">→ ivrit.ai</a></p>
+      <h1>בדיקת מהירות: תמלול בטלפון</h1>
+      <p>כמה זמן לוקח לטלפון לתמלל 5 דקות של עברית עם מודל ה-Turbo של ivrit.ai, בלי לשלוח את ההקלטה לשרת, וכמה מדויק התמלול. אפשר להריץ את הבדיקה באפליקציה של ivrit.ai, בדף המעבדה.</p>
+      <div id="run"></div>
+      <h2>הטלפונים המהירים</h2>
+      <label class="note"><input id="versions" type="checkbox" /> הצג מודל וגרסה</label>
+      <div id="board"><p class="note">טוען…</p></div>
+      <p class="note">לכל טלפון, ההרצה המהירה ביותר שלו. ✓: הרצה ש-Google Play אימת (האפליקציה המקורית, על טלפון שעבר את בדיקת המכשיר של Google). הדיוק: כמה מהמילים נכונות, מול תמלול ידני של ההקלטה (מאגר ההערכה של ivrit.ai). הגרסאות משתנות עם הזמן, והתוצאות משתפרות.</p>
+    </main>
+    <script type="module">
+      import { card, board, STYLE } from "./card.js";
+      document.head.append(Object.assign(document.createElement("style"), { textContent: STYLE }));
+      const id = new URLSearchParams(location.search).get("id");
+      if (id) {
+        fetch(`/bench/results/${encodeURIComponent(id)}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((run) => {
+            document.getElementById("run").innerHTML = run ? card(run, null) : `<p class="note">התוצאה לא נמצאה.</p>`;
+          });
+      }
+      let runs = [];
+      const draw = () => {
+        document.getElementById("board").innerHTML = runs.length
+          ? board(runs, document.getElementById("versions").checked)
+          : `<p class="note">עוד אין תוצאות.</p>`;
+      };
+      document.getElementById("versions").addEventListener("change", draw);
+      fetch("/bench/top")
+        .then((r) => r.json())
+        .then((top) => {
+          runs = top.runs;
+          draw();
+        })
+        .catch(() => (document.getElementById("board").innerHTML = `<p class="note">לא ניתן לטעון את הטבלה.</p>`));
+    </script>
+  </body>
+</html>

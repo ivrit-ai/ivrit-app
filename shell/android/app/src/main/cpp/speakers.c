@@ -83,10 +83,30 @@ JNIEXPORT jfloatArray JNICALL Java_ai_ivrit_app_Speakers_prints(JNIEnv *env, jcl
     return out;
 }
 
-// Each print's speaker (0, 1, …; -1 for a missing one): `prints` n * 192 long.
+typedef struct {
+    JNIEnv *env;
+    jobject listener;
+    jmethodID progress;
+} sink;
+
+// Called on the Java caller's thread, as sp_cluster goes.
+static void clustering(double fraction, void *user) {
+    sink *s = user;
+    (*s->env)->CallVoidMethod(s->env, s->listener, s->progress, (jint) (fraction * 100));
+    if ((*s->env)->ExceptionCheck(s->env)) (*s->env)->ExceptionClear(s->env);
+}
+
+// Each print's speaker (0, 1, …; -1 for a missing one): `prints` n * 192 long;
+// `listener` (Whisper.Listener, may be null) told how far it got, 0 to 100.
 JNIEXPORT jintArray JNICALL Java_ai_ivrit_app_Speakers_cluster(JNIEnv *env, jclass cls, jfloatArray prints,
-                                                               jbooleanArray clustered, jbooleanArray missing) {
+                                                               jbooleanArray clustered, jbooleanArray missing,
+                                                               jobject listener) {
     (void) cls;
+    sink told = {env, listener, NULL};
+    if (listener) {
+        told.progress = (*env)->GetMethodID(env, (*env)->GetObjectClass(env, listener), "progress", "(I)V");
+        if (!told.progress) return NULL;  // NoSuchMethodError is pending
+    }
     jsize n = (*env)->GetArrayLength(env, clustered);
     jfloat *p = (*env)->GetFloatArrayElements(env, prints, NULL);
     jboolean *c = (*env)->GetBooleanArrayElements(env, clustered, NULL);
@@ -99,7 +119,7 @@ JNIEXPORT jintArray JNICALL Java_ai_ivrit_app_Speakers_cluster(JNIEnv *env, jcla
             cb[i] = c[i] == JNI_TRUE;
             mb[i] = m[i] == JNI_TRUE;
         }
-        found = sp_cluster(p, cb, mb, (size_t) n, labels);
+        found = sp_cluster(p, cb, mb, (size_t) n, labels, listener ? clustering : NULL, &told);
     }
     (*env)->ReleaseFloatArrayElements(env, prints, p, JNI_ABORT);
     (*env)->ReleaseBooleanArrayElements(env, clustered, c, JNI_ABORT);

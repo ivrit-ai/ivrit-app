@@ -38,6 +38,20 @@
       <h1>מעבדה: תמלול במכשיר</h1>
       <p>בודק אם הטלפון יכול להריץ את מודל התמלול של ivrit.ai בעצמו, ובאיזו מהירות. התוצאות נשלחות אלינו אוטומטית.</p>
 
+      <!-- The app's benchmark (Benchmark.java): shown only in the app, on phones that
+           run Turbo; its result goes to /bench/ (server/bench.py). -->
+      <section id="phone-bench" hidden>
+        <h2>בדיקת מהירות לטלפון</h2>
+        <p>מתמללים 5 דקות של עברית (ראיון, שני דוברים) עם מודל ה-Turbo, בדיוק כמו תמלול רגיל בטלפון, ומודדים כמה זמן זה לוקח וכמה מדויק התמלול. בפעם הראשונה מורידים את המודל (874MB, עדיף ב-Wi-Fi) ובודקים את המעבד הגרפי, וזה לוקח יותר זמן.</p>
+        <div class="tests"><button id="bench-start" class="btn primary" type="button">התחלת הבדיקה</button></div>
+        <div id="bench-status" class="verdict" hidden></div>
+        <div id="bench-result"></div>
+        <div id="bench-actions" class="tests" hidden>
+          <button id="bench-share" class="btn primary" type="button">שיתוף התוצאה</button>
+          <a class="btn" href="/bench/">הטלפונים המהירים</a>
+        </div>
+      </section>
+
       <h2>בדיקת WebGPU</h2>
       <div id="verdict" class="verdict">בודק…</div>
       <dl id="facts" class="facts"></dl>
@@ -221,6 +235,87 @@
       for (const id of ["bench", "run", "quant"]) {
         const a = document.getElementById(id);
         if (!result.webgpu) a.setAttribute("aria-disabled", "true"), a.classList.add("quiet");
+      }
+    </script>
+    <script type="module">
+      // The phone's own benchmark, through the app (IvritNative's benchmark method and
+      // event, shell/native-api.json): progress as it goes, then the result posted to
+      // /bench/results, scored there, and shown and shared from here.
+      import { card, clock, speed, STYLE } from "/bench/card.js";
+      const cap = window.Capacitor;
+      const native = (method, options) => cap.nativePromise("IvritNative", method, options || {});
+      const features = cap?.isNativePlatform?.() ? (await native("notificationStatus").catch(() => ({}))).features || [] : [];
+      if (features.includes("benchmark")) {
+        document.head.append(Object.assign(document.createElement("style"), { textContent: STYLE }));
+        const $ = (id) => document.getElementById(id);
+        $("phone-bench").hidden = false;
+        const PHASES = {
+          queued: "ממתין", downloading: "מוריד", checking: "בודק את המעבד הגרפי", preparing: "קורא את ההקלטה",
+          transcribing: "מתמלל", speakers: "מזהה דוברים", done: "מסיים",
+        };
+        let key = null;
+        let since = 0;
+        let shared = null;
+        const status = (text) => {
+          $("bench-status").hidden = false;
+          $("bench-status").textContent = text;
+        };
+        cap.addListener("IvritNative", "benchmark", async (event) => {
+          if (event.key !== key && key !== null) return;
+          if (event.phase === "failed") {
+            status(event.error === "unsupported" ? "הטלפון הזה לא יכול להריץ את מודל ה-Turbo." : "הבדיקה נכשלה. אפשר לנסות שוב.");
+            $("bench-start").disabled = false;
+            return;
+          }
+          if (!since) since = Date.now(); // the page opened while it ran
+          if (event.phase !== "done") {
+            const percent = event.fraction ? ` · ${Math.round(event.fraction * 100)}%` : "";
+            status(`${PHASES[event.phase] || "מכין"}${percent} · ${clock((Date.now() - since) / 1000)}`);
+            return;
+          }
+          status("שולח את התוצאה…");
+          const run = event.result;
+          try {
+            // Google Play vouches for the result as sent: its SHA-256 is the request's hash.
+            const result = JSON.stringify(run);
+            const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(result));
+            const requestHash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+            const { cloudProjectNumber } = await fetch("/bench/config").then((r) => r.json()).catch(() => ({}));
+            const integrity = cloudProjectNumber && features.includes("integrity")
+              ? (await native("integrityToken", { requestHash, cloudProjectNumber }).catch(() => ({}))).token ?? null
+              : null;
+            const r = await fetch("/bench/results", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ result, integrity }) });
+            const scored = await r.json();
+            if (!r.ok) throw new Error(scored.error);
+            const url = `${location.origin}/bench/?id=${scored.id}`;
+            run.wer = scored.wer;
+            run.verified = scored.verified;
+            shared = { url, text: `ivrit.ai בטלפון שלי: 5 דקות של עברית תומללו ב-${clock(run.seconds)} (פי ${speed(run).toFixed(2)} ממהירות הדיבור), דיוק ${((1 - run.wer) * 100).toFixed(1)}%.` };
+            $("bench-result").innerHTML = card(run, url);
+            $("bench-actions").hidden = false;
+            $("bench-status").hidden = true;
+          } catch {
+            $("bench-result").innerHTML = card(run, null);
+            status("לא הצלחנו לשמור את התוצאה בשרת.");
+          }
+          $("bench-start").disabled = false;
+        });
+        $("bench-start").addEventListener("click", async () => {
+          $("bench-start").disabled = true;
+          $("bench-result").innerHTML = "";
+          $("bench-actions").hidden = true;
+          since = Date.now();
+          status("מתחיל…");
+          try {
+            key = (await native("benchmark")).key;
+          } catch {
+            status("לא ניתן להתחיל את הבדיקה בטלפון הזה.");
+            $("bench-start").disabled = false;
+          }
+        });
+        $("bench-share").addEventListener("click", () => {
+          if (shared) native("shareText", { title: "בדיקת מהירות · ivrit.ai", text: `${shared.text}\n${shared.url}` }).catch(() => {});
+        });
       }
     </script>
   </body>
