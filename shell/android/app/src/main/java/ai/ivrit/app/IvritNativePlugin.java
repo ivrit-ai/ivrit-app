@@ -515,6 +515,7 @@ public class IvritNativePlugin extends Plugin {
         if (call.hasOption("minSeconds")) w.minSeconds = Math.max(0, call.getInt("minSeconds", 5));
         if (call.hasOption("maxSeconds")) w.maxSeconds = Math.max(0, call.getInt("maxSeconds", 0));
         if (call.hasOption("wifiOnly")) w.wifiOnly = Boolean.TRUE.equals(call.getBoolean("wifiOnly", false));
+        if (call.hasOption("chargingOnly")) w.chargingOnly = Boolean.TRUE.equals(call.getBoolean("chargingOnly", true));
         if (call.hasOption("paused")) w.paused = Boolean.TRUE.equals(call.getBoolean("paused", false));
         if (call.hasOption("where")) w.where = Watches.where(call.getString("where", Watches.AUTO));
         if (call.hasOption("since")) w.since = Math.max(0, call.getDouble("since", 0.0).longValue());

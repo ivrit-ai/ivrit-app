@@ -108,6 +108,9 @@ async function addSheet(existing) {
   const minSeconds = el("input", { class: "tr-input", type: "number", min: 0, max: 3600, value: existing?.minSeconds ?? 5, dir: "ltr" });
   const maxMinutes = el("input", { class: "tr-input", type: "number", min: 0, max: 1200, value: existing ? Math.round((existing.maxSeconds || 0) / 60) : 0, dir: "ltr" });
   const wifi = el("input", { type: "checkbox", checked: existing?.wifiOnly ?? false });
+  // Transcribed on the phone only while it charges (the default): a folder's files can wait.
+  const charging = el("input", { type: "checkbox", checked: existing?.chargingOnly ?? true });
+  const chargingBox = el("label", { class: "tr-check" }, [charging, el("span", { text: tr("watchChargingOnly") })]);
   // The recordings already there: none (only new ones, the default), or back to a
   // week, a month, or all of them. On a watch already made, "none" leaves it as is.
   const backfill = el("select", { class: "tr-select", "aria-label": tr("watchBackfill") }, [
@@ -134,6 +137,7 @@ async function addSheet(existing) {
   const showWhere = () => {
     whereField.hidden = !phone || language.value !== "he";
     keyNote.hidden = !(key.has_key || key.load_failed) || (!whereField.hidden && where.value === "device");
+    chargingBox.hidden = whereField.hidden || where.value === "server";
   };
   language.addEventListener("change", showWhere);
   where.addEventListener("change", showWhere);
@@ -152,6 +156,7 @@ async function addSheet(existing) {
     el("label", { class: "tr-field" }, [el("span", { class: "muted", text: tr("watchBackfill") }), backfill]),
     backfillNote,
     el("label", { class: "tr-check" }, [wifi, el("span", { text: tr("watchWifiOnly") })]),
+    chargingBox,
     disclose ? el("p", { class: "notice", text: tr("watchDisclosure") }) : null,
     el("div", { class: "row end" }, [go]),
   ]);
@@ -164,7 +169,7 @@ async function addSheet(existing) {
       minSeconds: Math.max(0, Number(minSeconds.value) || 0),
       maxSeconds: Math.max(0, Number(maxMinutes.value) || 0) * 60,
       wifiOnly: wifi.checked,
-      ...(phone ? { where: where.value } : {}),
+      ...(phone ? { where: where.value, chargingOnly: charging.checked } : {}),
       // Files changed after this are taken (ms; 0: all of them).
       ...(backfill.value ? { since: backfill.value === "all" ? 0 : Date.now() - Number(backfill.value) * 86400000 } : {}),
     };

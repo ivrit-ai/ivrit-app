@@ -629,8 +629,9 @@ function pendingCard(id, p) {
 function localStatus(p, percent) {
   if (p.phase === "handing") return tr("statusLocalHanding", { progress: percent ?? 0 });
   if (p.phase === "queued") return tr("statusLocalQueued");
-  // The Turbo model's first download waits for Wi-Fi.
+  // The Turbo model's first download waits for Wi-Fi; a watched folder's file, for the charger.
   if (p.phase === "wifi") return tr("statusLocalWifi");
+  if (p.phase === "charging") return tr("statusLocalCharging");
   if (p.phase === "model") return tr(bundled() ? "statusLocalModelBundled" : "statusLocalModel", { progress: percent ?? 0 });
   // The phone's Turbo model: downloaded, and its GPU checked, the first time.
   if (p.phase === "downloading") return tr("statusLocalModel", { progress: percent ?? 0 });

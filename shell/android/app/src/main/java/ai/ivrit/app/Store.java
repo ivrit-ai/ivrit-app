@@ -88,6 +88,12 @@ final class Store {
      * (once the default, and a choice) transcribes only live, and recordings only
      * where Turbo cannot run (Turbo.chosen).
      */
+    /** On a charger now. */
+    static boolean charging(Context context) {
+        android.content.Intent battery = context.registerReceiver(null, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+        return battery != null && battery.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) != 0;
+    }
+
     /** On Wi-Fi (an unmetered network) now. */
     static boolean unmetered(Context context) {
         android.net.ConnectivityManager cm = (android.net.ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);

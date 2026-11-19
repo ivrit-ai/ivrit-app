@@ -50,6 +50,9 @@ final class Watches {
         int minSeconds = 5;
         int maxSeconds = 0; // 0: no limit
         boolean wifiOnly;
+        // Transcribed on the phone only while it charges (a folder's files are not
+        // waited on, and a transcription takes a while): the default.
+        boolean chargingOnly = true;
         boolean paused;
         // Only files modified after this (ms): when the folder was chosen, or earlier
         // when the user asked for the recordings already there too (0: all of them).
@@ -66,7 +69,7 @@ final class Watches {
             return new JSONObject()
                 .put("id", id).put("tree", tree).put("label", label).put("folder", folder).put("folderName", folderName)
                 .put("language", language).put("minSeconds", minSeconds).put("maxSeconds", maxSeconds)
-                .put("wifiOnly", wifiOnly).put("paused", paused).put("since", since).put("lastChecked", lastChecked)
+                .put("wifiOnly", wifiOnly).put("chargingOnly", chargingOnly).put("paused", paused).put("since", since).put("lastChecked", lastChecked)
                 .put("quotaUntil", quotaUntil).put("lastError", lastError).put("sent", sent).put("where", where);
         }
 
@@ -81,6 +84,7 @@ final class Watches {
             w.minSeconds = o.optInt("minSeconds", 5);
             w.maxSeconds = o.optInt("maxSeconds", 0);
             w.wifiOnly = o.optBoolean("wifiOnly", false);
+            w.chargingOnly = o.optBoolean("chargingOnly", true);
             w.paused = o.optBoolean("paused", false);
             w.since = o.optLong("since", 0);
             w.lastChecked = o.optLong("lastChecked", 0);
@@ -102,6 +106,7 @@ final class Watches {
             o.put("minSeconds", minSeconds);
             o.put("maxSeconds", maxSeconds);
             o.put("wifiOnly", wifiOnly);
+            o.put("chargingOnly", chargingOnly);
             o.put("paused", paused);
             o.put("since", since);
             o.put("lastChecked", lastChecked);

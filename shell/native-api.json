@@ -213,7 +213,7 @@
       "feature": "watchFolders",
       "options": {},
       "result": {
-        "watches": "[{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting, where (\"server\" | \"device\" | \"auto\")}]"
+        "watches": "[{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, chargingOnly (transcribed on the phone only while charging; true by default), paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting, where (\"server\" | \"device\" | \"auto\")}]"
       }
     },
     "addWatch": {
@@ -230,7 +230,8 @@
         "maxSeconds": "number (0: none)",
         "wifiOnly": "boolean",
         "where": "\"server\" | \"device\" | \"auto\" (server until the free time runs out, then the phone; the default)",
-        "since": "number, optional: ms; recordings already in the folder that changed after this are transcribed too (0: all of them). Left out: only new ones (on updateWatch, unchanged)"
+        "since": "number, optional: ms; recordings already in the folder that changed after this are transcribed too (0: all of them). Left out: only new ones (on updateWatch, unchanged)",
+        "chargingOnly": "boolean, optional (default true): on the phone, only while charging; what goes to the servers is not held back"
       },
       "result": {
         "watch": "{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting, where}"
@@ -248,7 +249,8 @@
       "options": {
         "id": "string",
         "...": "any of addWatch's options, and paused",
-        "where": "as addWatch"
+        "where": "as addWatch",
+        "chargingOnly": "boolean, optional (default true): on the phone, only while charging; what goes to the servers is not held back"
       },
       "result": {
         "watch": "{id, label (the phone's name for the folder), folder (My files folder id, \"\" the top), folderName, language, minSeconds, maxSeconds (0: none), wifiOnly, paused, since, lastChecked, quotaUntil, lastError (\"\" | \"signin\" | \"quota\" | \"access\" | \"failed\" | a server error key), sent, waiting}"
@@ -424,7 +426,7 @@
         "android"
       ],
       "feature": "localTranscription",
-      "about": "{key, name, folder, phase: \"queued\" | \"wifi\" | \"model\" | \"downloading\" | \"checking\" | \"preparing\" | \"speakers\" | \"transcribing\" | \"saving\" | \"done\" | \"failed\", fraction (0-1), secondsLeft?, resultsId? (done), error? (failed)}"
+      "about": "{key, name, folder, phase: \"queued\" | \"wifi\" | \"charging\" | \"model\" | \"downloading\" | \"checking\" | \"preparing\" | \"speakers\" | \"transcribing\" | \"saving\" | \"done\" | \"failed\", fraction (0-1), secondsLeft?, resultsId? (done), error? (failed)}"
     },
     "benchmark": {
       "platforms": [

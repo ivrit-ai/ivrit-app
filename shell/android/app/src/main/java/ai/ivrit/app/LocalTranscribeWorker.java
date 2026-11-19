@@ -66,7 +66,9 @@ public class LocalTranscribeWorker extends Worker {
     /**
      * One more recording, after those already waiting. While the Turbo model is not
      * downloaded yet (874 MB), it waits for Wi-Fi (an unmetered network) to fetch it,
-     * and pauses there if Wi-Fi goes, to resume the download where it stopped.
+     * and pauses there if Wi-Fi goes, to resume the download where it stopped. A
+     * watched folder's file ("charging": its watch's chargingOnly) waits for the
+     * charger, and pauses if it is unplugged; what the user asked for starts at once.
      */
     static void enqueue(Context context, Data input) {
         String variant = Turbo.chosen(context);
@@ -82,14 +84,17 @@ public class LocalTranscribeWorker extends Worker {
             .addTag("local:" + input.getString("key"))
             // Waiting its turn is a retry: looked at again every 20 seconds.
             .setBackoffCriteria(androidx.work.BackoffPolicy.LINEAR, 20, java.util.concurrent.TimeUnit.SECONDS);
-        if (download) {
-            builder.setConstraints(new androidx.work.Constraints.Builder()
-                .setRequiredNetworkType(androidx.work.NetworkType.UNMETERED).build());
+        boolean charging = input.getBoolean("charging", false);
+        if (download || charging) {
+            androidx.work.Constraints.Builder constraints = new androidx.work.Constraints.Builder();
+            if (download) constraints.setRequiredNetworkType(androidx.work.NetworkType.UNMETERED);
+            if (charging) constraints.setRequiresCharging(true);
+            builder.setConstraints(constraints.build());
         }
         WorkManager.getInstance(context).enqueueUniqueWork("local-" + input.getString("key"), ExistingWorkPolicy.KEEP, builder.build());
         if (benchmark) IvritNativePlugin.benchmark(input.getString("key"), "queued", 0, null, null);
         else IvritNativePlugin.localTranscription(input.getString("key"), input.getString("name"), input.getString("folder"),
-            download && !Store.unmetered(context) ? "wifi" : "queued", 0, null, null);
+            charging && !Store.charging(context) ? "charging" : download && !Store.unmetered(context) ? "wifi" : "queued", 0, null, null);
     }
 
     static Data.Builder input(String kind, String key, String source, String name, String type, String folder, boolean saveAudio, String origin) {

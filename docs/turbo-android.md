@@ -283,6 +283,13 @@ Open to comment; each with what it rests on.
     device check, bound to the very result by its hash); a key in the app could be
     pulled out of it, Play's word cannot. iPhone, once it has Turbo: App Attest.
 
+19. **Watched folders transcribe on the phone only while it charges**, by default
+    (a watch's `chargingOnly`, which its settings show where it may go to the
+    phone): a folder's files can wait, and a transcription takes the phone a
+    while. Unplugged, it pauses and goes on when plugged in again. What the user
+    asked for (shared, handed over, picked in the app) starts at once; only the
+    model's first download waits, for Wi-Fi.
+
 ## Verified, and not yet
 
 Built: `scripts/build-android.sh` makes the signed AAB and APK with the native

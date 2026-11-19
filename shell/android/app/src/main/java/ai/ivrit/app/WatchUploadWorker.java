@@ -71,6 +71,7 @@ public class WatchUploadWorker extends Worker {
             .input("watch", "watch-" + hash(watch.id + "\n" + docId), doc.toString(), name, type, watch.folder, true, "watch")
             .putString("watchId", watch.id)
             .putString("docId", docId)
+            .putBoolean("charging", watch.chargingOnly)
             .build());
     }
 
