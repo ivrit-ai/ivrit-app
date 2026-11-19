@@ -266,19 +266,37 @@
           $("bench-status").hidden = false;
           $("bench-status").textContent = text;
         };
+        // What the run is doing, kept between its events (a window's worth of seconds
+        // apart): the clock ticks every second, and a phase's percentage only rises.
+        let shown = null;
+        let ticker = null;
+        const render = () => {
+          if (!shown) return;
+          const percent = shown.fraction ? ` · ${Math.round(shown.fraction * 100)}%` : "";
+          status(`${PHASES[shown.phase] || "מכין"}${percent} · ${clock((Date.now() - since) / 1000)}`);
+        };
+        const stopTicking = () => {
+          clearInterval(ticker);
+          ticker = null;
+          shown = null;
+        };
         cap.addListener("IvritNative", "benchmark", async (event) => {
           if (event.key !== key && key !== null) return;
           if (event.phase === "failed") {
+            stopTicking();
             status(event.error === "unsupported" ? "הטלפון הזה לא יכול להריץ את מודל ה-Turbo." : "הבדיקה נכשלה. אפשר לנסות שוב.");
             $("bench-start").disabled = false;
             return;
           }
           if (!since) since = Date.now(); // the page opened while it ran
           if (event.phase !== "done") {
-            const percent = event.fraction ? ` · ${Math.round(event.fraction * 100)}%` : "";
-            status(`${PHASES[event.phase] || "מכין"}${percent} · ${clock((Date.now() - since) / 1000)}`);
+            const fraction = shown?.phase === event.phase ? Math.max(shown.fraction || 0, event.fraction || 0) : event.fraction;
+            shown = { phase: event.phase, fraction };
+            render();
+            ticker ??= setInterval(render, 1000);
             return;
           }
+          stopTicking();
           status("שולח את התוצאה…");
           const run = event.result;
           try {

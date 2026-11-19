@@ -477,6 +477,7 @@ public class LocalTranscribeWorker extends Worker {
         // A GPU run's pieces are watched for a hang (TurboGpu.Watchdog); the trial's
         // waits end in a failure of their own (ggml-webgpu-phones.patch).
         TurboGpu.Verdict watch = gpu && !trial ? verdict : null;
+        final boolean onGpu = gpu; // beam search on the GPU (Turbo.beams)
         // Checked when it downloaded: not loading is the phone short of memory.
         if (loaded == 0) throw new IllegalStateException("the Turbo model did not load");
         long handle = loaded;
@@ -507,11 +508,11 @@ public class LocalTranscribeWorker extends Worker {
                     sound.resampler = new Resampler(sampleRate);
                 }
                 sound.add(sound.resampler.push(samples));
-                if (sound.seconds() >= Turbo.CHUNK_SECONDS) hearTurbo(context, handle, speakers, threads, decodeThreads, sound, segments, state, prompt, false, duration, from, started, variant, watch);
+                if (sound.seconds() >= Turbo.CHUNK_SECONDS) hearTurbo(context, handle, speakers, threads, decodeThreads, sound, segments, state, prompt, false, duration, from, started, variant, onGpu, watch);
             });
             if (sound.resampler != null) sound.add(sound.resampler.flush());
             if (sound.start < 0) sound.start = from;
-            hearTurbo(context, handle, speakers, threads, decodeThreads, sound, segments, state, prompt, true, duration, from, started, variant, watch);
+            hearTurbo(context, handle, speakers, threads, decodeThreads, sound, segments, state, prompt, true, duration, from, started, variant, onGpu, watch);
         } catch (IllegalStateException e) {
             // ggml failing on the GPU (guard.cpp): the next level next time; this
             // recording again, from its last checkpoint, on the CPU (retried).
@@ -601,7 +602,7 @@ public class LocalTranscribeWorker extends Worker {
     private void hearTurbo(Context context, long handle, long speakers, int threads, int[] decodeThreads, Sound sound,
                            List<TurboTranscript.Segment> segments,
                            double[] state, int[] prompt, boolean last, double duration, double from, long started, String variant,
-                           TurboGpu.Verdict watch) throws Exception {
+                           boolean onGpu, TurboGpu.Verdict watch) throws Exception {
         if (isStopped()) throw new InterruptedException("stopped");
         if (sound.length < Resampler.RATE / 10) return; // nothing to speak of
         double start = sound.start;
@@ -617,12 +618,12 @@ public class LocalTranscribeWorker extends Worker {
         // On the GPU: a piece taking over twice its length (plus two minutes) has hung.
         try (TurboGpu.Watchdog ignored = watch == null ? null
                 : new TurboGpu.Watchdog(context, variant, watch, "run", (long) (2000 * seconds) + 120_000)) {
-            heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, threads, decodeThreads[0], Turbo.beams(watch != null), percent -> {
+            heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, threads, decodeThreads[0], Turbo.beams(onGpu), percent -> {
                 if (duration <= 0) return;
                 double fraction = Math.min(1, (start + seconds * percent / 100.0) / duration);
                 double spent = (System.currentTimeMillis() - started) / 1000.0;
                 double share = fraction - from / duration;
-                progress("transcribing", fraction, share > 0.03 ? spent * (1 - fraction) / share : null);
+                progress("transcribing", fraction, timeLeft(fraction, spent, share));
             }, start, last, state, prompt);
         }
         transcribeMs += System.currentTimeMillis() - transcribing;
@@ -783,6 +784,26 @@ public class LocalTranscribeWorker extends Worker {
         if (resultsId == null && why != null && !"gone".equals(why) && !"access".equals(why)) Notifications.showLocalFailed(context, key, name, why);
         IvritNativePlugin.localTranscription(key, name, folder, resultsId != null ? "done" : "failed", 1, resultsId, why);
         return Result.success();
+    }
+
+    private double leftFraction = -1;
+    private Double leftSeconds;
+    private long leftAt;
+
+    /**
+     * Time left, estimated from the share heard so far, only when progress moves (a
+     * window at a time): between, it counts down, rather than climbing as the time
+     * spent grows and dropping at the next window.
+     */
+    private Double timeLeft(double fraction, double spent, double share) {
+        long now = System.currentTimeMillis();
+        if (fraction > leftFraction) {
+            leftFraction = fraction;
+            leftSeconds = share > 0.03 ? spent * (1 - fraction) / share : null;
+            leftAt = now;
+            return leftSeconds;
+        }
+        return leftSeconds == null ? null : Math.max(0, leftSeconds - (now - leftAt) / 1000.0);
     }
 
     private void progress(String phase, double fraction, Double secondsLeft) {
