@@ -16,7 +16,26 @@
  #include <string>
  #include <utility>
  #include <vector>
-@@ -172,6 +174,7 @@
+@@ -88,8 +90,16 @@
+ 
+ #define WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE 64u
+ #define WEBGPU_NUM_PARAM_SLOT_SAFETY_MARGIN      10u
+-#define WEBGPU_RUNTIME_WAIT_TIMEOUT_MS           30000u
+-#define WEBGPU_RUNTIME_WAIT_TIMEOUT_NS           (WEBGPU_RUNTIME_WAIT_TIMEOUT_MS * 1e6)
++// How long a wait for the GPU may take before it fails: 30 s, or GGML_WEBGPU_WAIT_MS (read once).
++static uint32_t ggml_webgpu_wait_timeout_ms() {
++    static const uint32_t ms = [] {
++        const char * v = getenv("GGML_WEBGPU_WAIT_MS");
++        return v && atoi(v) > 0 ? (uint32_t) atoi(v) : 30000u;
++    }();
++    return ms;
++}
++#define WEBGPU_RUNTIME_WAIT_TIMEOUT_MS           ggml_webgpu_wait_timeout_ms()
++#define WEBGPU_RUNTIME_WAIT_TIMEOUT_NS           ((uint64_t) WEBGPU_RUNTIME_WAIT_TIMEOUT_MS * 1000000ull)
+ #define WEBGPU_PARAMS_BUF_SIZE_BYTES             128  // enough for 32 parameters
+ #define WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES     4
+ #define WEBGPU_STORAGE_BUF_BINDING_MULT          4    // a storage buffer binding size must be a multiple of 4
+@@ -172,6 +182,7 @@
  struct webgpu_capabilities {
      wgpu::Limits limits;
      bool         supports_subgroups       = false;
@@ -24,7 +43,7 @@
      bool         supports_subgroup_matrix = false;
      bool         supports_dot_product     = false;
  
-@@ -488,6 +491,29 @@
+@@ -488,6 +499,29 @@
  
  /** WebGPU Actions */
  
@@ -54,7 +73,7 @@
  template <typename T>
  static void ggml_backend_webgpu_check_wait_status(wgpu::WaitStatus wait_status,
                                                    T                callback_status,
-@@ -496,14 +522,18 @@
+@@ -496,14 +530,18 @@
                                                    const char *     failure_name,
                                                    const char *     callback_message) {
      if (wait_status == wgpu::WaitStatus::TimedOut) {
@@ -77,7 +96,33 @@
      }
  }
  
-@@ -1648,11 +1678,18 @@
+@@ -512,8 +550,12 @@
+     return UINT32_MAX;
+ }
+ 
++// GGML_WEBGPU_SUBMIT_BATCH: fewer kernels a submission where a GPU's watchdog ends long
++// submissions (Windows' TDR resets the device after about two seconds; phones' drivers
++// stop long jobs), however long the whole graph takes.
+ static uint32_t ggml_backend_webgpu_get_command_submit_batch_size() {
+-    return WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE;
++    const char * v = getenv("GGML_WEBGPU_SUBMIT_BATCH");
++    return v && atoi(v) > 0 ? (uint32_t) atoi(v) : WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE;
+ }
+ 
+ static void ggml_backend_webgpu_wait_queue(webgpu_global_context & ctx) {
+@@ -1620,8 +1662,9 @@
+                                              ggml_tensor *    src0,
+                                              ggml_tensor *    src1,
+                                              ggml_tensor *    dst) {
+-    // Determine if this is a mat-vec operation
+-    bool use_mat_vec = (dst->ne[1] <= 4);
++    // Determine if this is a mat-vec operation: up to 4 columns, or 8 with the phone programs
++    // (GGML_WEBGPU_MOBILE), where beam search's 5 would otherwise fill a 32-column tile.
++    bool use_mat_vec = dst->ne[1] <= (ctx->global_ctx->capabilities.mobile ? 8 : 4);
+ 
+     // use MMVQ path for mat-vec
+     bool use_mmvq = ggml_webgpu_can_use_mmvq(src0, src1, ctx->global_ctx->capabilities.supports_dot_product,
+@@ -1648,11 +1691,18 @@
      std::vector<webgpu_dispatch_desc> dispatches;
      const bool src_overlap = ggml_webgpu_tensor_binding_overlap(ctx->global_ctx, src0, src1) && !use_mmvq;
  
@@ -96,17 +141,18 @@
      } else {
          pipeline = ctx->shader_lib->get_mul_mat_fast_pipeline(shader_lib_ctx, src_overlap);
      }
-@@ -1718,6 +1755,9 @@
+@@ -1718,6 +1768,10 @@
          uint32_t output_groups = CEIL_DIV(dst->ne[0], decisions->outputs_per_wg);
          uint32_t total_wg      = output_groups * batches;
          compute_2d_workgroups(total_wg, max_wg_per_dim, wg_x, wg_y);
 +    } else if (use_mobile) {
-+        uint32_t total_wg = CEIL_DIV(dst->ne[0], 64) * CEIL_DIV(dst->ne[1], 64) * dst->ne[2] * dst->ne[3];
++        uint32_t total_wg = CEIL_DIV(dst->ne[0], 64) * CEIL_DIV(dst->ne[1], 8 * ggml_webgpu_shader_lib::mul_mat_mobile_columns()) *
++                            dst->ne[2] * dst->ne[3];
 +        compute_2d_workgroups(total_wg, max_wg_per_dim, wg_x, wg_y);
      } else {
          auto * decisions = static_cast<ggml_webgpu_mul_mat_shader_decisions *>(pipeline.context.get());
  
-@@ -1970,6 +2010,22 @@
+@@ -1970,6 +2024,22 @@
             kv_vec_head_dims_aligned && k_float_vec4_aligned && v_float_vec4_aligned;
  }
  
@@ -129,7 +175,7 @@
  static ggml_webgpu_flash_attn_op ggml_webgpu_flash_attn_prepare(webgpu_context & ctx,
                                                                  ggml_tensor *    Q,
                                                                  ggml_tensor *    K,
-@@ -2275,6 +2331,11 @@
+@@ -2275,6 +2345,11 @@
                                                  ggml_tensor *    sinks,
                                                  ggml_tensor *    dst) {
      ggml_webgpu_flash_attn_op op = ggml_webgpu_flash_attn_prepare(ctx, Q, K, V, mask, sinks, dst);
@@ -141,7 +187,7 @@
      if (ggml_webgpu_flash_attn_use_vec_path(ctx->global_ctx, Q, K, V)) {
          return ggml_webgpu_flash_attn_vec(ctx, Q, K, V, mask, sinks, dst, std::move(op));
      }
-@@ -3638,7 +3699,7 @@
+@@ -3638,7 +3713,7 @@
      wgpu::WaitStatus status =
          event_ctx->global_ctx->instance.WaitAny(event_ctx->future, WEBGPU_RUNTIME_WAIT_TIMEOUT_NS);
      if (status == wgpu::WaitStatus::TimedOut) {
@@ -150,10 +196,11 @@
      }
      event_ctx->recorded = false;
  }
-@@ -4143,11 +4204,19 @@
+@@ -4143,11 +4218,20 @@
      ctx->webgpu_global_ctx->command_submit_batch_size = ggml_backend_webgpu_get_command_submit_batch_size();
      ctx->webgpu_global_ctx->max_inflight_batches      = ggml_backend_webgpu_get_max_inflight_batches();
      ctx->webgpu_global_ctx->vendor                    = info.vendor;
++    ggml_webgpu_shader_lib::mul_mat_mobile_columns_for(ctx->webgpu_global_ctx->vendor);
 +    // ivrit-app: GGML_WEBGPU_DISABLE_SUBGROUPS, GGML_WEBGPU_DISABLE_SUBGROUP_MATRIX and
 +    // GGML_WEBGPU_DISABLE_DOT_PRODUCT leave those features unused, and GGML_WEBGPU_KEEP_ROBUSTNESS
 +    // Dawn's bounds checks on, for a driver that loses the device with them (Adreno's).
@@ -172,7 +219,7 @@
  
      bool valid_subgroup_matrix_config = false;
  #ifndef __EMSCRIPTEN__
-@@ -4155,7 +4224,8 @@
+@@ -4155,7 +4239,8 @@
      // NVIDIA GPUs typically report square configs (e.g. 16x16x16),
      // while Intel Xe2 GPUs report non-square configs (e.g. 8x16x16).
      // The shaders are already parameterized to handle any M/N/K dimensions.
@@ -182,7 +229,7 @@
          for (size_t i = 0; i < subgroup_matrix_configs.configCount; i++) {
              const wgpu::SubgroupMatrixConfig config = subgroup_matrix_configs.configs[i];
              if (config.componentType == wgpu::SubgroupMatrixComponentType::F16 &&
-@@ -4206,24 +4276,28 @@
+@@ -4206,24 +4291,28 @@
              GGML_UNUSED(device);
              GGML_LOG_ERROR("ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason),
                             std::string(message).c_str());
@@ -216,7 +263,7 @@
      deviceTogglesDesc.disabledToggles     = deviceDisabledToggles;
      deviceTogglesDesc.disabledToggleCount = 1;
  
-@@ -4254,6 +4328,13 @@
+@@ -4254,6 +4343,13 @@
          "device_desc: %s\n",
          info.vendorID, std::string(info.vendor).c_str(), std::string(info.architecture).c_str(), info.deviceID,
          std::string(info.device).c_str(), std::string(info.description).c_str());
@@ -230,7 +277,7 @@
  }
  
  static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
-@@ -4548,6 +4629,9 @@
+@@ -4548,6 +4644,9 @@
                      supports_op = false;
                      break;
                  }
@@ -242,12 +289,29 @@
  
 --- a/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
 +++ b/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
-@@ -2324,6 +2324,43 @@
+@@ -2324,6 +2324,63 @@
          return mul_mat_fast_pipelines[key];
      }
  
 +    // q8_0 or f16 x f32 for phone GPUs (mul_mat_mobile.wgsl, GGML_WEBGPU_MOBILE): 64 x 64 per workgroup of 64.
 +    std::unordered_map<int, webgpu_pipeline> mul_mat_mobile_pipelines;
++
++    // Each thread's columns: 8 (64 a workgroup), or 4 (32: fewer registers a thread), as
++    // the GPU wants them (mul_mat_mobile_columns_for: Intel's 4, measured on an Iris Xe;
++    // Adreno's 8, on a Galaxy S25), or GGML_WEBGPU_MOBILE_COLUMNS.
++    static inline uint32_t mobile_columns = 8;
++
++    static uint32_t mul_mat_mobile_columns() {
++        const char * v = getenv("GGML_WEBGPU_MOBILE_COLUMNS");
++        if (v) {
++            return atoi(v) == 4 ? 4u : 8u;
++        }
++        return mobile_columns;
++    }
++
++    static void mul_mat_mobile_columns_for(const std::string & vendor) {
++        mobile_columns = vendor.find("intel") != std::string::npos ? 4u : 8u;
++    }
 +
 +    webgpu_pipeline get_mul_mat_mobile_pipeline(ggml_type src0_type) {
 +        auto it = mul_mat_mobile_pipelines.find((int) src0_type);
@@ -258,6 +322,9 @@
 +        std::vector<std::string> defines;
 +        if (f16) {
 +            defines.push_back("SRC0_F16");
++        }
++        if (mul_mat_mobile_columns() == 4) {
++            defines.push_back("TN4");
 +        }
 +        auto processed = preprocessor.preprocess(wgsl_mul_mat_mobile, defines);
 +        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, f16 ? "mul_mat_mobile_f16_f32" : "mul_mat_mobile_q8_0_f32");
@@ -288,13 +355,17 @@
          if (it != mul_mat_id_gather_pipelines.end()) {
 --- a/ggml/src/ggml-webgpu/wgsl-shaders/flash_attn_mobile.wgsl
 +++ b/ggml/src/ggml-webgpu/wgsl-shaders/flash_attn_mobile.wgsl
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,208 @@
 +enable f16;
 +
 +// Flash attention for phone GPUs, without subgroups: f32 Q, f16 K and V, head size
 +// 64, no mask or sinks (Whisper's encoder). One query row per thread, 64 rows per
-+// workgroup; keys and values 16 at a time in shared memory, their scores first, then
-+// one rescale of the running output per 16 keys (online softmax).
++// workgroup; keys and values 8 at a time in shared memory, their scores first, then
++// one rescale of the running output per 8 keys (online softmax). The query is held
++// in f16 (in f32, registers spilled: twelve times slower). Every loop over the head's
++// 16 vectors and the 8 keys is written out (by a script), so no private array is
++// indexed by a loop: some compilers (Intel's, through Direct3D 12) keep such arrays
++// in memory.
 +
 +struct Params {
 +    offset_q: u32,
@@ -340,7 +411,6 @@
 +#endif
 +
 +const D = 64u;
-+const D4 = 16u;
 +const QT = 64u;  // query rows per workgroup, one per thread
 +const KT = 8u;   // keys per step
 +const NEG = -1.0e30;
@@ -360,28 +430,50 @@
 +    let q_row = (in_batch % wg_per_head) * QT + t;
 +    let live = q_row < params.seq_len_q;
 +    let kv_head = head / params.q_per_kv;
-+
 +    let k_base = params.offset_k + batch * params.stride_k3 + kv_head * params.stride_k2;
 +    let v_base = params.offset_v + batch * params.stride_v3 + kv_head * params.stride_v2;
 +
-+    var q: array<vec4<f16>, 16>; // f16 to keep registers down; the math is f32
-+    if (live) {
-+        let at = params.offset_q + batch * params.stride_q3 + head * params.stride_q2 + q_row * params.stride_q1;
-+        for (var d4 = 0u; d4 < D4; d4++) {
-+            let i = at + 4u * d4;
-+            q[d4] = vec4<f16>(vec4<f32>(Q[i], Q[i + 1u], Q[i + 2u], Q[i + 3u]) * params.scale);
-+        }
-+    }
-+
-+    var o: array<vec4<f32>, 16>;
++    let qa = params.offset_q + batch * params.stride_q3 + head * params.stride_q2 + min(q_row, params.seq_len_q - 1u) * params.stride_q1;
++    let q0 = vec4<f16>(vec4<f32>(Q[qa + 0u], Q[qa + 1u], Q[qa + 2u], Q[qa + 3u]) * params.scale);
++    let q1 = vec4<f16>(vec4<f32>(Q[qa + 4u], Q[qa + 5u], Q[qa + 6u], Q[qa + 7u]) * params.scale);
++    let q2 = vec4<f16>(vec4<f32>(Q[qa + 8u], Q[qa + 9u], Q[qa + 10u], Q[qa + 11u]) * params.scale);
++    let q3 = vec4<f16>(vec4<f32>(Q[qa + 12u], Q[qa + 13u], Q[qa + 14u], Q[qa + 15u]) * params.scale);
++    let q4 = vec4<f16>(vec4<f32>(Q[qa + 16u], Q[qa + 17u], Q[qa + 18u], Q[qa + 19u]) * params.scale);
++    let q5 = vec4<f16>(vec4<f32>(Q[qa + 20u], Q[qa + 21u], Q[qa + 22u], Q[qa + 23u]) * params.scale);
++    let q6 = vec4<f16>(vec4<f32>(Q[qa + 24u], Q[qa + 25u], Q[qa + 26u], Q[qa + 27u]) * params.scale);
++    let q7 = vec4<f16>(vec4<f32>(Q[qa + 28u], Q[qa + 29u], Q[qa + 30u], Q[qa + 31u]) * params.scale);
++    let q8 = vec4<f16>(vec4<f32>(Q[qa + 32u], Q[qa + 33u], Q[qa + 34u], Q[qa + 35u]) * params.scale);
++    let q9 = vec4<f16>(vec4<f32>(Q[qa + 36u], Q[qa + 37u], Q[qa + 38u], Q[qa + 39u]) * params.scale);
++    let q10 = vec4<f16>(vec4<f32>(Q[qa + 40u], Q[qa + 41u], Q[qa + 42u], Q[qa + 43u]) * params.scale);
++    let q11 = vec4<f16>(vec4<f32>(Q[qa + 44u], Q[qa + 45u], Q[qa + 46u], Q[qa + 47u]) * params.scale);
++    let q12 = vec4<f16>(vec4<f32>(Q[qa + 48u], Q[qa + 49u], Q[qa + 50u], Q[qa + 51u]) * params.scale);
++    let q13 = vec4<f16>(vec4<f32>(Q[qa + 52u], Q[qa + 53u], Q[qa + 54u], Q[qa + 55u]) * params.scale);
++    let q14 = vec4<f16>(vec4<f32>(Q[qa + 56u], Q[qa + 57u], Q[qa + 58u], Q[qa + 59u]) * params.scale);
++    let q15 = vec4<f16>(vec4<f32>(Q[qa + 60u], Q[qa + 61u], Q[qa + 62u], Q[qa + 63u]) * params.scale);
++    var o0 = vec4<f32>(0.0);
++    var o1 = vec4<f32>(0.0);
++    var o2 = vec4<f32>(0.0);
++    var o3 = vec4<f32>(0.0);
++    var o4 = vec4<f32>(0.0);
++    var o5 = vec4<f32>(0.0);
++    var o6 = vec4<f32>(0.0);
++    var o7 = vec4<f32>(0.0);
++    var o8 = vec4<f32>(0.0);
++    var o9 = vec4<f32>(0.0);
++    var o10 = vec4<f32>(0.0);
++    var o11 = vec4<f32>(0.0);
++    var o12 = vec4<f32>(0.0);
++    var o13 = vec4<f32>(0.0);
++    var o14 = vec4<f32>(0.0);
++    var o15 = vec4<f32>(0.0);
 +    var m = NEG;
 +    var l = 0.0;
 +
 +    for (var kv0 = 0u; kv0 < params.seq_len_kv; kv0 += KT) {
 +        for (var i = 0u; i < 2u; i++) {
 +            let idx = t + 64u * i;
-+            let key = kv0 + idx / D4;
-+            let d = 4u * (idx % D4);
++            let key = kv0 + idx / 16u;
++            let d = 4u * (idx % 16u);
 +            var kv = vec4<f16>(0.0);
 +            var vv = vec4<f16>(0.0);
 +            if (key < params.seq_len_kv) {
@@ -395,29 +487,42 @@
 +        }
 +        workgroupBarrier();
 +
-+        var s: array<f32, 8>;
-+        var tile_max = NEG;
-+        for (var j = 0u; j < KT; j++) {
-+            var acc = 0.0;
-+            for (var d4 = 0u; d4 < D4; d4++) {
-+                acc += dot(vec4<f32>(q[d4]), vec4<f32>(ks[j * D4 + d4]));
-+            }
-+            s[j] = select(NEG, acc, kv0 + j < params.seq_len_kv);
-+            tile_max = max(tile_max, s[j]);
-+        }
++        let s0 = select(NEG, dot(vec4<f32>(q0), vec4<f32>(ks[0u])) + dot(vec4<f32>(q1), vec4<f32>(ks[1u])) + dot(vec4<f32>(q2), vec4<f32>(ks[2u])) + dot(vec4<f32>(q3), vec4<f32>(ks[3u])) + dot(vec4<f32>(q4), vec4<f32>(ks[4u])) + dot(vec4<f32>(q5), vec4<f32>(ks[5u])) + dot(vec4<f32>(q6), vec4<f32>(ks[6u])) + dot(vec4<f32>(q7), vec4<f32>(ks[7u])) + dot(vec4<f32>(q8), vec4<f32>(ks[8u])) + dot(vec4<f32>(q9), vec4<f32>(ks[9u])) + dot(vec4<f32>(q10), vec4<f32>(ks[10u])) + dot(vec4<f32>(q11), vec4<f32>(ks[11u])) + dot(vec4<f32>(q12), vec4<f32>(ks[12u])) + dot(vec4<f32>(q13), vec4<f32>(ks[13u])) + dot(vec4<f32>(q14), vec4<f32>(ks[14u])) + dot(vec4<f32>(q15), vec4<f32>(ks[15u])), kv0 + 0u < params.seq_len_kv);
++        let s1 = select(NEG, dot(vec4<f32>(q0), vec4<f32>(ks[16u])) + dot(vec4<f32>(q1), vec4<f32>(ks[17u])) + dot(vec4<f32>(q2), vec4<f32>(ks[18u])) + dot(vec4<f32>(q3), vec4<f32>(ks[19u])) + dot(vec4<f32>(q4), vec4<f32>(ks[20u])) + dot(vec4<f32>(q5), vec4<f32>(ks[21u])) + dot(vec4<f32>(q6), vec4<f32>(ks[22u])) + dot(vec4<f32>(q7), vec4<f32>(ks[23u])) + dot(vec4<f32>(q8), vec4<f32>(ks[24u])) + dot(vec4<f32>(q9), vec4<f32>(ks[25u])) + dot(vec4<f32>(q10), vec4<f32>(ks[26u])) + dot(vec4<f32>(q11), vec4<f32>(ks[27u])) + dot(vec4<f32>(q12), vec4<f32>(ks[28u])) + dot(vec4<f32>(q13), vec4<f32>(ks[29u])) + dot(vec4<f32>(q14), vec4<f32>(ks[30u])) + dot(vec4<f32>(q15), vec4<f32>(ks[31u])), kv0 + 1u < params.seq_len_kv);
++        let s2 = select(NEG, dot(vec4<f32>(q0), vec4<f32>(ks[32u])) + dot(vec4<f32>(q1), vec4<f32>(ks[33u])) + dot(vec4<f32>(q2), vec4<f32>(ks[34u])) + dot(vec4<f32>(q3), vec4<f32>(ks[35u])) + dot(vec4<f32>(q4), vec4<f32>(ks[36u])) + dot(vec4<f32>(q5), vec4<f32>(ks[37u])) + dot(vec4<f32>(q6), vec4<f32>(ks[38u])) + dot(vec4<f32>(q7), vec4<f32>(ks[39u])) + dot(vec4<f32>(q8), vec4<f32>(ks[40u])) + dot(vec4<f32>(q9), vec4<f32>(ks[41u])) + dot(vec4<f32>(q10), vec4<f32>(ks[42u])) + dot(vec4<f32>(q11), vec4<f32>(ks[43u])) + dot(vec4<f32>(q12), vec4<f32>(ks[44u])) + dot(vec4<f32>(q13), vec4<f32>(ks[45u])) + dot(vec4<f32>(q14), vec4<f32>(ks[46u])) + dot(vec4<f32>(q15), vec4<f32>(ks[47u])), kv0 + 2u < params.seq_len_kv);
++        let s3 = select(NEG, dot(vec4<f32>(q0), vec4<f32>(ks[48u])) + dot(vec4<f32>(q1), vec4<f32>(ks[49u])) + dot(vec4<f32>(q2), vec4<f32>(ks[50u])) + dot(vec4<f32>(q3), vec4<f32>(ks[51u])) + dot(vec4<f32>(q4), vec4<f32>(ks[52u])) + dot(vec4<f32>(q5), vec4<f32>(ks[53u])) + dot(vec4<f32>(q6), vec4<f32>(ks[54u])) + dot(vec4<f32>(q7), vec4<f32>(ks[55u])) + dot(vec4<f32>(q8), vec4<f32>(ks[56u])) + dot(vec4<f32>(q9), vec4<f32>(ks[57u])) + dot(vec4<f32>(q10), vec4<f32>(ks[58u])) + dot(vec4<f32>(q11), vec4<f32>(ks[59u])) + dot(vec4<f32>(q12), vec4<f32>(ks[60u])) + dot(vec4<f32>(q13), vec4<f32>(ks[61u])) + dot(vec4<f32>(q14), vec4<f32>(ks[62u])) + dot(vec4<f32>(q15), vec4<f32>(ks[63u])), kv0 + 3u < params.seq_len_kv);
++        let s4 = select(NEG, dot(vec4<f32>(q0), vec4<f32>(ks[64u])) + dot(vec4<f32>(q1), vec4<f32>(ks[65u])) + dot(vec4<f32>(q2), vec4<f32>(ks[66u])) + dot(vec4<f32>(q3), vec4<f32>(ks[67u])) + dot(vec4<f32>(q4), vec4<f32>(ks[68u])) + dot(vec4<f32>(q5), vec4<f32>(ks[69u])) + dot(vec4<f32>(q6), vec4<f32>(ks[70u])) + dot(vec4<f32>(q7), vec4<f32>(ks[71u])) + dot(vec4<f32>(q8), vec4<f32>(ks[72u])) + dot(vec4<f32>(q9), vec4<f32>(ks[73u])) + dot(vec4<f32>(q10), vec4<f32>(ks[74u])) + dot(vec4<f32>(q11), vec4<f32>(ks[75u])) + dot(vec4<f32>(q12), vec4<f32>(ks[76u])) + dot(vec4<f32>(q13), vec4<f32>(ks[77u])) + dot(vec4<f32>(q14), vec4<f32>(ks[78u])) + dot(vec4<f32>(q15), vec4<f32>(ks[79u])), kv0 + 4u < params.seq_len_kv);
++        let s5 = select(NEG, dot(vec4<f32>(q0), vec4<f32>(ks[80u])) + dot(vec4<f32>(q1), vec4<f32>(ks[81u])) + dot(vec4<f32>(q2), vec4<f32>(ks[82u])) + dot(vec4<f32>(q3), vec4<f32>(ks[83u])) + dot(vec4<f32>(q4), vec4<f32>(ks[84u])) + dot(vec4<f32>(q5), vec4<f32>(ks[85u])) + dot(vec4<f32>(q6), vec4<f32>(ks[86u])) + dot(vec4<f32>(q7), vec4<f32>(ks[87u])) + dot(vec4<f32>(q8), vec4<f32>(ks[88u])) + dot(vec4<f32>(q9), vec4<f32>(ks[89u])) + dot(vec4<f32>(q10), vec4<f32>(ks[90u])) + dot(vec4<f32>(q11), vec4<f32>(ks[91u])) + dot(vec4<f32>(q12), vec4<f32>(ks[92u])) + dot(vec4<f32>(q13), vec4<f32>(ks[93u])) + dot(vec4<f32>(q14), vec4<f32>(ks[94u])) + dot(vec4<f32>(q15), vec4<f32>(ks[95u])), kv0 + 5u < params.seq_len_kv);
++        let s6 = select(NEG, dot(vec4<f32>(q0), vec4<f32>(ks[96u])) + dot(vec4<f32>(q1), vec4<f32>(ks[97u])) + dot(vec4<f32>(q2), vec4<f32>(ks[98u])) + dot(vec4<f32>(q3), vec4<f32>(ks[99u])) + dot(vec4<f32>(q4), vec4<f32>(ks[100u])) + dot(vec4<f32>(q5), vec4<f32>(ks[101u])) + dot(vec4<f32>(q6), vec4<f32>(ks[102u])) + dot(vec4<f32>(q7), vec4<f32>(ks[103u])) + dot(vec4<f32>(q8), vec4<f32>(ks[104u])) + dot(vec4<f32>(q9), vec4<f32>(ks[105u])) + dot(vec4<f32>(q10), vec4<f32>(ks[106u])) + dot(vec4<f32>(q11), vec4<f32>(ks[107u])) + dot(vec4<f32>(q12), vec4<f32>(ks[108u])) + dot(vec4<f32>(q13), vec4<f32>(ks[109u])) + dot(vec4<f32>(q14), vec4<f32>(ks[110u])) + dot(vec4<f32>(q15), vec4<f32>(ks[111u])), kv0 + 6u < params.seq_len_kv);
++        let s7 = select(NEG, dot(vec4<f32>(q0), vec4<f32>(ks[112u])) + dot(vec4<f32>(q1), vec4<f32>(ks[113u])) + dot(vec4<f32>(q2), vec4<f32>(ks[114u])) + dot(vec4<f32>(q3), vec4<f32>(ks[115u])) + dot(vec4<f32>(q4), vec4<f32>(ks[116u])) + dot(vec4<f32>(q5), vec4<f32>(ks[117u])) + dot(vec4<f32>(q6), vec4<f32>(ks[118u])) + dot(vec4<f32>(q7), vec4<f32>(ks[119u])) + dot(vec4<f32>(q8), vec4<f32>(ks[120u])) + dot(vec4<f32>(q9), vec4<f32>(ks[121u])) + dot(vec4<f32>(q10), vec4<f32>(ks[122u])) + dot(vec4<f32>(q11), vec4<f32>(ks[123u])) + dot(vec4<f32>(q12), vec4<f32>(ks[124u])) + dot(vec4<f32>(q13), vec4<f32>(ks[125u])) + dot(vec4<f32>(q14), vec4<f32>(ks[126u])) + dot(vec4<f32>(q15), vec4<f32>(ks[127u])), kv0 + 7u < params.seq_len_kv);
++        let tile_max = max(max(max(s0, s1), max(s2, s3)), max(max(s4, s5), max(s6, s7)));
 +        let m_new = max(m, tile_max);
 +        let corr = exp(m - m_new);
-+        l *= corr;
-+        for (var d4 = 0u; d4 < D4; d4++) {
-+            o[d4] *= corr;
-+        }
-+        for (var j = 0u; j < KT; j++) {
-+            let p = exp(s[j] - m_new);
-+            l += p;
-+            for (var d4 = 0u; d4 < D4; d4++) {
-+                o[d4] = fma(vec4<f32>(p), vec4<f32>(vs[j * D4 + d4]), o[d4]);
-+            }
-+        }
++        let p0 = exp(s0 - m_new);
++        let p1 = exp(s1 - m_new);
++        let p2 = exp(s2 - m_new);
++        let p3 = exp(s3 - m_new);
++        let p4 = exp(s4 - m_new);
++        let p5 = exp(s5 - m_new);
++        let p6 = exp(s6 - m_new);
++        let p7 = exp(s7 - m_new);
++        l = l * corr + p0 + p1 + p2 + p3 + p4 + p5 + p6 + p7;
++        o0 = fma(vec4<f32>(p7), vec4<f32>(vs[112u]), fma(vec4<f32>(p6), vec4<f32>(vs[96u]), fma(vec4<f32>(p5), vec4<f32>(vs[80u]), fma(vec4<f32>(p4), vec4<f32>(vs[64u]), fma(vec4<f32>(p3), vec4<f32>(vs[48u]), fma(vec4<f32>(p2), vec4<f32>(vs[32u]), fma(vec4<f32>(p1), vec4<f32>(vs[16u]), fma(vec4<f32>(p0), vec4<f32>(vs[0u]), o0 * corr))))))));
++        o1 = fma(vec4<f32>(p7), vec4<f32>(vs[113u]), fma(vec4<f32>(p6), vec4<f32>(vs[97u]), fma(vec4<f32>(p5), vec4<f32>(vs[81u]), fma(vec4<f32>(p4), vec4<f32>(vs[65u]), fma(vec4<f32>(p3), vec4<f32>(vs[49u]), fma(vec4<f32>(p2), vec4<f32>(vs[33u]), fma(vec4<f32>(p1), vec4<f32>(vs[17u]), fma(vec4<f32>(p0), vec4<f32>(vs[1u]), o1 * corr))))))));
++        o2 = fma(vec4<f32>(p7), vec4<f32>(vs[114u]), fma(vec4<f32>(p6), vec4<f32>(vs[98u]), fma(vec4<f32>(p5), vec4<f32>(vs[82u]), fma(vec4<f32>(p4), vec4<f32>(vs[66u]), fma(vec4<f32>(p3), vec4<f32>(vs[50u]), fma(vec4<f32>(p2), vec4<f32>(vs[34u]), fma(vec4<f32>(p1), vec4<f32>(vs[18u]), fma(vec4<f32>(p0), vec4<f32>(vs[2u]), o2 * corr))))))));
++        o3 = fma(vec4<f32>(p7), vec4<f32>(vs[115u]), fma(vec4<f32>(p6), vec4<f32>(vs[99u]), fma(vec4<f32>(p5), vec4<f32>(vs[83u]), fma(vec4<f32>(p4), vec4<f32>(vs[67u]), fma(vec4<f32>(p3), vec4<f32>(vs[51u]), fma(vec4<f32>(p2), vec4<f32>(vs[35u]), fma(vec4<f32>(p1), vec4<f32>(vs[19u]), fma(vec4<f32>(p0), vec4<f32>(vs[3u]), o3 * corr))))))));
++        o4 = fma(vec4<f32>(p7), vec4<f32>(vs[116u]), fma(vec4<f32>(p6), vec4<f32>(vs[100u]), fma(vec4<f32>(p5), vec4<f32>(vs[84u]), fma(vec4<f32>(p4), vec4<f32>(vs[68u]), fma(vec4<f32>(p3), vec4<f32>(vs[52u]), fma(vec4<f32>(p2), vec4<f32>(vs[36u]), fma(vec4<f32>(p1), vec4<f32>(vs[20u]), fma(vec4<f32>(p0), vec4<f32>(vs[4u]), o4 * corr))))))));
++        o5 = fma(vec4<f32>(p7), vec4<f32>(vs[117u]), fma(vec4<f32>(p6), vec4<f32>(vs[101u]), fma(vec4<f32>(p5), vec4<f32>(vs[85u]), fma(vec4<f32>(p4), vec4<f32>(vs[69u]), fma(vec4<f32>(p3), vec4<f32>(vs[53u]), fma(vec4<f32>(p2), vec4<f32>(vs[37u]), fma(vec4<f32>(p1), vec4<f32>(vs[21u]), fma(vec4<f32>(p0), vec4<f32>(vs[5u]), o5 * corr))))))));
++        o6 = fma(vec4<f32>(p7), vec4<f32>(vs[118u]), fma(vec4<f32>(p6), vec4<f32>(vs[102u]), fma(vec4<f32>(p5), vec4<f32>(vs[86u]), fma(vec4<f32>(p4), vec4<f32>(vs[70u]), fma(vec4<f32>(p3), vec4<f32>(vs[54u]), fma(vec4<f32>(p2), vec4<f32>(vs[38u]), fma(vec4<f32>(p1), vec4<f32>(vs[22u]), fma(vec4<f32>(p0), vec4<f32>(vs[6u]), o6 * corr))))))));
++        o7 = fma(vec4<f32>(p7), vec4<f32>(vs[119u]), fma(vec4<f32>(p6), vec4<f32>(vs[103u]), fma(vec4<f32>(p5), vec4<f32>(vs[87u]), fma(vec4<f32>(p4), vec4<f32>(vs[71u]), fma(vec4<f32>(p3), vec4<f32>(vs[55u]), fma(vec4<f32>(p2), vec4<f32>(vs[39u]), fma(vec4<f32>(p1), vec4<f32>(vs[23u]), fma(vec4<f32>(p0), vec4<f32>(vs[7u]), o7 * corr))))))));
++        o8 = fma(vec4<f32>(p7), vec4<f32>(vs[120u]), fma(vec4<f32>(p6), vec4<f32>(vs[104u]), fma(vec4<f32>(p5), vec4<f32>(vs[88u]), fma(vec4<f32>(p4), vec4<f32>(vs[72u]), fma(vec4<f32>(p3), vec4<f32>(vs[56u]), fma(vec4<f32>(p2), vec4<f32>(vs[40u]), fma(vec4<f32>(p1), vec4<f32>(vs[24u]), fma(vec4<f32>(p0), vec4<f32>(vs[8u]), o8 * corr))))))));
++        o9 = fma(vec4<f32>(p7), vec4<f32>(vs[121u]), fma(vec4<f32>(p6), vec4<f32>(vs[105u]), fma(vec4<f32>(p5), vec4<f32>(vs[89u]), fma(vec4<f32>(p4), vec4<f32>(vs[73u]), fma(vec4<f32>(p3), vec4<f32>(vs[57u]), fma(vec4<f32>(p2), vec4<f32>(vs[41u]), fma(vec4<f32>(p1), vec4<f32>(vs[25u]), fma(vec4<f32>(p0), vec4<f32>(vs[9u]), o9 * corr))))))));
++        o10 = fma(vec4<f32>(p7), vec4<f32>(vs[122u]), fma(vec4<f32>(p6), vec4<f32>(vs[106u]), fma(vec4<f32>(p5), vec4<f32>(vs[90u]), fma(vec4<f32>(p4), vec4<f32>(vs[74u]), fma(vec4<f32>(p3), vec4<f32>(vs[58u]), fma(vec4<f32>(p2), vec4<f32>(vs[42u]), fma(vec4<f32>(p1), vec4<f32>(vs[26u]), fma(vec4<f32>(p0), vec4<f32>(vs[10u]), o10 * corr))))))));
++        o11 = fma(vec4<f32>(p7), vec4<f32>(vs[123u]), fma(vec4<f32>(p6), vec4<f32>(vs[107u]), fma(vec4<f32>(p5), vec4<f32>(vs[91u]), fma(vec4<f32>(p4), vec4<f32>(vs[75u]), fma(vec4<f32>(p3), vec4<f32>(vs[59u]), fma(vec4<f32>(p2), vec4<f32>(vs[43u]), fma(vec4<f32>(p1), vec4<f32>(vs[27u]), fma(vec4<f32>(p0), vec4<f32>(vs[11u]), o11 * corr))))))));
++        o12 = fma(vec4<f32>(p7), vec4<f32>(vs[124u]), fma(vec4<f32>(p6), vec4<f32>(vs[108u]), fma(vec4<f32>(p5), vec4<f32>(vs[92u]), fma(vec4<f32>(p4), vec4<f32>(vs[76u]), fma(vec4<f32>(p3), vec4<f32>(vs[60u]), fma(vec4<f32>(p2), vec4<f32>(vs[44u]), fma(vec4<f32>(p1), vec4<f32>(vs[28u]), fma(vec4<f32>(p0), vec4<f32>(vs[12u]), o12 * corr))))))));
++        o13 = fma(vec4<f32>(p7), vec4<f32>(vs[125u]), fma(vec4<f32>(p6), vec4<f32>(vs[109u]), fma(vec4<f32>(p5), vec4<f32>(vs[93u]), fma(vec4<f32>(p4), vec4<f32>(vs[77u]), fma(vec4<f32>(p3), vec4<f32>(vs[61u]), fma(vec4<f32>(p2), vec4<f32>(vs[45u]), fma(vec4<f32>(p1), vec4<f32>(vs[29u]), fma(vec4<f32>(p0), vec4<f32>(vs[13u]), o13 * corr))))))));
++        o14 = fma(vec4<f32>(p7), vec4<f32>(vs[126u]), fma(vec4<f32>(p6), vec4<f32>(vs[110u]), fma(vec4<f32>(p5), vec4<f32>(vs[94u]), fma(vec4<f32>(p4), vec4<f32>(vs[78u]), fma(vec4<f32>(p3), vec4<f32>(vs[62u]), fma(vec4<f32>(p2), vec4<f32>(vs[46u]), fma(vec4<f32>(p1), vec4<f32>(vs[30u]), fma(vec4<f32>(p0), vec4<f32>(vs[14u]), o14 * corr))))))));
++        o15 = fma(vec4<f32>(p7), vec4<f32>(vs[127u]), fma(vec4<f32>(p6), vec4<f32>(vs[111u]), fma(vec4<f32>(p5), vec4<f32>(vs[95u]), fma(vec4<f32>(p4), vec4<f32>(vs[79u]), fma(vec4<f32>(p3), vec4<f32>(vs[63u]), fma(vec4<f32>(p2), vec4<f32>(vs[47u]), fma(vec4<f32>(p1), vec4<f32>(vs[31u]), fma(vec4<f32>(p0), vec4<f32>(vs[15u]), o15 * corr))))))));
 +        m = m_new;
 +        workgroupBarrier();
 +    }
@@ -425,24 +530,54 @@
 +    if (live) {
 +        let inv = select(0.0, 1.0 / l, l > 0.0);
 +        let at = params.offset_dst + batch * (D * params.n_heads * params.seq_len_q) + q_row * (D * params.n_heads) + head * D;
-+        for (var d4 = 0u; d4 < D4; d4++) {
-+            let v = o[d4] * inv;
-+            dst[at + 4u * d4] = v.x;
-+            dst[at + 4u * d4 + 1u] = v.y;
-+            dst[at + 4u * d4 + 2u] = v.z;
-+            dst[at + 4u * d4 + 3u] = v.w;
-+        }
++        let v0 = o0 * inv;
++        dst[at + 0u] = v0.x; dst[at + 1u] = v0.y; dst[at + 2u] = v0.z; dst[at + 3u] = v0.w;
++        let v1 = o1 * inv;
++        dst[at + 4u] = v1.x; dst[at + 5u] = v1.y; dst[at + 6u] = v1.z; dst[at + 7u] = v1.w;
++        let v2 = o2 * inv;
++        dst[at + 8u] = v2.x; dst[at + 9u] = v2.y; dst[at + 10u] = v2.z; dst[at + 11u] = v2.w;
++        let v3 = o3 * inv;
++        dst[at + 12u] = v3.x; dst[at + 13u] = v3.y; dst[at + 14u] = v3.z; dst[at + 15u] = v3.w;
++        let v4 = o4 * inv;
++        dst[at + 16u] = v4.x; dst[at + 17u] = v4.y; dst[at + 18u] = v4.z; dst[at + 19u] = v4.w;
++        let v5 = o5 * inv;
++        dst[at + 20u] = v5.x; dst[at + 21u] = v5.y; dst[at + 22u] = v5.z; dst[at + 23u] = v5.w;
++        let v6 = o6 * inv;
++        dst[at + 24u] = v6.x; dst[at + 25u] = v6.y; dst[at + 26u] = v6.z; dst[at + 27u] = v6.w;
++        let v7 = o7 * inv;
++        dst[at + 28u] = v7.x; dst[at + 29u] = v7.y; dst[at + 30u] = v7.z; dst[at + 31u] = v7.w;
++        let v8 = o8 * inv;
++        dst[at + 32u] = v8.x; dst[at + 33u] = v8.y; dst[at + 34u] = v8.z; dst[at + 35u] = v8.w;
++        let v9 = o9 * inv;
++        dst[at + 36u] = v9.x; dst[at + 37u] = v9.y; dst[at + 38u] = v9.z; dst[at + 39u] = v9.w;
++        let v10 = o10 * inv;
++        dst[at + 40u] = v10.x; dst[at + 41u] = v10.y; dst[at + 42u] = v10.z; dst[at + 43u] = v10.w;
++        let v11 = o11 * inv;
++        dst[at + 44u] = v11.x; dst[at + 45u] = v11.y; dst[at + 46u] = v11.z; dst[at + 47u] = v11.w;
++        let v12 = o12 * inv;
++        dst[at + 48u] = v12.x; dst[at + 49u] = v12.y; dst[at + 50u] = v12.z; dst[at + 51u] = v12.w;
++        let v13 = o13 * inv;
++        dst[at + 52u] = v13.x; dst[at + 53u] = v13.y; dst[at + 54u] = v13.z; dst[at + 55u] = v13.w;
++        let v14 = o14 * inv;
++        dst[at + 56u] = v14.x; dst[at + 57u] = v14.y; dst[at + 58u] = v14.z; dst[at + 59u] = v14.w;
++        let v15 = o15 * inv;
++        dst[at + 60u] = v15.x; dst[at + 61u] = v15.y; dst[at + 62u] = v15.z; dst[at + 63u] = v15.w;
 +    }
 +}
 --- a/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_mobile.wgsl
 +++ b/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_mobile.wgsl
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,229 @@
 +enable f16;
 +
-+// q8_0 (or f16, SRC0_F16) x f32 matrix multiply for phone GPUs, without subgroups: a 64 x 64 tile of
-+// the output per workgroup of 64 threads, 8 x 8 outputs per thread. Both tiles sit in
-+// shared memory as vec4<f16> along M (src0) and N (src1), k by k, so each step reads
-+// four vectors and does sixteen vec4 multiply-adds in f32.
++// q8_0 (or f16, SRC0_F16) x f32 matrix multiply for phone GPUs, without subgroups:
++// a 64 x BN tile of the output per workgroup of 64 threads, 8 rows by 8 columns a
++// thread (BN 64), or by 4 (TN4, BN 32: fewer registers, as Intel's GPUs want). Both
++// tiles sit in shared memory as vec4<f16> along M (src0) and N (src1), k by k, so
++// each step reads a few vectors and does vec4 multiply-adds in f32. The tiles load so
++// that neighbouring threads read neighbouring memory (a row's block a thread; one k
++// of four columns a thread, neighbours on the next k). Every index into a thread's
++// own values is known when it compiles (no private array indexed by a loop): some
++// compilers (Intel's, through Direct3D 12) keep such arrays in memory.
 +
 +struct MulMatParams {
 +    offset_src0: u32,
@@ -474,13 +609,17 @@
 +
 +const WG_M = 8u;
 +const BM = 64u;
++#ifdef TN4
++const BN = 32u;
++#else
 +const BN = 64u;
++#endif
 +const BK = 32u;    // one q8_0 block
-+const BM4 = 16u;   // BM / 4
-+const BN4 = 16u;
++const BM4 = BM / 4u;
++const BN4 = BN / 4u;
 +
-+var<workgroup> sa: array<vec4<f16>, 512>; // [k][m / 4]
-+var<workgroup> sb: array<vec4<f16>, 512>; // [k][n / 4]
++var<workgroup> sa: array<vec4<f16>, BK * BM4>; // [k][m / 4]
++var<workgroup> sb: array<vec4<f16>, BK * BN4>; // [k][n / 4]
 +
 +#ifndef SRC0_F16
 +fn load_u32_src0(byte_offset: u32) -> u32 {
@@ -491,52 +630,79 @@
 +    return select((lo >> shift) | (hi << (32u - shift)), lo, shift == 0u);
 +}
 +
-+fn i8_at(w: u32, i: u32) -> f32 {
-+    return f32(bitcast<i32>(w << (24u - 8u * i)) >> 24u);
++fn i8x4(w: u32) -> vec4<f32> {
++    return vec4<f32>(f32(bitcast<i32>(w << 24u) >> 24u), f32(bitcast<i32>(w << 16u) >> 24u),
++                     f32(bitcast<i32>(w << 8u) >> 24u), f32(bitcast<i32>(w) >> 24u));
 +}
 +
-+// 8 weights of row `m` from k0 on (within its block), scaled; zeros past the matrix.
-+fn row8(base: u32, m: u32, kb: u32, k0: u32) -> array<f32, 8> {
-+    var v: array<f32, 8>;
++// Row m's block kb (32 weights, scaled) into the tile at its place `local` along M.
++fn load_row(base: u32, m: u32, local: u32, kb: u32) {
++    let q = local / 4u;
++    let c = local % 4u;
 +    if (m < params.m) {
 +        let b = (base + m * params.stride_01 + kb) * 34u;
 +        let d = unpack2x16float(load_u32_src0(b) & 0xFFFFu).x;
-+        let w0 = load_u32_src0(b + 2u + k0);
-+        let w1 = load_u32_src0(b + 6u + k0);
-+        for (var i = 0u; i < 4u; i++) {
-+            v[i] = i8_at(w0, i) * d;
-+            v[i + 4u] = i8_at(w1, i) * d;
++        for (var w = 0u; w < 8u; w++) {
++            let v = vec4<f16>(i8x4(load_u32_src0(b + 2u + 4u * w)) * d);
++            sa[(4u * w) * BM4 + q][c] = v.x;
++            sa[(4u * w + 1u) * BM4 + q][c] = v.y;
++            sa[(4u * w + 2u) * BM4 + q][c] = v.z;
++            sa[(4u * w + 3u) * BM4 + q][c] = v.w;
++        }
++    } else {
++        for (var k = 0u; k < BK; k++) {
++            sa[k * BM4 + q][c] = 0.0h;
 +        }
 +    }
-+    return v;
 +}
 +#else
-+// 8 values of row `m` from k on; zeros past the matrix (never read: no bounds checks here).
-+fn row8(base: u32, m: u32, kb: u32, k: u32) -> array<f32, 8> {
-+    var v: array<f32, 8>;
-+    if (m < params.m) {
-+        let at = base + m * params.stride_01 + kb * BK + k;
-+        for (var i = 0u; i < 8u; i++) {
-+            if (kb * BK + k + i < params.k) {
-+                v[i] = f32(src0[at + i]);
-+            }
-+        }
++fn load_row(base: u32, m: u32, local: u32, kb: u32) {
++    let q = local / 4u;
++    let c = local % 4u;
++    let at = base + m * params.stride_01 + kb * BK;
++    for (var k = 0u; k < BK; k++) {
++        let inside = m < params.m && kb * BK + k < params.k;
++        sa[k * BM4 + q][c] = select(0.0h, src0[min(at + k, arrayLength(&src0) - 1u)], inside);
 +    }
-+    return v;
 +}
 +#endif
 +
-+fn col8(base: u32, n: u32, k: u32) -> array<f32, 8> {
-+    var v: array<f32, 8>;
-+    if (n < params.n) {
-+        let at = base + n * params.stride_11 + k;
-+        for (var i = 0u; i < 8u; i++) {
-+            if (k + i < params.k) {
-+                v[i] = src1[at + i];
-+            }
-+        }
++fn f32_at(at: u32, inside: bool) -> f32 {
++    return select(0.0, src1[min(at, arrayLength(&src1) - 1u)], inside);
++}
++
++// Columns n..n+3 at one k (local kk), as a vector, into the tile.
++fn load_cols(base: u32, n: u32, k: u32, group: u32, kk: u32) {
++    let at = base + n * params.stride_11 + k;
++    let in_k = k < params.k;
++    sb[kk * BN4 + group] = vec4<f16>(vec4<f32>(
++        f32_at(at, in_k && n < params.n),
++        f32_at(at + params.stride_11, in_k && n + 1u < params.n),
++        f32_at(at + 2u * params.stride_11, in_k && n + 2u < params.n),
++        f32_at(at + 3u * params.stride_11, in_k && n + 3u < params.n)));
++}
++
++// One column's eight outputs (rows m0..m0+7), those inside the matrix.
++fn store8(at: u32, m0: u32, lo: vec4<f32>, hi: vec4<f32>) {
++    if (m0 + 8u <= params.m) {
++        dst[at] = lo.x;
++        dst[at + 1u] = lo.y;
++        dst[at + 2u] = lo.z;
++        dst[at + 3u] = lo.w;
++        dst[at + 4u] = hi.x;
++        dst[at + 5u] = hi.y;
++        dst[at + 6u] = hi.z;
++        dst[at + 7u] = hi.w;
++        return;
 +    }
-+    return v;
++    if (m0 < params.m) { dst[at] = lo.x; }
++    if (m0 + 1u < params.m) { dst[at + 1u] = lo.y; }
++    if (m0 + 2u < params.m) { dst[at + 2u] = lo.z; }
++    if (m0 + 3u < params.m) { dst[at + 3u] = lo.w; }
++    if (m0 + 4u < params.m) { dst[at + 4u] = hi.x; }
++    if (m0 + 5u < params.m) { dst[at + 5u] = hi.y; }
++    if (m0 + 6u < params.m) { dst[at + 6u] = hi.z; }
++    if (m0 + 7u < params.m) { dst[at + 7u] = hi.w; }
 +}
 +
 +@compute @workgroup_size(64)
@@ -563,70 +729,70 @@
 +    let src0_base = params.offset_src0 + (dst3_idx / params.broadcast3) * params.stride_03 + (dst2_idx / params.broadcast2) * params.stride_02;
 +    let src1_base = params.offset_src1 + dst3_idx * params.stride_13 + dst2_idx * params.stride_12;
 +
-+    // Loading: thread t fills four rows (columns) 4g..4g+3 at k 8h..8h+7.
-+    let g = t % 16u;
-+    let h = t / 16u;
-+    // Computing: thread t's 8 x 8 outputs.
++    // Computing: thread t's 8 rows by 8 (or 4) columns.
 +    let lm = t % WG_M;
 +    let ln = t / WG_M;
++    let kk = t % BK;
 +
-+    var acc: array<vec4<f32>, 16>; // [n][m half]
++    // c{column}{rows 0-3: a, 4-7: b}
++    var c0a = vec4<f32>(0.0); var c0b = vec4<f32>(0.0);
++    var c1a = vec4<f32>(0.0); var c1b = vec4<f32>(0.0);
++    var c2a = vec4<f32>(0.0); var c2b = vec4<f32>(0.0);
++    var c3a = vec4<f32>(0.0); var c3b = vec4<f32>(0.0);
++#ifndef TN4
++    var c4a = vec4<f32>(0.0); var c4b = vec4<f32>(0.0);
++    var c5a = vec4<f32>(0.0); var c5b = vec4<f32>(0.0);
++    var c6a = vec4<f32>(0.0); var c6b = vec4<f32>(0.0);
++    var c7a = vec4<f32>(0.0); var c7b = vec4<f32>(0.0);
++#endif
 +
 +    for (var k_outer = 0u; k_outer < params.k; k_outer += BK) {
 +        let kb = k_outer / BK;
-+        let r0 = row8(src0_base, offset_m + 4u * g, kb, 8u * h);
-+        let r1 = row8(src0_base, offset_m + 4u * g + 1u, kb, 8u * h);
-+        let r2 = row8(src0_base, offset_m + 4u * g + 2u, kb, 8u * h);
-+        let r3 = row8(src0_base, offset_m + 4u * g + 3u, kb, 8u * h);
-+        let c0 = col8(src1_base, offset_n + 4u * g, k_outer + 8u * h);
-+        let c1 = col8(src1_base, offset_n + 4u * g + 1u, k_outer + 8u * h);
-+        let c2 = col8(src1_base, offset_n + 4u * g + 2u, k_outer + 8u * h);
-+        let c3 = col8(src1_base, offset_n + 4u * g + 3u, k_outer + 8u * h);
-+        for (var i = 0u; i < 8u; i++) {
-+            sa[(8u * h + i) * BM4 + g] = vec4<f16>(vec4<f32>(r0[i], r1[i], r2[i], r3[i]));
-+            sb[(8u * h + i) * BN4 + g] = vec4<f16>(vec4<f32>(c0[i], c1[i], c2[i], c3[i]));
++        load_row(src0_base, offset_m + t, t, kb);
++        // BN / 4 groups of four columns at BK k: two runs of 32 threads take turns.
++        for (var group = t / BK; group < BN4; group += 2u) {
++            load_cols(src1_base, offset_n + 4u * group, k_outer + kk, group, kk);
 +        }
 +        workgroupBarrier();
 +
 +        for (var k = 0u; k < BK; k++) {
 +            let a0 = vec4<f32>(sa[k * BM4 + 2u * lm]);
 +            let a1 = vec4<f32>(sa[k * BM4 + 2u * lm + 1u]);
++#ifdef TN4
++            let b0 = vec4<f32>(sb[k * BN4 + ln]);
++#else
 +            let b0 = vec4<f32>(sb[k * BN4 + 2u * ln]);
 +            let b1 = vec4<f32>(sb[k * BN4 + 2u * ln + 1u]);
-+            acc[0] = fma(a0, vec4<f32>(b0.x), acc[0]);
-+            acc[1] = fma(a1, vec4<f32>(b0.x), acc[1]);
-+            acc[2] = fma(a0, vec4<f32>(b0.y), acc[2]);
-+            acc[3] = fma(a1, vec4<f32>(b0.y), acc[3]);
-+            acc[4] = fma(a0, vec4<f32>(b0.z), acc[4]);
-+            acc[5] = fma(a1, vec4<f32>(b0.z), acc[5]);
-+            acc[6] = fma(a0, vec4<f32>(b0.w), acc[6]);
-+            acc[7] = fma(a1, vec4<f32>(b0.w), acc[7]);
-+            acc[8] = fma(a0, vec4<f32>(b1.x), acc[8]);
-+            acc[9] = fma(a1, vec4<f32>(b1.x), acc[9]);
-+            acc[10] = fma(a0, vec4<f32>(b1.y), acc[10]);
-+            acc[11] = fma(a1, vec4<f32>(b1.y), acc[11]);
-+            acc[12] = fma(a0, vec4<f32>(b1.z), acc[12]);
-+            acc[13] = fma(a1, vec4<f32>(b1.z), acc[13]);
-+            acc[14] = fma(a0, vec4<f32>(b1.w), acc[14]);
-+            acc[15] = fma(a1, vec4<f32>(b1.w), acc[15]);
++#endif
++            c0a = fma(a0, vec4<f32>(b0.x), c0a); c0b = fma(a1, vec4<f32>(b0.x), c0b);
++            c1a = fma(a0, vec4<f32>(b0.y), c1a); c1b = fma(a1, vec4<f32>(b0.y), c1b);
++            c2a = fma(a0, vec4<f32>(b0.z), c2a); c2b = fma(a1, vec4<f32>(b0.z), c2b);
++            c3a = fma(a0, vec4<f32>(b0.w), c3a); c3b = fma(a1, vec4<f32>(b0.w), c3b);
++#ifndef TN4
++            c4a = fma(a0, vec4<f32>(b1.x), c4a); c4b = fma(a1, vec4<f32>(b1.x), c4b);
++            c5a = fma(a0, vec4<f32>(b1.y), c5a); c5b = fma(a1, vec4<f32>(b1.y), c5b);
++            c6a = fma(a0, vec4<f32>(b1.z), c6a); c6b = fma(a1, vec4<f32>(b1.z), c6b);
++            c7a = fma(a0, vec4<f32>(b1.w), c7a); c7b = fma(a1, vec4<f32>(b1.w), c7b);
++#endif
 +        }
 +        workgroupBarrier();
 +    }
 +
 +    let dst_base = params.offset_dst + dst3_idx * (params.m * params.n * params.bs02 * params.broadcast2) + dst2_idx * (params.m * params.n);
 +    let m0 = offset_m + 8u * lm;
-+    for (var j = 0u; j < 8u; j++) {
-+        let n = offset_n + 8u * ln + j;
-+        if (n < params.n) {
-+            let at = dst_base + n * params.m + m0;
-+            for (var i = 0u; i < 4u; i++) {
-+                if (m0 + i < params.m) {
-+                    dst[at + i] = acc[2u * j][i];
-+                }
-+                if (m0 + 4u + i < params.m) {
-+                    dst[at + 4u + i] = acc[2u * j + 1u][i];
-+                }
-+            }
-+        }
-+    }
++#ifdef TN4
++    let n0 = offset_n + 4u * ln;
++#else
++    let n0 = offset_n + 8u * ln;
++#endif
++    if (n0 < params.n) { store8(dst_base + n0 * params.m + m0, m0, c0a, c0b); }
++    if (n0 + 1u < params.n) { store8(dst_base + (n0 + 1u) * params.m + m0, m0, c1a, c1b); }
++    if (n0 + 2u < params.n) { store8(dst_base + (n0 + 2u) * params.m + m0, m0, c2a, c2b); }
++    if (n0 + 3u < params.n) { store8(dst_base + (n0 + 3u) * params.m + m0, m0, c3a, c3b); }
++#ifndef TN4
++    if (n0 + 4u < params.n) { store8(dst_base + (n0 + 4u) * params.m + m0, m0, c4a, c4b); }
++    if (n0 + 5u < params.n) { store8(dst_base + (n0 + 5u) * params.m + m0, m0, c5a, c5b); }
++    if (n0 + 6u < params.n) { store8(dst_base + (n0 + 6u) * params.m + m0, m0, c6a, c6b); }
++    if (n0 + 7u < params.n) { store8(dst_base + (n0 + 7u) * params.m + m0, m0, c7a, c7b); }
++#endif
 +}

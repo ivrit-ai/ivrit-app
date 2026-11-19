@@ -32,4 +32,17 @@ the server.
    its slow generic one there too.
 5. **Verified on the CPU** (Deno, 2026-11-19): the module transcribes, prints and
    clusters as the native code does (voice prints at cosine 0.9999 to native, the
-   same speakers). The GPU path awaits a real browser.
+   same speakers).
+6. **On an Iris Xe in Edge** (headless, driven from WSL, 2026-11-19): first the
+   wait timed out at 30 s, then with a longer wait Windows reset the GPU
+   (DXGI_ERROR_DEVICE_HUNG: its watchdog ends GPU work running over ~2 s). The
+   phone programs ran at 12-32 GFLOPS there. Rewritten (patches/ggml-webgpu-phones.patch)
+   with no private array indexed by a loop and loads in which neighbouring threads
+   read neighbouring memory, they run at 410-450 GFLOPS (the matrix multiply) and
+   3-4 times faster (flash attention), the S25 a little faster too (760-800); and
+   Intel's GPUs take 4 columns a thread (fewer registers), others 8. Beam search's
+   5 columns go to the matrix-vector program (up to 8 with GGML_WEBGPU_MOBILE),
+   halving the decoder's steps. The module sends 8 kernels a submission and waits
+   up to 10 minutes. A minute of Hebrew then takes 157 s on that laptop (the
+   decoder's steps, ~18 ms of matrix-vector each, and the voice prints on one
+   thread are most of it): correct, still slow; optimizing next.

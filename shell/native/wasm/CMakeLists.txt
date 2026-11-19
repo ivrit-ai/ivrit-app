@@ -32,7 +32,7 @@ target_link_options(turbo PRIVATE
     -sENVIRONMENT=web,worker
     -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sSTACK_SIZE=8MB
     -lworkerfs.js -sFORCE_FILESYSTEM=1
-    "-sEXPORTED_FUNCTIONS=['_malloc','_free','_tw_load','_tw_load_speakers','_tw_transcribe','_tw_stop','_tw_result','_tw_error']"
-    "-sEXPORTED_RUNTIME_METHODS=['FS','WORKERFS','UTF8ToString','stringToNewUTF8','HEAPF32']"
-    "-sJSPI_EXPORTS=['tw_load','tw_load_speakers','tw_transcribe']"
+    "-sEXPORTED_FUNCTIONS=['_malloc','_free','_tw_load','_tw_load_speakers','_tw_transcribe','_tw_stop','_tw_result','_tw_error','_tw_free','_tw_timings','_tw_bench']"
+    "-sEXPORTED_RUNTIME_METHODS=['FS','WORKERFS','ENV','UTF8ToString','stringToNewUTF8','HEAPF32']"
+    "-sJSPI_EXPORTS=['tw_load','tw_load_speakers','tw_transcribe','tw_bench']"
     -sUSE_ZLIB=1)

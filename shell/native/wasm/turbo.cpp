@@ -30,6 +30,10 @@
 #include "stablets.h"
 #include "transcript.h"
 #include "whisper.h"
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
+#include "ggml-cpu.h"
+#include "ggml.h"
 
 namespace {
 
@@ -119,6 +123,11 @@ EMSCRIPTEN_KEEPALIVE int tw_load(const char *path, int gpu) {
         // phones' GPUs, and faster than ggml's on GPUs without subgroup matrices, as
         // browsers' are. Read once, as ggml first starts.
         setenv("GGML_WEBGPU_MOBILE", "1", 1);
+        // A wait for the GPU may take long in a browser (its first run compiles every
+        // program); a GPU that hangs is the browser's to reset, which fails the wait.
+        setenv("GGML_WEBGPU_WAIT_MS", "600000", 0);
+        // Short submissions: Windows resets a GPU whose work runs over two seconds at once.
+        setenv("GGML_WEBGPU_SUBMIT_BATCH", "8", 0);
         if (g_ctx) whisper_free(g_ctx);
         whisper_context_params cp = whisper_context_default_params();
         cp.use_gpu = gpu != 0;
@@ -138,6 +147,104 @@ EMSCRIPTEN_KEEPALIVE int tw_load(const char *path, int gpu) {
     }
     g_ctx = nullptr;
     return -1;
+}
+
+// One kernel timed on the GPU, for tuning: what 0 (q8_0 matrix multiply: K x M
+// weights times K x N) or 1 (flash attention: head size 64, n_q = n_kv = N, M heads),
+// `reps` times after one to build it; milliseconds per run, -1 when it failed. The
+// GPU's result against the CPU's: tw_error() says how far apart (max |difference| /
+// max |value|).
+EMSCRIPTEN_KEEPALIVE double tw_bench(int what, int K, int M, int N, int reps) {
+    try {
+        setenv("GGML_WEBGPU_MOBILE", "1", 1);
+        setenv("GGML_WEBGPU_SUBMIT_BATCH", "8", 0);
+        auto run = [&](ggml_backend_t be, int times, double *ms) {
+            ggml_init_params ip = {ggml_tensor_overhead() * 8 + ggml_graph_overhead(), nullptr, true};
+            ggml_context *ctx = ggml_init(ip);
+            ggml_tensor *out;
+            std::vector<ggml_tensor *> inputs;
+            if (what == 0) {
+                ggml_tensor *a = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, K, M);
+                ggml_tensor *b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, N);
+                out = ggml_mul_mat(ctx, a, b);
+                inputs = {a, b};
+            } else {
+                ggml_tensor *q = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 64, N, M);
+                ggml_tensor *k = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 64, N, M);
+                ggml_tensor *v = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 64, N, M);
+                out = ggml_flash_attn_ext(ctx, q, k, v, nullptr, 0.125f, 0.0f, 0.0f);
+                inputs = {q, k, v};
+            }
+            ggml_cgraph *gf = ggml_new_graph(ctx);
+            ggml_build_forward_expand(gf, out);
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, be);
+            uint32_t seed = 7;
+            for (ggml_tensor *t : inputs) {
+                const int64_t n = ggml_nelements(t);
+                std::vector<float> values(n);
+                for (int64_t i = 0; i < n; i++) {
+                    seed = seed * 1664525u + 1013904223u;
+                    values[i] = ((seed >> 9) / 8388608.0f - 0.5f) * (t->type == GGML_TYPE_Q8_0 ? 0.1f : 1.0f);
+                }
+                std::vector<uint8_t> raw(ggml_nbytes(t));
+                if (t->type == GGML_TYPE_F32) memcpy(raw.data(), values.data(), raw.size());
+                else if (t->type == GGML_TYPE_F16) for (int64_t i = 0; i < n; i++) ((ggml_fp16_t *) raw.data())[i] = ggml_fp32_to_fp16(values[i]);
+                else ggml_quantize_chunk(t->type, values.data(), raw.data(), 0, t->ne[1], t->ne[0], nullptr);
+                ggml_backend_tensor_set(t, raw.data(), 0, raw.size());
+            }
+            ggml_backend_graph_compute(be, gf);
+            std::vector<float> result(ggml_nelements(out));
+            ggml_backend_tensor_get(out, result.data(), 0, result.size() * sizeof(float));
+            if (ms) {
+                double t0 = emscripten_get_now();
+                for (int i = 0; i < times; i++) ggml_backend_graph_compute(be, gf);
+                ggml_backend_tensor_get(out, result.data(), 0, result.size() * sizeof(float));
+                *ms = (emscripten_get_now() - t0) / (times > 0 ? times : 1);
+            }
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return result;
+        };
+        ggml_backend_dev_t dev = ggml_backend_dev_by_name("WebGPU");
+        if (!dev) {
+            g_error = "no WebGPU device";
+            return -1;
+        }
+        ggml_backend_t gpu = ggml_backend_dev_init(dev, nullptr);
+        double ms = 0;
+        std::vector<float> got = run(gpu, reps, &ms);
+        ggml_backend_free(gpu);
+        ggml_backend_t cpu = ggml_backend_cpu_init();
+        std::vector<float> want = run(cpu, 0, nullptr);
+        ggml_backend_free(cpu);
+        double err = 0, top = 0;
+        for (size_t i = 0; i < want.size(); i++) {
+            err = std::max(err, (double) std::fabs(got[i] - want[i]));
+            top = std::max(top, (double) std::fabs(want[i]));
+        }
+        char buf[64];
+        snprintf(buf, sizeof buf, "error %.2g", top > 0 ? err / top : err);
+        g_error = buf;
+        return ms;
+    } catch (const std::exception &e) {
+        g_error = e.what();
+    } catch (...) {
+        g_error = "unknown exception";
+    }
+    return -1;
+}
+
+// whisper.cpp's timings so far (encode, decode, batched…) to the log.
+EMSCRIPTEN_KEEPALIVE void tw_timings() {
+    if (g_ctx) whisper_print_timings(g_ctx);
+}
+
+// The models let go (the GPU's memory with them).
+EMSCRIPTEN_KEEPALIVE void tw_free() {
+    if (g_ctx) whisper_free(g_ctx);
+    g_ctx = nullptr;
+    if (g_speakers) sp_free(g_speakers);
+    g_speakers = nullptr;
 }
 
 // The speaker model; without it, the transcript has no speakers. 0 when it loaded.
