@@ -2423,6 +2423,7 @@ async def delete_library_folder(folder_id: str, request: Request):
 # The engines: the zipformer, and ivrit.ai's Turbo model as the Android app runs
 # it (whisper.cpp, scripts/turbo_model.py's quantizations). Turbo's transcripts
 # have speakers, labeled as ivrit's diarization labels them (shell/native/speakers).
+# q5_1 is no longer offered, but phones on older builds may still report it.
 LOCAL_ENGINES = {"zipformer2-66m-he", "whisper-turbo-he-q5_1", "whisper-turbo-he-q8_0"}
 LOCAL_MAX_RESULTS = 40 * 1024 * 1024  # unpacked JSON; ~20 hours of speech
 LOCAL_SPEAKER = re.compile(r"SPEAKER_\d{2}")

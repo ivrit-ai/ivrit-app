@@ -43,7 +43,8 @@ final class TurboGpu {
     static final String AUTO = "auto";
     static final String CPU = "cpu";
     static final String GPU = "gpu";
-    static final String[] PROCESSORS = {AUTO, CPU, GPU};
+    static final String TRIAL = "webgpu"; // the Lab's WebGPU trial (trial())
+    static final String[] PROCESSORS = {AUTO, CPU, GPU, TRIAL};
     /** The GPU's words against the CPU's: a little apart is half floats, more is a broken driver. */
     static final double AGREEMENT = 0.85;
     /** GPU runs that died in a row before the level is given up. */
@@ -72,7 +73,7 @@ final class TurboGpu {
     // The app's own (patches/ggml-vulkan-switches.patch).
     private static final String KEEP_ROBUSTNESS = "GGML_VK_KEEP_ROBUSTNESS";
     private static final String NO_SUBGROUPS = "GGML_VK_DISABLE_SUBGROUP_ARITHMETIC";
-    // patches/ggml-webgpu-switches.patch: Dawn's bounds checks kept, features left unused.
+    // patches/ggml-webgpu-phones.patch: Dawn's bounds checks kept, features left unused, the phone programs.
     private static final String WEBGPU = "GGML_WEBGPU_";
     private static final String WEBGPU_ROBUSTNESS = "GGML_WEBGPU_KEEP_ROBUSTNESS";
     private static final String WEBGPU_NO_MATRIX = "GGML_WEBGPU_DISABLE_SUBGROUP_MATRIX";
@@ -125,6 +126,7 @@ final class TurboGpu {
         String crashed; // set when one failed just now (not kept)
         int decodeThreads; // the decoder's fastest thread count here (Whisper.tuneDecoder); 0: not yet tuned
         boolean decoderCpu; // the decoder faster on the CPU, the encoder on the GPU (Whisper.load)
+        Level forced; // the trial's level (trial()), not one of LEVELS; never saved
         double splitSeconds; // the timed GPU run with the decoder on the CPU
 
         Verdict(String key) {
@@ -166,7 +168,7 @@ final class TurboGpu {
         }
 
         Level level() {
-            return LEVELS[level];
+            return forced != null ? forced : LEVELS[level];
         }
 
         /** Gives the right words on the GPU. */
@@ -387,6 +389,88 @@ final class TurboGpu {
         android.app.ActivityManager.RunningAppProcessInfo me = new android.app.ActivityManager.RunningAppProcessInfo();
         android.app.ActivityManager.getMyMemoryState(me);
         return me.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
+    }
+
+    /**
+     * The Lab's trial of WebGPU with the app's own programs for phone GPUs
+     * (patches/ggml-webgpu-phones.patch, GGML_WEBGPU_MOBILE: a matrix multiply and a
+     * flash attention that need no subgroups; with subgroups, Adreno's and Mali's
+     * drivers stop the work as too slow and lose the device): the encoder on WebGPU,
+     * the decoder on the CPU, without the check (the benchmark's words judge it).
+     * Its switches are set as the library loads (early()), as ggml reads them once;
+     * chosen with the app running, it needs the app started again. A failure, or the
+     * process dying in it, puts it back on the CPU until it is chosen again, and is
+     * reported (kind=local-turbo-gpu-crash, crashed "trial:...").
+     */
+    static final Level TRIAL_LEVEL = new Level("WebGPU", true, "GGML_WEBGPU_MOBILE", WEBGPU_NO_MATRIX,
+        "GGML_WEBGPU_DISABLE_SUBGROUPS", "GGML_WEBGPU_DISABLE_DOT_PRODUCT");
+
+    /** Before the library loads (Turbo.supported): the trial's switches, where it is chosen. */
+    static void early(Context context) {
+        if (TRIAL.equals(Store.turboProcessor(context)) && prefs(context).getString("trial_failed", null) == null) {
+            apply(TRIAL_LEVEL);
+        }
+    }
+
+    /** The trial as it stands here: "ready", "restart" (the app must start again), or "failed: ..." */
+    static String trialState(Context context) {
+        String failed = prefs(context).getString("trial_failed", null);
+        if (failed != null) return "failed: " + failed;
+        return webgpu(TRIAL_LEVEL).equals(webgpuSet) ? "ready" : "restart";
+    }
+
+    /** Chosen (again): an earlier failure forgotten. */
+    static void trialReset(Context context) {
+        prefs(context).edit().remove("trial_failed").remove("trial_running").commit();
+    }
+
+    /**
+     * A verdict for one run with the trial: state "trial" when it is to run on
+     * WebGPU, else why not (the run goes on the CPU). A run that died in it is
+     * found here, the next time.
+     */
+    static Verdict trial(Context context, String variant) {
+        caches(context);
+        android.content.SharedPreferences p = prefs(context);
+        Verdict v = new Verdict(key(variant));
+        Verdict saved = load(context);
+        if (saved != null && v.key.equals(saved.key)) v.decodeThreads = saved.decodeThreads;
+        v.forced = TRIAL_LEVEL;
+        v.decoderCpu = true;
+        if (p.getBoolean("trial_running", false)) {
+            v.since = p.getLong("trial_since", 0);
+            v.crashed = "trial:run";
+            v.step = "trial";
+            p.edit().putBoolean("trial_running", false).putString("trial_failed", "crashed").commit();
+            report(context, variant, v);
+            v.crashed = null;
+        }
+        String state = trialState(context);
+        v.state = "ready".equals(state) ? "trial" : state;
+        if ("trial".equals(v.state)) {
+            for (String g : Whisper.gpus()) if (g.startsWith(TRIAL_LEVEL.backend)) v.gpu = g;
+        }
+        return v;
+    }
+
+    static void trialStarted(Context context) {
+        prefs(context).edit().putBoolean("trial_running", true).putLong("trial_since", System.currentTimeMillis()).commit();
+    }
+
+    static void trialFinished(Context context) {
+        prefs(context).edit().putBoolean("trial_running", false).commit();
+    }
+
+    /** ggml failed on WebGPU (guard.cpp; the patch throws where ggml-webgpu ended the process): reported, then the CPU. */
+    static void trialFailed(Context context, String variant, String why) {
+        android.content.SharedPreferences p = prefs(context);
+        Verdict v = new Verdict(key(variant));
+        v.since = p.getLong("trial_since", 0);
+        v.crashed = "trial:failed";
+        v.step = "trial";
+        v.error = why == null ? "" : why;
+        p.edit().putBoolean("trial_running", false).putString("trial_failed", v.error.isEmpty() ? "failed" : v.error).commit();
+        report(context, variant, v);
     }
 
     /** ggml's device index for the verdict's backend, for Whisper.load, or -1 where it has none. */

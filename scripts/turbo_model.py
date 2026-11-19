@@ -4,16 +4,17 @@
 The app transcribes with whisper.cpp (shell/android/app/src/main/cpp), which needs
 the model in ggml's format. ivrit-ai publishes it only in f16 (1.6 GB); until the
 quantized files are published there too, the app serves them: this re-quantizes
-the f16 file, pinned and checked against its hash, into q5_1 and q8_0 (and q4_0 on request), in the
+the f16 file, pinned and checked against its hash, into q8_0 (and q4_0 on request), in the
 background as the server starts (launch.sh), as whisper.cpp's own quantize tool
 does (examples/quantize: every 2-D tensor but the positional embeddings; the same
-block layouts and rounding, quantize_row_q5_1_ref and quantize_row_q8_0_ref).
+block layouts and rounding, quantize_row_q4_0_ref and quantize_row_q8_0_ref).
+q5_1 is not made: dropped for good (docs/turbo-android.md, decision 2).
 
 Each model is <out>/ggml-turbo-<dtype>.bin, and <out>/ggml-turbo-<dtype>.json
 ({bytes, sha256}) is written last: while it is missing, the model is not ready.
 The source is read once, as it downloads, and never kept.
 
-    python3 scripts/turbo_model.py [--source URL-or-file] [--out /tmp/turbo-models] [q4_0 q5_1 q8_0]
+    python3 scripts/turbo_model.py [--source URL-or-file] [--out /tmp/turbo-models] [q4_0 q8_0]
 
 Needs numpy.
 """
@@ -38,7 +39,7 @@ QNT_VERSION = 2  # GGML_QNT_VERSION, written into the file type as whisper.cpp's
 BLOCK = 32
 F32, F16 = 0, 1
 # ggml's tensor type and the file type it makes (ggml.h).
-DTYPES = {"q4_0": (2, 2), "q5_1": (7, 9), "q8_0": (8, 7)}
+DTYPES = {"q4_0": (2, 2), "q8_0": (8, 7)}
 SKIP = {"encoder.conv1.bias", "encoder.conv2.bias", "encoder.positional_embedding", "decoder.positional_embedding"}
 # About a million weights at a time, so even the token embedding stays small in memory.
 CHUNK = BLOCK << 15
@@ -59,24 +60,6 @@ def quantize_q4_0(a: np.ndarray) -> bytes:
     return out.tobytes()
 
 
-def quantize_q5_1(a: np.ndarray) -> bytes:
-    """quantize_row_q5_1_ref: per 32 weights, f16 scale and minimum, 5-bit values (24 bytes)."""
-    a = np.ascontiguousarray(a, dtype=np.float32).reshape(-1, BLOCK)
-    lo = a.min(axis=1)
-    d = ((a.max(axis=1) - lo) / np.float32(31)).astype(np.float32)
-    inv = np.where(d != 0, np.float32(1) / np.where(d != 0, d, np.float32(1)), np.float32(0)).astype(np.float32)
-    # (uint8_t)(x + 0.5f): x is never negative, so this is floor.
-    q = (((a - lo[:, None]) * inv[:, None]) + np.float32(0.5)).astype(np.uint8)
-    out = np.empty((a.shape[0], 24), dtype=np.uint8)
-    out[:, 0:2] = d.astype("<f2").view(np.uint8).reshape(-1, 2)
-    out[:, 2:4] = lo.astype("<f2").view(np.uint8).reshape(-1, 2)
-    # Value j's fifth bit is bit j; values j and j+16 share byte j, low nibble first.
-    qh = (((q >> 4) & 1).astype(np.uint32) << np.arange(BLOCK, dtype=np.uint32)).sum(axis=1, dtype=np.uint32)
-    out[:, 4:8] = qh.astype("<u4").view(np.uint8).reshape(-1, 4)
-    out[:, 8:] = (q[:, :16] & 0x0F) | ((q[:, 16:] & 0x0F) << 4)
-    return out.tobytes()
-
-
 def quantize_q8_0(a: np.ndarray) -> bytes:
     """quantize_row_q8_0_ref: per 32 weights, an f16 scale and 8-bit values (34 bytes)."""
     a = np.ascontiguousarray(a, dtype=np.float32).reshape(-1, BLOCK)
@@ -92,7 +75,7 @@ def quantize_q8_0(a: np.ndarray) -> bytes:
     return out.tobytes()
 
 
-QUANTIZE = {"q4_0": quantize_q4_0, "q5_1": quantize_q5_1, "q8_0": quantize_q8_0}
+QUANTIZE = {"q4_0": quantize_q4_0, "q8_0": quantize_q8_0}
 
 
 class Reader:
@@ -180,7 +163,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default=SOURCE)
     ap.add_argument("--out", default=os.environ.get("TURBO_MODELS_DIR", "/tmp/turbo-models"))
-    ap.add_argument("dtypes", nargs="*", default=["q5_1", "q8_0"])  # what the app offers
+    ap.add_argument("dtypes", nargs="*", default=["q8_0"])  # what the app offers
     args = ap.parse_args()
     for d in args.dtypes:
         if d not in QUANTIZE:

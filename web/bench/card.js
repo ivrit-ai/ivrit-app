@@ -16,7 +16,7 @@ export const phone = (run) => [run.device?.manufacturer, run.device?.model].filt
 
 const where = (run) =>
   run.run?.processor === "gpu"
-    ? `מעבד גרפי${run.run.backend ? ` (${run.run.backend})` : ""}${run.run.decoderCpu ? ", מפענח במעבד" : ""}`
+    ? `מעבד גרפי${run.run.backend ? ` (${run.run.backend}${run.run.chose === "webgpu" ? ", מנוע חדש" : ""})` : ""}${run.run.decoderCpu ? ", מפענח במעבד" : ""}`
     : "מעבד";
 
 // Android's thermal status (0 none … 6 shutdown): from 2, moderate, the phone slows itself down.

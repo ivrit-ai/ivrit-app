@@ -192,14 +192,15 @@
       "feature": "turboModel",
       "note": "The model the phone transcribes recordings with, in the background (shared, watched, handed over): ivrit.ai's Turbo model (whisper.cpp; scripts/turbo_model.py's quantizations), on phones that can run it (elsewhere, and live, the zipformer), and where that runs: the GPU once it has passed a check on the phone (TurboGpu), or the CPU. The Turbo model downloads the first time it transcribes; choosing another lets go of it. Builds up to 259 also offered \"zipformer\" (and had it by default).",
       "options": {
-        "model": "string, optional: \"q8_0\" | \"q5_1\", to choose it",
-        "processor": "string, optional: \"auto\" (the GPU when it passed its check and is faster) | \"cpu\" | \"gpu\" (whenever it gives the right words), to choose it"
+        "model": "string, optional: \"q8_0\" (the one size; \"q5_1\" is no longer offered), to choose it",
+        "processor": "string, optional: \"auto\" (the GPU when it passed its check and is faster) | \"cpu\" | \"gpu\" (whenever it gives the right words) | \"webgpu\" (the Lab's WebGPU trial: the app's phone programs, no check; TurboGpu.trial), to choose it"
       },
       "result": {
-        "model": "\"q8_0\" | \"q5_1\": the one chosen",
+        "model": "\"q8_0\" (the one size; \"q5_1\" is no longer offered): the one chosen",
         "ready": "boolean: it needs no download",
         "processor": "\"auto\" | \"cpu\" | \"gpu\": the one chosen",
-        "gpu": "optional, once the GPU was checked with this model: {name, state: \"faster\" | \"slower\" | \"wrong\" | \"failed\" | \"crashed\" | \"none\", cpuSeconds, gpuSeconds} (the check's 12 seconds of Hebrew)"
+        "gpu": "optional, once the GPU was checked with this model: {name, state: \"faster\" | \"slower\" | \"wrong\" | \"failed\" | \"crashed\" | \"none\", cpuSeconds, gpuSeconds} (the check's 12 seconds of Hebrew)",
+        "trial": "string, only while \"webgpu\" is chosen: \"ready\" | \"restart\" (the app must start again for it) | \"failed: <why>\" (back on the CPU until chosen again)"
       },
       "rejects": [
         "unsupported",

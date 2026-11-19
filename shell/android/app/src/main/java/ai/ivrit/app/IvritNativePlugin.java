@@ -129,7 +129,7 @@ public class IvritNativePlugin extends Plugin {
     }
 
     /**
-     * The Turbo model this phone transcribes recordings with ("q8_0", "q5_1"; Turbo;
+     * The Turbo model this phone transcribes recordings with ("q8_0", the one size; Turbo;
      * the zipformer is live transcription's only), whether that one is downloaded, where it runs ("auto", "cpu",
      * "gpu"; TurboGpu) and what the GPU's check found. Given `model` or `processor`,
      * chooses it; choosing a model lets go of any other Turbo model downloaded.
@@ -152,13 +152,17 @@ public class IvritNativePlugin extends Plugin {
             Store.setOnDeviceModel(context, model);
             for (String variant : Turbo.VARIANTS) if (!variant.equals(model)) Turbo.forget(context, variant);
         }
-        if (processor != null) Store.setTurboProcessor(context, processor);
+        if (processor != null) {
+            if (TurboGpu.TRIAL.equals(processor) && !TurboGpu.TRIAL.equals(Store.turboProcessor(context))) TurboGpu.trialReset(context);
+            Store.setTurboProcessor(context, processor);
+        }
         if (model != null || processor != null) PrepareWorker.schedule(context);
         String chosen = Store.onDeviceModel(context);
         JSObject result = new JSObject()
             .put("model", chosen)
             .put("ready", Turbo.ready(context, chosen))
             .put("processor", Store.turboProcessor(context));
+        if (TurboGpu.TRIAL.equals(Store.turboProcessor(context))) result.put("trial", TurboGpu.trialState(context));
         TurboGpu.Verdict verdict = TurboGpu.load(context);
         if (verdict != null && verdict.state != null && verdict.key.endsWith(" " + chosen)) {
             result.put("gpu", new JSObject()

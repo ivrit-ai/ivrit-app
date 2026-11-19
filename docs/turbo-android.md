@@ -37,13 +37,22 @@ Open to comment; each with what it rests on.
    transcribes in the background with the app closed; a WebView cannot. The
    web engine (whisper-gpu, the lab) stays for the browser.
 
-2. **q8_0 by default, q5_1 offered.** Measured with whisper-gpu on the laptop's
-   Iris Xe (its q8/q5 blocks are ggml's q8_0/q5_1 layouts): on 5 minutes of
-   Hebrew with a reference transcript, f16 3.31% WER, q8 3.31% (the same text),
-   q5 4.23%, q4 5.15%; on another 4.4 minutes, words differing from f16: q8
-   0.17%, q5 7.4%, q4 4.5%. ggml also repacks q8_0 for ARM's dot-product
-   instructions (a fast matrix path q5_1 lacks), so q8_0 should be faster on
-   phones' CPUs as well. Cost: 874 MB to download against 624 MB.
+2. **q8_0 only. q5_1 is dropped for good; do not bring it back.** Measured with
+   whisper-gpu on the laptop's Iris Xe (its q8/q5 blocks are ggml's q8_0/q5_1
+   layouts): on 5 minutes of Hebrew with a reference transcript, f16 3.31% WER,
+   q8 3.31% (the same text), q5 4.23%, q4 5.15%; on another 4.4 minutes, words
+   differing from f16: q8 0.17%, q5 7.4%, q4 4.5%. Then on the Galaxy S25
+   (2026-11-18, build 260's chain, 5 beams, decoder on the CPU beside the
+   OpenCL encoder): q5_1 took 378 s on a 4-minute recording against q8_0's 107
+   s, and 573 s on a 10-minute podcast against 152 s; on the CPU alone, 614 s
+   against 192 s. ggml has no fast ARM or Adreno path for q5_1 (it repacks q8_0
+   and q4_0 for ARM's dot-product instructions), so it is 3-4 times slower,
+   and less accurate, for 250 MB less to download. A phone that had chosen it
+   falls back to q8_0 (Store.onDeviceModel) and lets its file go
+   (Turbo.RETIRED); Settings shows the one size instead of a choice.
+   A smaller size, if one is ever wanted, is q4_0 (118-135 s on that podcast,
+   faster than q8_0), only after its words are scored against q8_0's and the
+   server's.
 
 3. **Beam search (5) on the GPU, greedy on the CPU** (`Turbo.beams`), as the
    server decodes with beam 5. On the Galaxy S25's GPU (OpenCL) beam 5 took
@@ -151,7 +160,7 @@ Open to comment; each with what it rests on.
       (`disable_robustness`) and uses cooperative matrices (Dawn's subgroup
       matrix, on Adreno's `VK_KHR_cooperative_matrix`, the path that also
       crashed ggml-vulkan). Build 255 patches in switches
-      (`patches/ggml-webgpu-switches.patch`) and tries WebGPU with the bounds
+      (`patches/ggml-webgpu-phones.patch`) and tries WebGPU with the bounds
       checks kept and no cooperative matrices; then with subgroups and packed
       dot products off too, without flash attention; then Vulkan as before.
       ggml-webgpu reads its switches once, when ggml first starts in the
@@ -296,6 +305,25 @@ Open to comment; each with what it rests on.
     check with the app). The background preparation leaves the check alone; a
     recording made with the app open goes on the CPU, unchecked, and the next one
     in the background checks.
+
+21. **WebGPU with programs of our own for phone GPUs, on trial** (the Lab's switch,
+    processor `webgpu`; `TurboGpu.trial`; `patches/ggml-webgpu-phones.patch`, which
+    replaces the switches patch). ggml-webgpu's matrix multiply ran at 90 GFLOPS on
+    the Galaxy S25's Adreno 830 (its CPU: 360), and slower still with subgroups,
+    so slow that the driver stopped the work and the device was lost (the S25 and
+    a Pixel 7's Mali-G710 alike: the Pixel's crash after launch in 261-262). The
+    patch adds, behind `GGML_WEBGPU_MOBILE`, a q8_0/f16 x f32 matrix multiply (64 x
+    64 per workgroup, 8 x 8 per thread, vec4 math: 740-790 GFLOPS on the S25) and a
+    flash attention (one query per thread, keys 8 at a time; the query held in f16,
+    or registers spill: 12 times slower), neither using subgroups; and throws where
+    ggml-webgpu ended the process (a lost device, a failed or timed-out wait), so
+    guard.cpp takes it and the run goes on on the CPU. A minute of Hebrew on the
+    S25, the decoder on the CPU: 33.0 s against OpenCL's 37.7 s in the same state
+    (the encoder 11.6 s against 11.2 s), the CPU alone 54 s; the CPU's very words
+    each time. Dawn's bounds checks cost 25% of the encoder, so the trial goes
+    without them. It runs without the check, and the benchmark's words judge it; if
+    it holds on Mali (a Pixel), WebGPU can be the one GPU path (OpenCL and Vulkan
+    gone), on iPhones and desktops too, and the patch belongs upstream.
 
 ## Verified, and not yet
 

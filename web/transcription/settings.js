@@ -103,8 +103,9 @@ export async function render(box, host, onChange) {
 // one is live transcription's only), a large download the first time (sizes:
 // scripts/turbo_model.py's files). Only on phones that can run it. Then where it runs:
 // the GPU once it passed its check on the phone (automatic), the CPU, or the GPU
-// whenever it gives the right words; and what that check found.
-const PHONE_MODELS = { q8_0: 875, q5_1: 625 };
+// whenever it gives the right words; and what that check found. One size only
+// (docs/turbo-android.md, decision 2): shown, not chosen, while that is so.
+const PHONE_MODELS = { q8_0: 875 };
 const PROCESSORS = ["auto", "cpu", "gpu"];
 
 async function phoneModel(host, onModel) {
@@ -116,16 +117,20 @@ async function phoneModel(host, onModel) {
     current = null;
   }
   if (!current) return null;
-  const model = el("select", { class: "tr-select", "aria-label": tr("phoneModelTitle") },
-    Object.entries(PHONE_MODELS).map(([value, megabytes]) =>
-      el("option", { value, text: tr(`phoneModel_${value}`, { megabytes }) })));
+  const sizes = Object.entries(PHONE_MODELS);
+  const model = sizes.length === 1
+    ? el("span", { text: tr(`phoneModel_${sizes[0][0]}`, { megabytes: sizes[0][1] }) })
+    : el("select", { class: "tr-select", "aria-label": tr("phoneModelTitle") },
+      sizes.map(([value, megabytes]) => el("option", { value, text: tr(`phoneModel_${value}`, { megabytes }) })));
+  // The Lab's WebGPU trial ("webgpu") is shown here only while it is chosen there.
+  const processors = current.processor === "webgpu" ? [...PROCESSORS, "webgpu"] : PROCESSORS;
   const processor = el("select", { class: "tr-select", "aria-label": tr("phoneProcessorTitle") },
-    PROCESSORS.map((value) => el("option", { value, text: tr(`phoneProcessor_${value}`) })));
+    processors.map((value) => el("option", { value, text: tr(`phoneProcessor_${value}`) })));
   const note = el("span", { class: "sub" });
   const gpuNote = el("span", { class: "sub" });
   const processorField = el("label", { class: "tr-field" }, [el("span", { text: tr("phoneProcessorTitle") }), processor, gpuNote]);
   const show = () => {
-    model.value = current.model;
+    if (sizes.length > 1) model.value = current.model;
     processor.value = current.processor || "auto";
     note.textContent = tr(current.ready ? "phoneModelTurboBody" : "phoneModelTurboDownload");
     const gpu = current.gpu;

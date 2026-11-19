@@ -127,7 +127,7 @@ public class TurboGpuTest {
         TurboGpu.Verdict v = TurboGpu.settle(verdict("crashed"), "newer-build q8_0");
         assertNull(v.state);
         assertEquals("newer-build q8_0", v.key);
-        assertNull(TurboGpu.settle(null, "build q5_1").state);
+        assertNull(TurboGpu.settle(null, "build q4_0").state);
     }
 
     @Test

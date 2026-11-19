@@ -31,12 +31,17 @@ import org.json.JSONObject;
 final class Turbo {
     private Turbo() {}
 
-    /** The first is the default: as accurate as the full model, and fastest on ARM (ggml repacks it). */
-    static final String[] VARIANTS = {"q8_0", "q5_1"};
+    /**
+     * The one size: as accurate as the full model, and fastest on ARM (ggml repacks it).
+     * q5_1 is gone for good (docs/turbo-android.md, decision 2): a choice of it falls
+     * back to this one (Store.onDeviceModel), and its download is let go (RETIRED).
+     */
+    static final String[] VARIANTS = {"q8_0"};
+    private static final String[] RETIRED = {"q5_1"};
 
     /** A variant's download, as Settings tells it (scripts/turbo_model.py's files). */
     static int megabytes(String variant) {
-        return "q5_1".equals(variant) ? 624 : 874;
+        return 874;
     }
     static final String LANGUAGE = "he";
     /**
@@ -80,9 +85,15 @@ final class Turbo {
             supported = Build.VERSION.SDK_INT >= 28
                 && Build.SUPPORTED_ABIS.length > 0 && "arm64-v8a".equals(Build.SUPPORTED_ABIS[0])
                 && memory(context) >= MIN_MEMORY && cpuFeatures().containsAll(Arrays.asList("asimddp", "asimdhp"))
-                && Whisper.available();
+                && early(context) && Whisper.available();
         }
         return supported;
+    }
+
+    /** The Lab's WebGPU trial's switches, before ggml can read them (TurboGpu.early). */
+    private static boolean early(Context context) {
+        TurboGpu.early(context);
+        return true;
     }
 
     static long memory(Context context) {
@@ -180,6 +191,7 @@ final class Turbo {
         if (ready(context, variant)) return;
         // Only one model is kept: the others go before this one comes.
         for (String other : VARIANTS) if (!other.equals(variant)) forget(context, other);
+        for (String other : RETIRED) forget(context, other);
         download(context, "ggml-turbo-" + variant, progress);
     }
 

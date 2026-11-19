@@ -31,21 +31,19 @@ def f16(x):
     return np.float32(x).astype("<f2").tobytes()
 
 
-def ref_q5_1(x):
+def ref_q4_0(x):
     out = b""
     for b in range(0, len(x), 32):
         v = x[b:b + 32].astype(np.float32)
-        lo, hi = v.min(), v.max()
-        d = np.float32((hi - lo) / np.float32(31))
+        peak = v[int(np.abs(v).argmax())]
+        d = np.float32(peak / np.float32(-8))
         inv = np.float32(1) / d if d else np.float32(0)
-        qh, qs = 0, bytearray(16)
-        for j in range(16):
-            x0 = int(np.float32((v[j] - lo) * inv) + np.float32(0.5))
-            x1 = int(np.float32((v[j + 16] - lo) * inv) + np.float32(0.5))
-            qs[j] = (x0 & 0x0F) | ((x1 & 0x0F) << 4)
-            qh |= ((x0 & 0x10) >> 4) << j
-            qh |= ((x1 & 0x10) >> 4) << (j + 16)
-        out += f16(d) + f16(lo) + struct.pack("<I", qh) + bytes(qs)
+        qs = bytearray(16)
+        for k in range(16):
+            x0 = min(15, int(np.float32(v[k] * inv) + np.float32(8.5)))
+            x1 = min(15, int(np.float32(v[k + 16] * inv) + np.float32(8.5)))
+            qs[k] = x0 | (x1 << 4)
+        out += f16(d) + bytes(qs)
     return out
 
 
@@ -68,25 +66,10 @@ x = np.concatenate([
     np.linspace(-1, 1, 32),
     np.array([0.5, -0.5] * 16) * 127 / 127,  # halves, for roundf
 ]).astype(np.float16).astype(np.float32)
-check("q5_1 blocks are ggml's", turbo_model.quantize_q5_1(x) == ref_q5_1(x))
+check("q4_0 blocks are ggml's", turbo_model.quantize_q4_0(x) == ref_q4_0(x))
 check("q8_0 blocks are ggml's", turbo_model.quantize_q8_0(x) == ref_q8_0(x))
 halves = np.array([2.5, -2.5, 0.5, -0.5, 127.0] + [0.0] * 27, dtype=np.float32)
 check("q8_0 rounds halves away from zero", turbo_model.quantize_q8_0(halves) == ref_q8_0(halves))
-
-
-def dequant_q5_1(raw, n):
-    blocks = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 24)
-    d = blocks[:, 0:2].copy().view("<f2").astype(np.float32)
-    m = blocks[:, 2:4].copy().view("<f2").astype(np.float32)
-    qh = blocks[:, 4:8].copy().view("<u4")[:, 0]
-    qs = blocks[:, 8:]
-    low = np.concatenate([qs & 0x0F, qs >> 4], axis=1).astype(np.uint32)
-    high = (qh[:, None] >> np.arange(32, dtype=np.uint32)) & 1
-    return ((low | (high << 4)) * d + m).reshape(-1)[:n]
-
-
-check("q5_1 decodes to within half a step", np.all(np.abs(dequant_q5_1(turbo_model.quantize_q5_1(x), len(x)) - x)
-                                                   <= np.repeat((np.ptp(x.reshape(-1, 32), axis=1) / 31), 32) * 0.51 + 1e-3))
 
 
 # A tiny ggml model: header, mel filters, vocab, then tensors of each kind.
@@ -120,7 +103,7 @@ class Kept(io.BytesIO):
         pass
 
 
-outs = {"q5_1": Kept(), "q8_0": Kept()}
+outs = {dtype: Kept() for dtype in turbo_model.DTYPES}
 turbo_model.convert(turbo_model.Reader(src), outs)
 
 
@@ -143,7 +126,7 @@ def read_model(data):
         shape = ints(n_dims)
         name = r.read(length).decode()
         count = int(np.prod(shape))
-        size = {0: 4 * count, 1: 2 * count, 7: count // 32 * 24, 8: count // 32 * 34}[ttype]
+        size = {0: 4 * count, 1: 2 * count, 2: count // 32 * 18, 8: count // 32 * 34}[ttype]
         found[name] = (ttype, shape, r.read(size))
         assert len(found[name][2]) == size, name
     return hp, vocab, found

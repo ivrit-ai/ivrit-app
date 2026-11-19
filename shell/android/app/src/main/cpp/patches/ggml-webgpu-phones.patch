@@ -1,0 +1,632 @@
+--- a/ggml/src/ggml-webgpu/ggml-webgpu.cpp
++++ b/ggml/src/ggml-webgpu/ggml-webgpu.cpp
+@@ -18,6 +18,7 @@
+ 
+ #include <atomic>
+ #include <cstdint>
++#include <cstdlib>
+ #include <cstring>
+ #ifdef GGML_WEBGPU_GPU_PROFILE
+ #    include <iomanip>
+@@ -28,6 +29,7 @@
+ #include <memory>
+ #include <mutex>
+ #include <optional>
++#include <stdexcept>
+ #include <string>
+ #include <utility>
+ #include <vector>
+@@ -172,6 +174,7 @@
+ struct webgpu_capabilities {
+     wgpu::Limits limits;
+     bool         supports_subgroups       = false;
++    bool         mobile                   = false;  // GGML_WEBGPU_MOBILE: the phone programs
+     bool         supports_subgroup_matrix = false;
+     bool         supports_dot_product     = false;
+ 
+@@ -488,6 +491,29 @@
+ 
+ /** WebGPU Actions */
+ 
++// A lost device, a device error, a wait that failed or timed out: thrown (std::runtime_error) at the
++// next wait, on the caller's thread, so an app can take it and go on without the GPU, rather than the
++// process ending. Dawn's callbacks only note it, as they may run on its own threads.
++static std::mutex  ggml_webgpu_failure_mutex;
++static std::string ggml_webgpu_failure;
++
++static void ggml_webgpu_note_failure(const std::string & what) {
++    std::lock_guard<std::mutex> lock(ggml_webgpu_failure_mutex);
++    if (ggml_webgpu_failure.empty()) {
++        ggml_webgpu_failure = what;
++    }
++}
++
++[[noreturn]] static void ggml_webgpu_fail(const std::string & what) {
++    std::string noted;
++    {
++        std::lock_guard<std::mutex> lock(ggml_webgpu_failure_mutex);
++        noted = ggml_webgpu_failure;
++    }
++    GGML_LOG_ERROR("ggml_webgpu: %s%s%s\n", what.c_str(), noted.empty() ? "" : ": ", noted.c_str());
++    throw std::runtime_error("ggml_webgpu: " + what + (noted.empty() ? "" : ": " + noted));
++}
++
+ template <typename T>
+ static void ggml_backend_webgpu_check_wait_status(wgpu::WaitStatus wait_status,
+                                                   T                callback_status,
+@@ -496,14 +522,18 @@
+                                                   const char *     failure_name,
+                                                   const char *     callback_message) {
+     if (wait_status == wgpu::WaitStatus::TimedOut) {
+-        GGML_ABORT("ggml_webgpu: %s timed out after %u ms\n", wait_name, WEBGPU_RUNTIME_WAIT_TIMEOUT_MS);
++        ggml_webgpu_fail(std::string(wait_name) + " timed out after " + std::to_string(WEBGPU_RUNTIME_WAIT_TIMEOUT_MS) + " ms");
+     }
+     if (wait_status == wgpu::WaitStatus::Error) {
+-        GGML_ABORT("ggml_webgpu: %s failed\n", wait_name);
++        ggml_webgpu_fail(std::string(wait_name) + " failed");
+     }
+     if (callback_status != success_status) {
+-        GGML_ABORT("ggml_webgpu: %s failed with status %d: %s\n", failure_name, static_cast<int>(callback_status),
+-                   callback_message);
++        ggml_webgpu_fail(std::string(failure_name) + " failed with status " + std::to_string(static_cast<int>(callback_status)) +
++                         ": " + callback_message);
++    }
++    std::lock_guard<std::mutex> lock(ggml_webgpu_failure_mutex);
++    if (!ggml_webgpu_failure.empty()) {
++        throw std::runtime_error("ggml_webgpu: " + ggml_webgpu_failure);
+     }
+ }
+ 
+@@ -1648,11 +1678,18 @@
+     std::vector<webgpu_dispatch_desc> dispatches;
+     const bool src_overlap = ggml_webgpu_tensor_binding_overlap(ctx->global_ctx, src0, src1) && !use_mmvq;
+ 
++    // The phone program, for q8_0 or f16 x f32 (GGML_WEBGPU_MOBILE).
++    const bool use_mobile = !use_mat_vec && !src_overlap && ctx->global_ctx->capabilities.mobile &&
++                            (src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_F16) &&
++                            src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
++
+     if (use_mat_vec) {
+         if (use_mmvq) {
+             ggml_webgpu_quantize_q8_dispatch(ctx, src0, src1, dst, dispatches);
+         }
+         pipeline = ctx->shader_lib->get_mul_mat_vec_pipeline(shader_lib_ctx, src_overlap);
++    } else if (use_mobile) {
++        pipeline = ctx->shader_lib->get_mul_mat_mobile_pipeline(src0->type);
+     } else {
+         pipeline = ctx->shader_lib->get_mul_mat_fast_pipeline(shader_lib_ctx, src_overlap);
+     }
+@@ -1718,6 +1755,9 @@
+         uint32_t output_groups = CEIL_DIV(dst->ne[0], decisions->outputs_per_wg);
+         uint32_t total_wg      = output_groups * batches;
+         compute_2d_workgroups(total_wg, max_wg_per_dim, wg_x, wg_y);
++    } else if (use_mobile) {
++        uint32_t total_wg = CEIL_DIV(dst->ne[0], 64) * CEIL_DIV(dst->ne[1], 64) * dst->ne[2] * dst->ne[3];
++        compute_2d_workgroups(total_wg, max_wg_per_dim, wg_x, wg_y);
+     } else {
+         auto * decisions = static_cast<ggml_webgpu_mul_mat_shader_decisions *>(pipeline.context.get());
+ 
+@@ -1970,6 +2010,22 @@
+            kv_vec_head_dims_aligned && k_float_vec4_aligned && v_float_vec4_aligned;
+ }
+ 
++// Whisper's attention on phone GPUs (GGML_WEBGPU_MOBILE): f32 Q, f16 K and V, head size 64, no mask,
++// sinks, ALiBi or softcap.
++static bool ggml_webgpu_flash_attn_mobile_ok(bool mobile, const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V,
++                                             const ggml_tensor * mask, const ggml_tensor * sinks, const ggml_tensor * dst) {
++    if (!mobile || mask != nullptr || sinks != nullptr) {
++        return false;
++    }
++    if (ggml_get_op_params_f32(dst, 1) != 0.0f || ggml_get_op_params_f32(dst, 2) != 0.0f) {
++        return false;
++    }
++    return Q->type == GGML_TYPE_F32 && K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
++           dst->type == GGML_TYPE_F32 && Q->ne[0] == 64 && K->ne[0] == 64 && V->ne[0] == 64 &&
++           Q->nb[0] == sizeof(float) && K->nb[0] == sizeof(ggml_fp16_t) && V->nb[0] == sizeof(ggml_fp16_t) &&
++           ggml_is_contiguous(dst);
++}
++
+ static ggml_webgpu_flash_attn_op ggml_webgpu_flash_attn_prepare(webgpu_context & ctx,
+                                                                 ggml_tensor *    Q,
+                                                                 ggml_tensor *    K,
+@@ -2275,6 +2331,11 @@
+                                                 ggml_tensor *    sinks,
+                                                 ggml_tensor *    dst) {
+     ggml_webgpu_flash_attn_op op = ggml_webgpu_flash_attn_prepare(ctx, Q, K, V, mask, sinks, dst);
++    if (ggml_webgpu_flash_attn_mobile_ok(ctx->global_ctx->capabilities.mobile, Q, K, V, mask, sinks, dst)) {
++        webgpu_pipeline pipeline = ctx->shader_lib->get_flash_attn_mobile_pipeline(op.kv_overlap);
++        uint32_t        wg_x     = CEIL_DIV(Q->ne[1], 64) * Q->ne[2] * Q->ne[3];
++        return ggml_backend_webgpu_build(ctx, pipeline, op.params, op.entries, wg_x);
++    }
+     if (ggml_webgpu_flash_attn_use_vec_path(ctx->global_ctx, Q, K, V)) {
+         return ggml_webgpu_flash_attn_vec(ctx, Q, K, V, mask, sinks, dst, std::move(op));
+     }
+@@ -3638,7 +3699,7 @@
+     wgpu::WaitStatus status =
+         event_ctx->global_ctx->instance.WaitAny(event_ctx->future, WEBGPU_RUNTIME_WAIT_TIMEOUT_NS);
+     if (status == wgpu::WaitStatus::TimedOut) {
+-        GGML_ABORT("ggml_webgpu: event_synchronize timed out after %u ms\n", WEBGPU_RUNTIME_WAIT_TIMEOUT_MS);
++        ggml_webgpu_fail("event_synchronize timed out after " + std::to_string(WEBGPU_RUNTIME_WAIT_TIMEOUT_MS) + " ms");
+     }
+     event_ctx->recorded = false;
+ }
+@@ -4143,11 +4204,19 @@
+     ctx->webgpu_global_ctx->command_submit_batch_size = ggml_backend_webgpu_get_command_submit_batch_size();
+     ctx->webgpu_global_ctx->max_inflight_batches      = ggml_backend_webgpu_get_max_inflight_batches();
+     ctx->webgpu_global_ctx->vendor                    = info.vendor;
++    // ivrit-app: GGML_WEBGPU_DISABLE_SUBGROUPS, GGML_WEBGPU_DISABLE_SUBGROUP_MATRIX and
++    // GGML_WEBGPU_DISABLE_DOT_PRODUCT leave those features unused, and GGML_WEBGPU_KEEP_ROBUSTNESS
++    // Dawn's bounds checks on, for a driver that loses the device with them (Adreno's).
+     ctx->webgpu_global_ctx->capabilities.supports_subgroups =
+-        ctx->webgpu_global_ctx->adapter.HasFeature(wgpu::FeatureName::Subgroups);
++        ctx->webgpu_global_ctx->adapter.HasFeature(wgpu::FeatureName::Subgroups) &&
++        !getenv("GGML_WEBGPU_DISABLE_SUBGROUPS");
++    // GGML_WEBGPU_MOBILE: the matrix multiply (q8_0, f16) and flash attention written for phone GPUs, which
++    // need no subgroups (Adreno's and Mali's drivers lose the device with them: too slow, and stopped).
++    ctx->webgpu_global_ctx->capabilities.mobile = getenv("GGML_WEBGPU_MOBILE") != nullptr;
+     // for dot4I8packed
+     ctx->webgpu_global_ctx->capabilities.supports_dot_product = ctx->webgpu_global_ctx->instance.HasWGSLLanguageFeature(
+-        wgpu::WGSLLanguageFeatureName::Packed4x8IntegerDotProduct);
++        wgpu::WGSLLanguageFeatureName::Packed4x8IntegerDotProduct) &&
++        !getenv("GGML_WEBGPU_DISABLE_DOT_PRODUCT");
+ 
+     bool valid_subgroup_matrix_config = false;
+ #ifndef __EMSCRIPTEN__
+@@ -4155,7 +4224,8 @@
+     // NVIDIA GPUs typically report square configs (e.g. 16x16x16),
+     // while Intel Xe2 GPUs report non-square configs (e.g. 8x16x16).
+     // The shaders are already parameterized to handle any M/N/K dimensions.
+-    if (ctx->webgpu_global_ctx->adapter.HasFeature(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix)) {
++    if (ctx->webgpu_global_ctx->adapter.HasFeature(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix) &&
++        !getenv("GGML_WEBGPU_DISABLE_SUBGROUP_MATRIX")) {
+         for (size_t i = 0; i < subgroup_matrix_configs.configCount; i++) {
+             const wgpu::SubgroupMatrixConfig config = subgroup_matrix_configs.configs[i];
+             if (config.componentType == wgpu::SubgroupMatrixComponentType::F16 &&
+@@ -4206,24 +4276,28 @@
+             GGML_UNUSED(device);
+             GGML_LOG_ERROR("ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason),
+                            std::string(message).c_str());
++            ggml_webgpu_note_failure("device lost: " + std::string(message));
+         });
+     dev_desc.SetUncapturedErrorCallback(
+         [](const wgpu::Device & device, wgpu::ErrorType reason, wgpu::StringView message) {
+             GGML_UNUSED(device);
+-            GGML_ABORT("ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason),
+-                       std::string(message).c_str());
++            GGML_LOG_ERROR("ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason),
++                           std::string(message).c_str());
++            ggml_webgpu_note_failure("device error: " + std::string(message));
+         });
+ 
+ #ifndef __EMSCRIPTEN__
+     // Enable Dawn-specific toggles to increase native performance
+     // TODO: Maybe WebGPU needs a "fast" mode where you can request compilers skip adding checks like these,
+     //       only for native performance?
+-    const char * const          deviceEnabledToggles[]  = { "disable_robustness", "disable_workgroup_init",
+-                                                            "disable_polyfills_on_integer_div_and_mod" };
++    const char * const          deviceEnabledToggles[]  = { "disable_workgroup_init",
++                                                            "disable_polyfills_on_integer_div_and_mod",
++                                                            "disable_robustness" };
++    const bool                  keep_robustness         = getenv("GGML_WEBGPU_KEEP_ROBUSTNESS") != nullptr;
+     const char * const          deviceDisabledToggles[] = { "timestamp_quantization" };
+     wgpu::DawnTogglesDescriptor deviceTogglesDesc;
+     deviceTogglesDesc.enabledToggles      = deviceEnabledToggles;
+-    deviceTogglesDesc.enabledToggleCount  = 3;
++    deviceTogglesDesc.enabledToggleCount  = keep_robustness ? 2 : 3;
+     deviceTogglesDesc.disabledToggles     = deviceDisabledToggles;
+     deviceTogglesDesc.disabledToggleCount = 1;
+ 
+@@ -4254,6 +4328,13 @@
+         "device_desc: %s\n",
+         info.vendorID, std::string(info.vendor).c_str(), std::string(info.architecture).c_str(), info.deviceID,
+         std::string(info.device).c_str(), std::string(info.description).c_str());
++    const auto & caps = ctx->webgpu_global_ctx->capabilities;
++    GGML_LOG_INFO(
++        "ggml_webgpu: features: subgroups %d (%u-%u) | subgroup matrix %d (%ux%ux%u) | dot product %d | "
++        "robustness %d\n",
++        caps.supports_subgroups, caps.min_subgroup_size, caps.max_subgroup_size, caps.supports_subgroup_matrix,
++        caps.sg_mat_m, caps.sg_mat_n, caps.sg_mat_k, caps.supports_dot_product,
++        getenv("GGML_WEBGPU_KEEP_ROBUSTNESS") != nullptr);
+ }
+ 
+ static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
+@@ -4548,6 +4629,9 @@
+                     supports_op = false;
+                     break;
+                 }
++                if (ggml_webgpu_flash_attn_mobile_ok(ctx->webgpu_global_ctx->capabilities.mobile, src0, src1, src2, op->src[3], op->src[4], op)) {
++                    break;
++                }
+                 const auto & capabilities             = ctx->webgpu_global_ctx->capabilities;
+                 const size_t storage_offset_alignment = capabilities.limits.minStorageBufferOffsetAlignment;
+ 
+--- a/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
++++ b/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
+@@ -2324,6 +2324,43 @@
+         return mul_mat_fast_pipelines[key];
+     }
+ 
++    // q8_0 or f16 x f32 for phone GPUs (mul_mat_mobile.wgsl, GGML_WEBGPU_MOBILE): 64 x 64 per workgroup of 64.
++    std::unordered_map<int, webgpu_pipeline> mul_mat_mobile_pipelines;
++
++    webgpu_pipeline get_mul_mat_mobile_pipeline(ggml_type src0_type) {
++        auto it = mul_mat_mobile_pipelines.find((int) src0_type);
++        if (it != mul_mat_mobile_pipelines.end()) {
++            return it->second;
++        }
++        const bool f16 = src0_type == GGML_TYPE_F16;
++        std::vector<std::string> defines;
++        if (f16) {
++            defines.push_back("SRC0_F16");
++        }
++        auto processed = preprocessor.preprocess(wgsl_mul_mat_mobile, defines);
++        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, f16 ? "mul_mat_mobile_f16_f32" : "mul_mat_mobile_q8_0_f32");
++        mul_mat_mobile_pipelines[(int) src0_type] = pipeline;
++        return pipeline;
++    }
++
++    // Flash attention for phone GPUs (flash_attn_mobile.wgsl, GGML_WEBGPU_MOBILE), K and V bound apart or merged.
++    std::unordered_map<int, webgpu_pipeline> flash_attn_mobile_pipelines;
++
++    webgpu_pipeline get_flash_attn_mobile_pipeline(bool kv_overlap) {
++        auto it = flash_attn_mobile_pipelines.find((int) kv_overlap);
++        if (it != flash_attn_mobile_pipelines.end()) {
++            return it->second;
++        }
++        std::vector<std::string> defines;
++        if (kv_overlap) {
++            defines.push_back("KV_OVERLAP");
++        }
++        auto processed = preprocessor.preprocess(wgsl_flash_attn_mobile, defines);
++        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, kv_overlap ? "flash_attn_mobile_kv_overlap" : "flash_attn_mobile");
++        flash_attn_mobile_pipelines[(int) kv_overlap] = pipeline;
++        return pipeline;
++    }
++
+     webgpu_pipeline get_mul_mat_id_gather_pipeline(const ggml_webgpu_shader_lib_context & context) {
+         auto it = mul_mat_id_gather_pipelines.find(1);
+         if (it != mul_mat_id_gather_pipelines.end()) {
+--- a/ggml/src/ggml-webgpu/wgsl-shaders/flash_attn_mobile.wgsl
++++ b/ggml/src/ggml-webgpu/wgsl-shaders/flash_attn_mobile.wgsl
+@@ -0,0 +1,145 @@
++enable f16;
++
++// Flash attention for phone GPUs, without subgroups: f32 Q, f16 K and V, head size
++// 64, no mask or sinks (Whisper's encoder). One query row per thread, 64 rows per
++// workgroup; keys and values 16 at a time in shared memory, their scores first, then
++// one rescale of the running output per 16 keys (online softmax).
++
++struct Params {
++    offset_q: u32,
++    offset_k: u32,
++    offset_v: u32,
++    offset_mask: u32,
++    offset_sinks: u32,
++    offset_dst: u32,
++    n_heads: u32,
++    seq_len_q: u32,
++    seq_len_kv: u32,
++    stride_q1: u32,
++    stride_q2: u32,
++    stride_q3: u32,
++    stride_k1: u32,
++    stride_k2: u32,
++    stride_k3: u32,
++    stride_v1: u32,
++    stride_v2: u32,
++    stride_v3: u32,
++    stride_mask3: u32,
++    q_per_kv: u32,
++    scale: f32,
++    max_bias: f32,
++    logit_softcap: f32,
++    n_head_log2: f32,
++    m0: f32,
++    m1: f32,
++};
++
++@group(0) @binding(0) var<storage, read_write> Q: array<f32>;
++#ifdef KV_OVERLAP
++@group(0) @binding(1) var<storage, read_write> KV: array<f16>;
++@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
++@group(0) @binding(3) var<uniform> params: Params;
++#define K KV
++#define V KV
++#else
++@group(0) @binding(1) var<storage, read_write> K: array<f16>;
++@group(0) @binding(2) var<storage, read_write> V: array<f16>;
++@group(0) @binding(3) var<storage, read_write> dst: array<f32>;
++@group(0) @binding(4) var<uniform> params: Params;
++#endif
++
++const D = 64u;
++const D4 = 16u;
++const QT = 64u;  // query rows per workgroup, one per thread
++const KT = 8u;   // keys per step
++const NEG = -1.0e30;
++
++var<workgroup> ks: array<vec4<f16>, 128>; // [key][d / 4]
++var<workgroup> vs: array<vec4<f16>, 128>;
++
++@compute @workgroup_size(64)
++fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
++        @builtin(local_invocation_id) local_id: vec3<u32>) {
++    let t = local_id.x;
++    let wg_per_head = (params.seq_len_q + QT - 1u) / QT;
++    let wg_per_batch = wg_per_head * params.n_heads;
++    let batch = wg_id.x / wg_per_batch;
++    let in_batch = wg_id.x % wg_per_batch;
++    let head = in_batch / wg_per_head;
++    let q_row = (in_batch % wg_per_head) * QT + t;
++    let live = q_row < params.seq_len_q;
++    let kv_head = head / params.q_per_kv;
++
++    let k_base = params.offset_k + batch * params.stride_k3 + kv_head * params.stride_k2;
++    let v_base = params.offset_v + batch * params.stride_v3 + kv_head * params.stride_v2;
++
++    var q: array<vec4<f16>, 16>; // f16 to keep registers down; the math is f32
++    if (live) {
++        let at = params.offset_q + batch * params.stride_q3 + head * params.stride_q2 + q_row * params.stride_q1;
++        for (var d4 = 0u; d4 < D4; d4++) {
++            let i = at + 4u * d4;
++            q[d4] = vec4<f16>(vec4<f32>(Q[i], Q[i + 1u], Q[i + 2u], Q[i + 3u]) * params.scale);
++        }
++    }
++
++    var o: array<vec4<f32>, 16>;
++    var m = NEG;
++    var l = 0.0;
++
++    for (var kv0 = 0u; kv0 < params.seq_len_kv; kv0 += KT) {
++        for (var i = 0u; i < 2u; i++) {
++            let idx = t + 64u * i;
++            let key = kv0 + idx / D4;
++            let d = 4u * (idx % D4);
++            var kv = vec4<f16>(0.0);
++            var vv = vec4<f16>(0.0);
++            if (key < params.seq_len_kv) {
++                let ka = k_base + key * params.stride_k1 + d;
++                let va = v_base + key * params.stride_v1 + d;
++                kv = vec4<f16>(K[ka], K[ka + 1u], K[ka + 2u], K[ka + 3u]);
++                vv = vec4<f16>(V[va], V[va + 1u], V[va + 2u], V[va + 3u]);
++            }
++            ks[idx] = kv;
++            vs[idx] = vv;
++        }
++        workgroupBarrier();
++
++        var s: array<f32, 8>;
++        var tile_max = NEG;
++        for (var j = 0u; j < KT; j++) {
++            var acc = 0.0;
++            for (var d4 = 0u; d4 < D4; d4++) {
++                acc += dot(vec4<f32>(q[d4]), vec4<f32>(ks[j * D4 + d4]));
++            }
++            s[j] = select(NEG, acc, kv0 + j < params.seq_len_kv);
++            tile_max = max(tile_max, s[j]);
++        }
++        let m_new = max(m, tile_max);
++        let corr = exp(m - m_new);
++        l *= corr;
++        for (var d4 = 0u; d4 < D4; d4++) {
++            o[d4] *= corr;
++        }
++        for (var j = 0u; j < KT; j++) {
++            let p = exp(s[j] - m_new);
++            l += p;
++            for (var d4 = 0u; d4 < D4; d4++) {
++                o[d4] = fma(vec4<f32>(p), vec4<f32>(vs[j * D4 + d4]), o[d4]);
++            }
++        }
++        m = m_new;
++        workgroupBarrier();
++    }
++
++    if (live) {
++        let inv = select(0.0, 1.0 / l, l > 0.0);
++        let at = params.offset_dst + batch * (D * params.n_heads * params.seq_len_q) + q_row * (D * params.n_heads) + head * D;
++        for (var d4 = 0u; d4 < D4; d4++) {
++            let v = o[d4] * inv;
++            dst[at + 4u * d4] = v.x;
++            dst[at + 4u * d4 + 1u] = v.y;
++            dst[at + 4u * d4 + 2u] = v.z;
++            dst[at + 4u * d4 + 3u] = v.w;
++        }
++    }
++}
+--- a/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_mobile.wgsl
++++ b/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_mobile.wgsl
+@@ -0,0 +1,193 @@
++enable f16;
++
++// q8_0 (or f16, SRC0_F16) x f32 matrix multiply for phone GPUs, without subgroups: a 64 x 64 tile of
++// the output per workgroup of 64 threads, 8 x 8 outputs per thread. Both tiles sit in
++// shared memory as vec4<f16> along M (src0) and N (src1), k by k, so each step reads
++// four vectors and does sixteen vec4 multiply-adds in f32.
++
++struct MulMatParams {
++    offset_src0: u32,
++    offset_src1: u32,
++    offset_dst: u32,
++    m: u32,
++    n: u32,
++    k: u32,
++    stride_01: u32,
++    stride_11: u32,
++    stride_02: u32,
++    stride_12: u32,
++    stride_03: u32,
++    stride_13: u32,
++    bs02: u32,
++    bs03: u32,
++    broadcast2: u32,
++    broadcast3: u32
++};
++
++#ifdef SRC0_F16
++@group(0) @binding(0) var<storage, read_write> src0: array<f16>; // M rows of K
++#else
++@group(0) @binding(0) var<storage, read_write> src0: array<u32>; // q8_0 blocks (34 bytes), M rows of K
++#endif
++@group(0) @binding(1) var<storage, read_write> src1: array<f32>; // N columns of K
++@group(0) @binding(2) var<storage, read_write> dst: array<f32>;  // N columns of M
++@group(0) @binding(3) var<uniform> params: MulMatParams;
++
++const WG_M = 8u;
++const BM = 64u;
++const BN = 64u;
++const BK = 32u;    // one q8_0 block
++const BM4 = 16u;   // BM / 4
++const BN4 = 16u;
++
++var<workgroup> sa: array<vec4<f16>, 512>; // [k][m / 4]
++var<workgroup> sb: array<vec4<f16>, 512>; // [k][n / 4]
++
++#ifndef SRC0_F16
++fn load_u32_src0(byte_offset: u32) -> u32 {
++    let word = byte_offset / 4u;
++    let shift = (byte_offset & 3u) * 8u;
++    let lo = src0[word];
++    let hi = src0[word + 1u];
++    return select((lo >> shift) | (hi << (32u - shift)), lo, shift == 0u);
++}
++
++fn i8_at(w: u32, i: u32) -> f32 {
++    return f32(bitcast<i32>(w << (24u - 8u * i)) >> 24u);
++}
++
++// 8 weights of row `m` from k0 on (within its block), scaled; zeros past the matrix.
++fn row8(base: u32, m: u32, kb: u32, k0: u32) -> array<f32, 8> {
++    var v: array<f32, 8>;
++    if (m < params.m) {
++        let b = (base + m * params.stride_01 + kb) * 34u;
++        let d = unpack2x16float(load_u32_src0(b) & 0xFFFFu).x;
++        let w0 = load_u32_src0(b + 2u + k0);
++        let w1 = load_u32_src0(b + 6u + k0);
++        for (var i = 0u; i < 4u; i++) {
++            v[i] = i8_at(w0, i) * d;
++            v[i + 4u] = i8_at(w1, i) * d;
++        }
++    }
++    return v;
++}
++#else
++// 8 values of row `m` from k on; zeros past the matrix (never read: no bounds checks here).
++fn row8(base: u32, m: u32, kb: u32, k: u32) -> array<f32, 8> {
++    var v: array<f32, 8>;
++    if (m < params.m) {
++        let at = base + m * params.stride_01 + kb * BK + k;
++        for (var i = 0u; i < 8u; i++) {
++            if (kb * BK + k + i < params.k) {
++                v[i] = f32(src0[at + i]);
++            }
++        }
++    }
++    return v;
++}
++#endif
++
++fn col8(base: u32, n: u32, k: u32) -> array<f32, 8> {
++    var v: array<f32, 8>;
++    if (n < params.n) {
++        let at = base + n * params.stride_11 + k;
++        for (var i = 0u; i < 8u; i++) {
++            if (k + i < params.k) {
++                v[i] = src1[at + i];
++            }
++        }
++    }
++    return v;
++}
++
++@compute @workgroup_size(64)
++fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
++        @builtin(local_invocation_id) local_id: vec3<u32>,
++        @builtin(num_workgroups) num_wg: vec3<u32>) {
++    let t = local_id.x;
++
++    let wg_m_count = (params.m + BM - 1u) / BM;
++    let wg_n_count = (params.n + BN - 1u) / BN;
++    let wg_per_matrix = wg_m_count * wg_n_count;
++    let wg_linear = wg_id.y * num_wg.x + wg_id.x;
++    let batch_idx = wg_linear / wg_per_matrix;
++    let total_batches = params.bs02 * params.broadcast2 * params.bs03 * params.broadcast3;
++    if (batch_idx >= total_batches) {
++        return;
++    }
++    let wg_in_batch = wg_linear % wg_per_matrix;
++    let offset_m = (wg_in_batch % wg_m_count) * BM;
++    let offset_n = (wg_in_batch / wg_m_count) * BN;
++
++    let dst3_idx = batch_idx / (params.bs02 * params.broadcast2);
++    let dst2_idx = batch_idx % (params.bs02 * params.broadcast2);
++    let src0_base = params.offset_src0 + (dst3_idx / params.broadcast3) * params.stride_03 + (dst2_idx / params.broadcast2) * params.stride_02;
++    let src1_base = params.offset_src1 + dst3_idx * params.stride_13 + dst2_idx * params.stride_12;
++
++    // Loading: thread t fills four rows (columns) 4g..4g+3 at k 8h..8h+7.
++    let g = t % 16u;
++    let h = t / 16u;
++    // Computing: thread t's 8 x 8 outputs.
++    let lm = t % WG_M;
++    let ln = t / WG_M;
++
++    var acc: array<vec4<f32>, 16>; // [n][m half]
++
++    for (var k_outer = 0u; k_outer < params.k; k_outer += BK) {
++        let kb = k_outer / BK;
++        let r0 = row8(src0_base, offset_m + 4u * g, kb, 8u * h);
++        let r1 = row8(src0_base, offset_m + 4u * g + 1u, kb, 8u * h);
++        let r2 = row8(src0_base, offset_m + 4u * g + 2u, kb, 8u * h);
++        let r3 = row8(src0_base, offset_m + 4u * g + 3u, kb, 8u * h);
++        let c0 = col8(src1_base, offset_n + 4u * g, k_outer + 8u * h);
++        let c1 = col8(src1_base, offset_n + 4u * g + 1u, k_outer + 8u * h);
++        let c2 = col8(src1_base, offset_n + 4u * g + 2u, k_outer + 8u * h);
++        let c3 = col8(src1_base, offset_n + 4u * g + 3u, k_outer + 8u * h);
++        for (var i = 0u; i < 8u; i++) {
++            sa[(8u * h + i) * BM4 + g] = vec4<f16>(vec4<f32>(r0[i], r1[i], r2[i], r3[i]));
++            sb[(8u * h + i) * BN4 + g] = vec4<f16>(vec4<f32>(c0[i], c1[i], c2[i], c3[i]));
++        }
++        workgroupBarrier();
++
++        for (var k = 0u; k < BK; k++) {
++            let a0 = vec4<f32>(sa[k * BM4 + 2u * lm]);
++            let a1 = vec4<f32>(sa[k * BM4 + 2u * lm + 1u]);
++            let b0 = vec4<f32>(sb[k * BN4 + 2u * ln]);
++            let b1 = vec4<f32>(sb[k * BN4 + 2u * ln + 1u]);
++            acc[0] = fma(a0, vec4<f32>(b0.x), acc[0]);
++            acc[1] = fma(a1, vec4<f32>(b0.x), acc[1]);
++            acc[2] = fma(a0, vec4<f32>(b0.y), acc[2]);
++            acc[3] = fma(a1, vec4<f32>(b0.y), acc[3]);
++            acc[4] = fma(a0, vec4<f32>(b0.z), acc[4]);
++            acc[5] = fma(a1, vec4<f32>(b0.z), acc[5]);
++            acc[6] = fma(a0, vec4<f32>(b0.w), acc[6]);
++            acc[7] = fma(a1, vec4<f32>(b0.w), acc[7]);
++            acc[8] = fma(a0, vec4<f32>(b1.x), acc[8]);
++            acc[9] = fma(a1, vec4<f32>(b1.x), acc[9]);
++            acc[10] = fma(a0, vec4<f32>(b1.y), acc[10]);
++            acc[11] = fma(a1, vec4<f32>(b1.y), acc[11]);
++            acc[12] = fma(a0, vec4<f32>(b1.z), acc[12]);
++            acc[13] = fma(a1, vec4<f32>(b1.z), acc[13]);
++            acc[14] = fma(a0, vec4<f32>(b1.w), acc[14]);
++            acc[15] = fma(a1, vec4<f32>(b1.w), acc[15]);
++        }
++        workgroupBarrier();
++    }
++
++    let dst_base = params.offset_dst + dst3_idx * (params.m * params.n * params.bs02 * params.broadcast2) + dst2_idx * (params.m * params.n);
++    let m0 = offset_m + 8u * lm;
++    for (var j = 0u; j < 8u; j++) {
++        let n = offset_n + 8u * ln + j;
++        if (n < params.n) {
++            let at = dst_base + n * params.m + m0;
++            for (var i = 0u; i < 4u; i++) {
++                if (m0 + i < params.m) {
++                    dst[at + i] = acc[2u * j][i];
++                }
++                if (m0 + 4u + i < params.m) {
++                    dst[at + 4u + i] = acc[2u * j + 1u][i];
++                }
++            }
++        }
++    }
++}
