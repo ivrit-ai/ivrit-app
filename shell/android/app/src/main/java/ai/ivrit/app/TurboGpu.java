@@ -273,29 +273,33 @@ final class TurboGpu {
     }
 
     /**
-     * Ready ahead (PrepareWorker): the GPU checked where it will be (decide), and the
-     * decoder's threads tuned where the check did not (no GPU, or the CPU chosen), on
-     * the check's own recording.
+     * Ready ahead (PrepareWorker): the decoder's threads tuned, on the CPU, on the
+     * check's own recording. Not the GPU's check: a driver that crashes takes the app's
+     * process with it, and the app is often open then (the work starts with it); a
+     * recording checks it, in the background, as before.
      */
-    static void prepare(Context context, String variant, String processor, Progress checking) throws Exception {
-        Verdict v = decide(context, variant, processor, checking);
+    static void prepare(Context context, String variant) throws Exception {
+        Verdict v = load(context);
+        if (v == null || !key(variant).equals(v.key)) v = new Verdict(key(variant));
         if (v.decodeThreads > 0) return;
         long handle = Whisper.load(Turbo.file(context, variant).getPath(), -1, true, false);
         if (handle == 0) throw new IllegalStateException("the Turbo model did not load");
         try {
             float[] sound = sample(context);
             int threads = Whisper.tuneDecoder(handle, sound, sound.length, Turbo.threads());
-            if (threads > 0) tuned(context, variant, threads);
+            if (threads > 0) {
+                v.decodeThreads = threads;
+                save(context, v);
+            }
         } finally {
             Whisper.free(handle);
         }
     }
 
-    /** Nothing left for a recording to do first: the GPU checked (unless the CPU was chosen), the decoder tuned. */
+    /** What PrepareWorker can do is done: the decoder tuned (the GPU's check is a recording's). */
     static boolean prepared(Context context, String variant) {
         Verdict v = load(context);
-        if (v == null || !key(variant).equals(v.key) || v.decodeThreads <= 0) return false;
-        return v.state != null || CPU.equals(Store.turboProcessor(context));
+        return v != null && key(variant).equals(v.key) && v.decodeThreads > 0;
     }
 
     /**
@@ -361,19 +365,28 @@ final class TurboGpu {
 
     /**
      * The verdict for the chosen model on this phone, checking the GPU first where it
-     * has not been (`checking` follows it, as it takes a minute).
+     * has not been (`checking` follows it, as it takes a minute). Not while the app is
+     * on the screen: a driver that crashes takes the app with it, so that recording
+     * goes on the CPU, and a later one, in the background, checks.
      */
     static Verdict decide(Context context, String variant, String processor, Progress checking) throws Exception {
         caches(context);
         Verdict v = settle(load(context), key(variant));
         save(context, v);
         if (v.crashed != null) report(context, variant, v);
-        if (v.state == null && !CPU.equals(processor)) {
+        if (v.state == null && !CPU.equals(processor) && !onScreen()) {
             checking.at(0);
             check(context, variant, v, checking);
         }
         apply(v.level());
         return v;
+    }
+
+    /** The app is in front of the user (an activity showing), not only working in the background. */
+    private static boolean onScreen() {
+        android.app.ActivityManager.RunningAppProcessInfo me = new android.app.ActivityManager.RunningAppProcessInfo();
+        android.app.ActivityManager.getMyMemoryState(me);
+        return me.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
     }
 
     /** ggml's device index for the verdict's backend, for Whisper.load, or -1 where it has none. */

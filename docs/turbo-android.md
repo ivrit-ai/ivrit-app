@@ -72,7 +72,7 @@ Open to comment; each with what it rests on.
    transcribes recordings (on-device only, a folder watched for it, no account,
    or once it has), Turbo is made ready ahead (`PrepareWorker`, queued at the
    app's start and when those settings change): the model and the speaker model
-   downloaded, the GPU checked, the decoder's threads tuned, on Wi-Fi and while
+   downloaded, the decoder's threads tuned (on the CPU), on Wi-Fi and while
    charging only, in a quiet notification that says what it downloads and how
    large; so a recording starts at full speed. What it has not done, a recording
    still does first (its first download waiting for Wi-Fi). Downloads resume
@@ -289,6 +289,13 @@ Open to comment; each with what it rests on.
     while. Unplugged, it pauses and goes on when plugged in again. What the user
     asked for (shared, handed over, picked in the app) starts at once; only the
     model's first download waits, for Wi-Fi.
+
+20. **The GPU's check never runs with the app on the screen.** It runs in the
+    app's own process, and a GPU driver that crashes takes that down (a Pixel 7,
+    Android 17, crashed at its shaders, the app open: builds 261-262 started the
+    check with the app). The background preparation leaves the check alone; a
+    recording made with the app open goes on the CPU, unchecked, and the next one
+    in the background checks.
 
 ## Verified, and not yet
 

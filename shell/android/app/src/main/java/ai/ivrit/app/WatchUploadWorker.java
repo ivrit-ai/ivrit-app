@@ -56,6 +56,7 @@ public class WatchUploadWorker extends Worker {
             .build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(WatchUploadWorker.class)
             .setInputData(input)
+            .addTag("watch:" + watch.id)
             .setConstraints(new Constraints.Builder()
                 .setRequiredNetworkType(watch.wifiOnly ? NetworkType.UNMETERED : NetworkType.CONNECTED)
                 .build())

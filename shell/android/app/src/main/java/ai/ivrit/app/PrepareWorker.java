@@ -16,8 +16,9 @@ import androidx.work.WorkerParameters;
 
 /**
  * Turbo made ready before the first recording needs it: the model and the speaker
- * model downloaded, the GPU checked, the decoder's threads tuned (TurboGpu.prepare),
- * so a recording starts at full speed. In the background, on Wi-Fi and while
+ * model downloaded, the decoder's threads tuned on the CPU (TurboGpu.prepare). Not
+ * the GPU's check, which a recording does: a driver that crashes would take the app
+ * down with it, open as it often is when this runs. In the background, on Wi-Fi and while
  * charging, told in a quiet notification (the download's size among it); only where
  * transcribing on the phone is in use (relevant). Whatever it has not done, the
  * first recording still does on its way.
@@ -80,7 +81,7 @@ public class PrepareWorker extends Worker {
             tell("downloading", 0, variant);
             Turbo.ensure(context, variant, (done, total) -> tell("downloading", done / (double) Math.max(1, total), variant));
             Speakers.ensure(context, (done, total) -> {});
-            TurboGpu.prepare(context, variant, Store.turboProcessor(context), fraction -> tell("checking", fraction, variant));
+            TurboGpu.prepare(context, variant);
             Notifications.showPrepared(context);
             return Result.success();
         } catch (Exception | LinkageError e) {

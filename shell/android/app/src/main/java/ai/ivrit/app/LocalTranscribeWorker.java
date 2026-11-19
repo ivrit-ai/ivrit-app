@@ -82,6 +82,7 @@ public class LocalTranscribeWorker extends Worker {
         OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(LocalTranscribeWorker.class)
             .setInputData(input)
             .addTag("local:" + input.getString("key"))
+            .addTag("watch:" + (input.getString("watchId") == null ? "" : input.getString("watchId")))
             // Waiting its turn is a retry: looked at again every 20 seconds.
             .setBackoffCriteria(androidx.work.BackoffPolicy.LINEAR, 20, java.util.concurrent.TimeUnit.SECONDS);
         boolean charging = input.getBoolean("charging", false);
@@ -134,6 +135,12 @@ public class LocalTranscribeWorker extends Worker {
         // A benchmark's recording comes with it (Benchmark), once Turbo is there.
         Uri source = "benchmark".equals(kind) ? Uri.EMPTY : sourceUri(input.getString("source"));
         if (source == null) return done(kind, input, null, "gone");
+        if ("watch".equals(kind)) {
+            // Its watch removed meanwhile, or its folder no longer open to the app (the
+            // watch's card says so, and how to mend it): nothing to tell for each file.
+            if (Watches.find(context, input.getString("watchId")) == null) return done(kind, input, null, "gone");
+            if (!readable(context, source)) return done(kind, input, null, "access");
+        }
         // Another recording has the model: this one waits its turn, without holding
         // one of WorkManager's few threads (uploads and folder checks need them).
         if (!TURN.tryAcquire()) {
@@ -206,6 +213,20 @@ public class LocalTranscribeWorker extends Worker {
             if (failures(context, key, 1) < 2 && e instanceof Exception) return Result.retry();
             String detail = e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage());
             return done(kind, input, null, detail.length() > 200 ? detail.substring(0, 200) : detail);
+        }
+    }
+
+    /**
+     * The app may still read it: MediaExtractor hides a refusal behind "Failed to
+     * instantiate extractor". Anything else (gone, say) is left to the transcription.
+     */
+    private static boolean readable(Context context, Uri uri) {
+        try (android.os.ParcelFileDescriptor ignored = context.getContentResolver().openFileDescriptor(uri, "r")) {
+            return true;
+        } catch (SecurityException e) {
+            return false;
+        } catch (Exception e) {
+            return true;
         }
     }
 
@@ -752,7 +773,7 @@ public class LocalTranscribeWorker extends Worker {
             tell(kind, resultsId != null ? "done" : "failed", 1, null, why);
             return Result.success();
         }
-        if (resultsId == null && why != null && !"gone".equals(why)) Notifications.showLocalFailed(context, key, name, why);
+        if (resultsId == null && why != null && !"gone".equals(why) && !"access".equals(why)) Notifications.showLocalFailed(context, key, name, why);
         IvritNativePlugin.localTranscription(key, name, folder, resultsId != null ? "done" : "failed", 1, resultsId, why);
         return Result.success();
     }

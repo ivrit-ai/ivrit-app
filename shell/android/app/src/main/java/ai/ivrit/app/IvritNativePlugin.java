@@ -540,11 +540,20 @@ public class IvritNativePlugin extends Plugin {
     public void removeWatch(PluginCall call) {
         Watches.Watch watch = Watches.find(getContext(), call.getString("id", ""));
         if (watch != null) {
-            try {
-                getContext().getContentResolver().releasePersistableUriPermission(Uri.parse(watch.tree), Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (SecurityException ignored) {
-                // Already gone.
+            // The folder's access is given back only when no other watch reads it.
+            boolean shared = false;
+            for (Watches.Watch other : Watches.all(getContext())) {
+                if (!other.id.equals(watch.id) && watch.tree.equals(other.tree)) shared = true;
             }
+            if (!shared) {
+                try {
+                    getContext().getContentResolver().releasePersistableUriPermission(Uri.parse(watch.tree), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (SecurityException ignored) {
+                    // Already gone.
+                }
+            }
+            // Its files waiting to be sent or transcribed go with it.
+            androidx.work.WorkManager.getInstance(getContext()).cancelAllWorkByTag("watch:" + watch.id);
             Watches.remove(getContext(), watch.id);
             FolderWatchWorker.schedule(getContext());
         }
