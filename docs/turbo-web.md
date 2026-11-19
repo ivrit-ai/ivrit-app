@@ -45,4 +45,17 @@ the server.
    halving the decoder's steps. The module sends 8 kernels a submission and waits
    up to 10 minutes. A minute of Hebrew then takes 157 s on that laptop (the
    decoder's steps, ~18 ms of matrix-vector each, and the voice prints on one
-   thread are most of it): correct, still slow; optimizing next.
+   thread are most of it): correct, still slow.
+7. **Then the decoder and the voice prints** (same laptop, hot, 2026-11-19): a
+   matrix-vector program of our own for a decoder step (a row a thread, the
+   beams' values in shared memory: the vocabulary's 1280 x 51866 in 19.8 ms, not
+   65.5); our flash attention for the encoder's many queries only (a step's five
+   go to ggml's vector path, which splits the keys); and the speaker model on the
+   GPU (sp_load_gpu, used when its print of a test sound is the CPU's at cosine
+   0.999: ggml-webgpu has no MEAN and skipped it, so ecapa.cpp means as sum and
+   scale, the native prints unchanged). A minute of Hebrew: 97 s, from 185-194.
+8. **The models download to disk** (OPFS, a piece at a time as it arrives) and an
+   interrupted download goes on from where it stopped (an HTTP range); the page
+   asks for persistent storage and keeps the screen on while it runs (a phone
+   could not hold 900 MB in memory first, nor keep a page alive with the screen
+   off).

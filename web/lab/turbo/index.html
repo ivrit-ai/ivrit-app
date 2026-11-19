@@ -31,7 +31,7 @@
     <main class="lab">
       <p><a href="/lab/">→ המעבדה</a></p>
       <h1>Turbo בדפדפן</h1>
-      <p>מודל ה-Turbo של ivrit.ai, עם זיהוי הדוברים, רץ כאן על המעבד הגרפי של המחשב, בלי לשלוח את ההקלטה לשרת. בפעם הראשונה מורידים את המודל (כ-900MB), והוא נשמר בדפדפן.</p>
+      <p>מודל ה-Turbo של ivrit.ai, עם זיהוי הדוברים, רץ כאן על המעבד הגרפי של המחשב, בלי לשלוח את ההקלטה לשרת. בפעם הראשונה מורידים את המודל (כ-900MB, עדיף ב-Wi-Fi), והוא נשמר בדפדפן. אם ההורדה נקטעת, לחיצה נוספת ממשיכה מאיפה שעצרה. בטלפון, השאירו את המסך דלוק ואת הדף פתוח.</p>
       <div id="support" class="verdict">בודק…</div>
       <dl id="facts" class="facts"></dl>
       <div class="tests" id="tests" hidden>
@@ -124,9 +124,19 @@
       const report = (body) =>
         fetch("/lab/report?kind=web-turbo", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
 
+      // While a run is under way: the screen kept on (a phone suspends a page whose screen
+      // goes off), again when the page comes back; and the downloaded models kept.
+      let lock = null;
+      const keepAwake = async () => {
+        if (busy && document.visibilityState === "visible") lock = await navigator.wakeLock?.request("screen").catch(() => null);
+      };
+      document.addEventListener("visibilitychange", keepAwake);
+
       async function run(kind, blob) {
         if (busy) return;
         busy = true;
+        navigator.storage?.persist?.().catch(() => {});
+        await keepAwake();
         $("result").innerHTML = "";
         $("transcript").innerHTML = "";
         since = Date.now();
@@ -162,9 +172,13 @@
             .map((s) => `<p class="line"><b>${esc(s.speakers[0]?.replace("SPEAKER_", "דובר ") ?? "")} ${clock(s.start)}</b>${esc(s.text)}</p>`).join("");
         } catch (e) {
           report({ ...facts, error: String(e?.message || e), log: (e?.log || "").slice(-4000) });
-          say(`זה לא עבד: ${e?.message || e}`);
+          say(/download/.test(e?.message || "")
+            ? "ההורדה נקטעה. לחיצה נוספת תמשיך מאיפה שעצרה."
+            : `זה לא עבד: ${e?.message || e}`);
         }
         busy = false;
+        lock?.release().catch(() => {});
+        lock = null;
       }
 
       $("bench").addEventListener("click", () => run("benchmark", fetch(BENCH).then((r) => r.blob())));

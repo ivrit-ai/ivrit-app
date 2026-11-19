@@ -219,9 +219,15 @@ struct builder {
         return out;
     }
 
+    // The mean of each row: their sums scaled, as every backend has them (ggml-webgpu has
+    // no MEAN, and would skip it: the GPU's prints were wrong).
+    ggml_tensor *mean_rows(ggml_tensor *x) {
+        return ggml_scale(ctx, ggml_sum_rows(ctx, x), 1.0f / (float) x->ne[0]);
+    }
+
     // SEBlock: the channels' means through two 1x1 convolutions, a gate on each.
     ggml_tensor *se(ggml_tensor *x, const std::string &name) {
-        ggml_tensor *s = ggml_reshape_2d(ctx, ggml_mean(ctx, by_channel(x)), x->ne[0], 1);
+        ggml_tensor *s = ggml_reshape_2d(ctx, mean_rows(by_channel(x)), x->ne[0], 1);
         s = ggml_relu(ctx, conv(s, name + ".se1", 1));
         s = ggml_sigmoid(ctx, conv(s, name + ".se2", 1));
         return ggml_mul(ctx, x, s);
@@ -239,8 +245,8 @@ struct builder {
     // [T, C] tensors, a channel's frames being a row.
     ggml_tensor *pool(ggml_tensor *x) {
         ggml_tensor *xt = by_channel(x);
-        ggml_tensor *mean = ggml_mean(ctx, xt);  // [1, C]
-        ggml_tensor *std_ = ggml_sqrt(ctx, ggml_clamp(ctx, ggml_mean(ctx, ggml_sqr(ctx, ggml_sub(ctx, xt, mean))), STAT_EPS, INFINITY));
+        ggml_tensor *mean = mean_rows(xt);  // [1, C]
+        ggml_tensor *std_ = ggml_sqrt(ctx, ggml_clamp(ctx, mean_rows(ggml_sqr(ctx, ggml_sub(ctx, xt, mean))), STAT_EPS, INFINITY));
         ggml_tensor *mean_c = ggml_repeat(ctx, ggml_reshape_2d(ctx, mean, x->ne[0], 1), x);
         ggml_tensor *std_c = ggml_repeat(ctx, ggml_reshape_2d(ctx, std_, x->ne[0], 1), x);
         ggml_tensor *attn = ggml_concat(ctx, ggml_concat(ctx, x, mean_c, 0), std_c, 0);

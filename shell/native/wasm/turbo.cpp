@@ -150,7 +150,8 @@ EMSCRIPTEN_KEEPALIVE int tw_load(const char *path, int gpu) {
 }
 
 // One kernel timed on the GPU, for tuning: what 0 (q8_0 matrix multiply: K x M
-// weights times K x N) or 1 (flash attention: head size 64, n_q = n_kv = N, M heads),
+// weights times K x N; N up to 8 is the matrix-vector program, as beam search's
+// decoder steps) or 1 (flash attention: head size 64, n_q = n_kv = N, M heads),
 // `reps` times after one to build it; milliseconds per run, -1 when it failed. The
 // GPU's result against the CPU's: tw_error() says how far apart (max |difference| /
 // max |value|).
@@ -247,12 +248,50 @@ EMSCRIPTEN_KEEPALIVE void tw_free() {
     g_speakers = nullptr;
 }
 
-// The speaker model; without it, the transcript has no speakers. 0 when it loaded.
-EMSCRIPTEN_KEEPALIVE int tw_load_speakers(const char *path) {
+// The speaker model; without it, the transcript has no speakers. On the GPU when the
+// model is (`gpu`) and a print there is the CPU's (one second of sound, cosine 0.999):
+// the page has one thread, on which the prints of an hour take minutes. 0 when it
+// loaded.
+EMSCRIPTEN_KEEPALIVE int tw_load_speakers(const char *path, int gpu) {
     if (g_speakers) sp_free(g_speakers);
     g_speakers = sp_load(path, 1);
-    if (!g_speakers) g_error = "the speaker model did not load";
-    return g_speakers ? 0 : -1;
+    if (!g_speakers) {
+        g_error = "the speaker model did not load";
+        return -1;
+    }
+    if (gpu) {
+        sp_model *on_gpu = sp_load_gpu(path, 0);
+        if (on_gpu) {
+            std::vector<float> sound(SP_SAMPLE_RATE);
+            uint32_t seed = 11;
+            for (float &v : sound) {
+                seed = seed * 1664525u + 1013904223u;
+                v = ((seed >> 9) / 8388608.0f - 0.5f) * 0.2f;
+            }
+            float a[SP_DIM], b[SP_DIM];
+            bool ok = false;
+            try {
+                ok = sp_embed(g_speakers, sound.data(), sound.size(), a) && sp_embed(on_gpu, sound.data(), sound.size(), b);
+            } catch (...) {
+                ok = false;
+            }
+            double dot = 0, na = 0, nb = 0;
+            for (int i = 0; ok && i < SP_DIM; i++) {
+                dot += a[i] * b[i];
+                na += a[i] * a[i];
+                nb += b[i] * b[i];
+            }
+            const double cosine = ok && na > 0 && nb > 0 ? dot / std::sqrt(na * nb) : 0;
+            fprintf(stderr, "speakers: GPU print %s (cosine %.5f)\n", cosine >= 0.999 ? "used" : "not used", cosine);
+            if (cosine >= 0.999) {
+                sp_free(g_speakers);
+                g_speakers = on_gpu;
+            } else {
+                sp_free(on_gpu);
+            }
+        }
+    }
+    return 0;
 }
 
 // Stops a transcription under way (tw_transcribe returns -2).
