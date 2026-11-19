@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Turbo בדפדפן · ivrit.ai</title>
+    <link rel="stylesheet" href="/fonts/fonts.css" />
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/theme.css" />
+    <!-- The Turbo model in the browser (web/turbo: the apps' whole chain, whisper.cpp
+         with the app's patches, stable-ts and the speakers, as WebAssembly on the
+         browser's WebGPU). The benchmark's result goes to /bench/ as the phones' do;
+         for a file of the user's own, only its timings go to /lab/report, never its
+         words. -->
+    <style>
+      .lab { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+      .lab h1 { font: 700 30px/1.2 var(--font-display); margin: 0 0 4px; }
+      .lab h2 { font: 700 20px/1.3 var(--font-display); margin: 28px 0 8px; }
+      .lab p { color: var(--ink-2); }
+      .facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 12px 0; font-size: 15px; }
+      .facts dt { color: var(--muted); }
+      .facts dd { margin: 0; overflow-wrap: anywhere; }
+      .tests { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+      .verdict { padding: 12px 14px; border-radius: 10px; background: var(--surface-2, rgba(127, 127, 127, 0.12)); margin: 12px 0; }
+      .note { font-size: 14px; color: var(--muted); }
+      .line { margin: 0 0 8px; }
+      .line b { color: var(--muted); font-weight: 600; margin-inline-end: 6px; }
+    </style>
+  </head>
+  <body>
+    <main class="lab">
+      <p><a href="/lab/">→ המעבדה</a></p>
+      <h1>Turbo בדפדפן</h1>
+      <p>מודל ה-Turbo של ivrit.ai, עם זיהוי הדוברים, רץ כאן על המעבד הגרפי של המחשב, בלי לשלוח את ההקלטה לשרת. בפעם הראשונה מורידים את המודל (כ-900MB), והוא נשמר בדפדפן.</p>
+      <div id="support" class="verdict">בודק…</div>
+      <dl id="facts" class="facts"></dl>
+      <div class="tests" id="tests" hidden>
+        <button id="bench" class="btn primary" type="button">בדיקת מהירות (5 דקות של עברית)</button>
+        <label class="btn" for="file">תמלול קובץ משלי</label>
+        <input id="file" type="file" accept="audio/*,video/*" hidden />
+      </div>
+      <div id="status" class="verdict" hidden></div>
+      <div id="result"></div>
+      <div id="transcript"></div>
+    </main>
+    <script type="module">
+      import { card, clock, STYLE } from "/bench/card.js";
+      document.head.append(Object.assign(document.createElement("style"), { textContent: STYLE }));
+      const $ = (id) => document.getElementById(id);
+      const BENCH = "https://huggingface.co/datasets/ivrit-ai/turbo-benchmark/resolve/bff424b6022e859d5e67bb9009268b3611fdcaa5/benchmark-he.flac";
+      const PHASES = { downloading: "מוריד את המודל", loading: "טוען את המודל", transcribing: "מתמלל", prints: "טביעות קול", speakers: "מזהה דוברים", decoding: "קורא את ההקלטה" };
+      const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+      // What this browser offers: WebGPU (an adapter), JSPI (ggml's waits), f16 shaders.
+      const jspi = typeof WebAssembly.Suspending === "function" && typeof WebAssembly.promising === "function";
+      const adapter = await navigator.gpu?.requestAdapter?.({ powerPreference: "high-performance" }).catch(() => null);
+      const info = adapter?.info || {};
+      const gpuName = [info.vendor, info.architecture, info.description].filter(Boolean).join(" ") || "WebGPU";
+      const brand = navigator.userAgentData?.brands?.find((b) => !/Not|Chromium/.test(b.brand));
+      const browser = brand ? `${brand.brand} ${brand.version}` : navigator.userAgent.match(/(Firefox|Safari|Chrome)\/[\d.]+/)?.[0] || "browser";
+      $("facts").innerHTML = `<dt>דפדפן</dt><dd>${esc(browser)}</dd><dt>מעבד גרפי</dt><dd>${esc(adapter ? gpuName : "אין")}</dd>
+        <dt>f16</dt><dd>${adapter?.features.has("shader-f16") ? "כן" : "לא"}</dd><dt>JSPI</dt><dd>${jspi ? "כן" : "לא"}</dd>`;
+      const ok = adapter && jspi && adapter.features.has("shader-f16");
+      $("support").textContent = ok
+        ? "הדפדפן הזה יכול להריץ את המודל."
+        : !adapter
+          ? "אין כאן WebGPU. נסו Chrome או Edge עדכניים."
+          : !jspi
+            ? "הדפדפן הזה עוד לא תומך ב-JSPI, שהמודל צריך. נסו Chrome או Edge עדכניים."
+            : "המעבד הגרפי כאן לא תומך ב-f16, שהמודל צריך.";
+      $("tests").hidden = !ok;
+
+      // The worker (web/turbo/worker.mjs), one run at a time; the clock ticks between its events.
+      const worker = ok ? new Worker("/turbo/worker.mjs", { type: "module" }) : null;
+      let since = 0, shown = null, ticker = null, busy = false;
+      const render = () => {
+        if (!shown) return;
+        const percent = shown.fraction ? ` · ${Math.round(shown.fraction * 100)}%` : "";
+        $("status").hidden = false;
+        $("status").textContent = `${PHASES[shown.phase] || shown.phase}${percent} · ${clock((Date.now() - since) / 1000)}`;
+      };
+      const say = (text) => {
+        clearInterval(ticker);
+        ticker = null;
+        shown = null;
+        $("status").hidden = false;
+        $("status").textContent = text;
+      };
+
+      async function sound(blob) {
+        const Context = self.AudioContext || self.webkitAudioContext;
+        const context = new Context({ sampleRate: 16000 });
+        try {
+          const audio = await context.decodeAudioData(await blob.arrayBuffer());
+          // A copy: the worker takes it (transferred), and the decoder's own cannot go.
+          const pcm = new Float32Array(audio.getChannelData(0));
+          if (audio.numberOfChannels > 1) {
+            for (let c = 1; c < audio.numberOfChannels; c++) {
+              const other = audio.getChannelData(c);
+              for (let i = 0; i < pcm.length; i++) pcm[i] += other[i];
+            }
+            for (let i = 0; i < pcm.length; i++) pcm[i] /= audio.numberOfChannels;
+          }
+          return pcm;
+        } finally {
+          context.close();
+        }
+      }
+
+      function transcribe(pcm) {
+        return new Promise((resolve, reject) => {
+          worker.onmessage = ({ data }) => {
+            if (data.type === "progress") {
+              shown = { phase: data.phase, fraction: shown?.phase === data.phase ? Math.max(shown.fraction || 0, data.fraction || 0) : data.fraction };
+              render();
+              ticker ??= setInterval(render, 1000);
+            } else if (data.type === "done") resolve(data);
+            else reject(Object.assign(new Error(data.message), { log: data.log }));
+          };
+          worker.postMessage({ type: "run", pcm, gpu: true }, [pcm.buffer]);
+        });
+      }
+
+      const report = (body) =>
+        fetch("/lab/report?kind=web-turbo", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
+
+      async function run(kind, blob) {
+        if (busy) return;
+        busy = true;
+        $("result").innerHTML = "";
+        $("transcript").innerHTML = "";
+        since = Date.now();
+        shown = { phase: "decoding", fraction: 0 };
+        render();
+        ticker ??= setInterval(render, 1000);
+        const facts = { kind, browser, gpu: gpuName, gpuInfo: { ...info }, userAgent: navigator.userAgent, cores: navigator.hardwareConcurrency };
+        try {
+          const pcm = await sound(await blob);
+          const audioSeconds = pcm.length / 16000;
+          const done = await transcribe(pcm);
+          const seconds = done.stages.load + done.stages.transcribe;
+          const speakers = new Set(done.segments.flatMap((s) => s.speakers)).size;
+          report({ ...facts, audioSeconds, stages: done.stages, segments: done.segments.length, speakers, log: done.log.slice(-4000) });
+          if (kind === "benchmark") {
+            const result = {
+              benchmark: "benchmark-he", seconds, audioSeconds, transcript: done.segments.map((s) => s.text).join(" "),
+              device: { manufacturer: browser, model: gpuName, cores: navigator.hardwareConcurrency },
+              engine: "whisper-turbo-he-q8_0", app: "web",
+              run: { processor: "gpu", backend: "WebGPU", chose: "web", gpu: gpuName, beams: 5, threads: 1, decoderCpu: false },
+              stages: done.stages, segments: done.segments.length, speakersFound: speakers,
+            };
+            say("שולח את התוצאה…");
+            const r = await fetch("/bench/results", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ result: JSON.stringify(result), integrity: null }) });
+            const scored = await r.json();
+            if (r.ok) Object.assign(result, { wer: scored.wer, verified: false });
+            $("result").innerHTML = card(result, r.ok ? `${location.origin}/bench/?id=${scored.id}` : null);
+            $("status").hidden = true;
+          } else {
+            say(`תומלל: ${clock(audioSeconds)} של הקלטה ב-${clock(seconds)} (פי ${(audioSeconds / seconds).toFixed(2)} ממהירות הדיבור), ${speakers} דוברים.`);
+          }
+          $("transcript").innerHTML = `<h2>התמלול</h2>` + done.segments
+            .map((s) => `<p class="line"><b>${esc(s.speakers[0]?.replace("SPEAKER_", "דובר ") ?? "")} ${clock(s.start)}</b>${esc(s.text)}</p>`).join("");
+        } catch (e) {
+          report({ ...facts, error: String(e?.message || e), log: (e?.log || "").slice(-4000) });
+          say(`זה לא עבד: ${e?.message || e}`);
+        }
+        busy = false;
+      }
+
+      $("bench").addEventListener("click", () => run("benchmark", fetch(BENCH).then((r) => r.blob())));
+      $("file").addEventListener("change", () => {
+        const file = $("file").files[0];
+        if (file) run("file", file);
+        $("file").value = "";
+      });
+    </script>
+  </body>
+</html>

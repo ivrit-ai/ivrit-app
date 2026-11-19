@@ -37,9 +37,10 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const names = await caches.keys();
-      // Never dropped here: the lab's model weights (whisper-gpu-weights, 1.6 GB) and
-      // the on-device transcription model (zipformer2-he-<revision>, 72 MB).
-      const keep = (n) => n === SHELL || n === "whisper-gpu-weights" || n.startsWith("zipformer2-he-");
+      // Never dropped here: the lab's model weights (whisper-gpu-weights, 1.6 GB), the
+      // on-device transcription model (zipformer2-he-<revision>, 72 MB) and the Turbo
+      // model in the browser (turbo-web-…, 900 MB: web/turbo/worker.mjs).
+      const keep = (n) => n === SHELL || n === "whisper-gpu-weights" || n.startsWith("zipformer2-he-") || n.startsWith("turbo-web-");
       await Promise.all(names.filter((n) => !keep(n)).map((n) => caches.delete(n)));
       // A browser push subscription left from before: notifications no longer come
       // this way (the page also removes the device at Communicator).
@@ -55,8 +56,10 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
   if (event.request.method !== "GET") return;
-  // Caching the worker itself is how a bad deploy becomes permanent.
-  if (url.pathname === "/sw.js" || url.pathname.startsWith("/.well-known/") || url.pathname.startsWith("/lab")) return;
+  // Caching the worker itself is how a bad deploy becomes permanent. Models (/models/,
+  // hundreds of MB) and the Turbo module (/turbo/) are kept by their own code.
+  if (url.pathname === "/sw.js" || url.pathname.startsWith("/.well-known/") || url.pathname.startsWith("/lab") ||
+      url.pathname.startsWith("/models/") || url.pathname.startsWith("/turbo/")) return;
 
   // Fonts and images never change in place (a new one gets a new name): from
   // the cache when there. Everything else - the page, its code and styles - from

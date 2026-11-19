@@ -1,0 +1,18 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -57,10 +57,15 @@
+ 
+     option(WHISPER_WASM_SINGLE_FILE "whisper: embed WASM inside the generated whisper.js" ON)
+ 
++    # Threads need the page cross-origin isolated (SharedArrayBuffer); a page that
++    # cannot be (ivrit.ai's: Google's sign-in and pickers) builds without them.
++    option(WHISPER_WASM_PTHREADS "whisper: build with threads (needs cross-origin isolation)" ON)
++    if (WHISPER_WASM_PTHREADS)
+     # TODO: without these, we get the following error:
+     #       wasm-ld: error: --shared-memory is disallowed by whisper.cpp.o because it was not compiled with 'atomics' or 'bulk-memory' features.
+     set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -pthread")
+     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
++    endif()
+ 
+     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s TOTAL_STACK=5242880")
+     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s TOTAL_STACK=5242880")
