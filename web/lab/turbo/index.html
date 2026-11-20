@@ -38,6 +38,7 @@
         <button id="bench" class="btn primary" type="button">בדיקת מהירות (5 דקות של עברית)</button>
         <label class="btn" for="file">תמלול קובץ משלי</label>
         <input id="file" type="file" accept="audio/*,video/*" hidden />
+        <button id="check" class="btn quiet" type="button">בדיקת תקינות</button>
       </div>
       <div id="status" class="verdict" hidden></div>
       <div id="result"></div>
@@ -71,7 +72,9 @@
       $("tests").hidden = !ok;
 
       // The worker (web/turbo/worker.mjs), one run at a time; the clock ticks between its events.
-      const worker = ok ? new Worker("/turbo/worker.mjs", { type: "module" }) : null;
+      // The page's switches (int8=0, sg=0, mobile=0: worker.mjs) go to the worker, and into each report.
+      const switches = new URLSearchParams([...new URLSearchParams(location.search)].filter(([k]) => ["int8", "sg", "mobile"].includes(k)));
+      const worker = ok ? new Worker("/turbo/worker.mjs" + (switches.size ? "?" + switches : ""), { type: "module" }) : null;
       let since = 0, shown = null, ticker = null, busy = false;
       const render = () => {
         if (!shown) return;
@@ -143,7 +146,7 @@
         shown = { phase: "decoding", fraction: 0 };
         render();
         ticker ??= setInterval(render, 1000);
-        const facts = { kind, browser, gpu: gpuName, gpuInfo: { ...info }, userAgent: navigator.userAgent, cores: navigator.hardwareConcurrency };
+        const facts = { kind, browser, gpu: gpuName, gpuInfo: { ...info }, userAgent: navigator.userAgent, cores: navigator.hardwareConcurrency, switches: String(switches) };
         try {
           const pcm = await sound(await blob);
           const audioSeconds = pcm.length / 16000;
@@ -156,7 +159,7 @@
               benchmark: "benchmark-he", seconds, audioSeconds, transcript: done.segments.map((s) => s.text).join(" "),
               device: { manufacturer: browser, model: gpuName, cores: navigator.hardwareConcurrency },
               engine: "whisper-turbo-he-q8_0", app: "web",
-              run: { processor: "gpu", backend: "WebGPU", chose: "web", gpu: gpuName, beams: 5, threads: 1, decoderCpu: false },
+              run: { processor: "gpu", backend: "WebGPU", chose: "web", gpu: gpuName, beams: 5, threads: 1, decoderCpu: false, switches: String(switches) },
               stages: done.stages, segments: done.segments.length, speakersFound: speakers,
             };
             say("שולח את התוצאה…");
@@ -181,6 +184,43 @@
         lock = null;
       }
 
+      // The correctness check: each GPU program against the CPU, with the 8-bit multiply
+      // and without (two workers: the choice is made as the module starts); what it
+      // found to /lab/report (kind web-turbo-check). No sound, no words.
+      async function checkAll() {
+        if (busy) return;
+        busy = true;
+        $("result").innerHTML = "";
+        $("transcript").innerHTML = "";
+        say("בודק את תוכניות המעבד הגרפי מול המעבד…");
+        const modes = [["8-bit", ""], ["f32", "?int8=0"]];
+        const rows = [];
+        const report = { kind: "check", browser, gpu: gpuName, gpuInfo: { ...info }, userAgent: navigator.userAgent, results: {} };
+        try {
+          for (const [mode, query] of modes) {
+            const w = new Worker("/turbo/worker.mjs" + query, { type: "module" });
+            const done = await new Promise((resolve, reject) => {
+              w.onmessage = ({ data }) => (data.type === "checked" ? resolve(data) : data.type === "error" ? reject(new Error(data.message)) : null);
+              w.postMessage({ type: "check" });
+            });
+            w.terminate();
+            report.results[mode] = done.results;
+            for (const r of done.results) rows.push([mode, r.name, r.ms, r.error]);
+          }
+          const bad = rows.filter(([, , , e]) => typeof e !== "number" || e > 0.02);
+          say(bad.length ? `נמצאו ${bad.length} תוכניות שגויות. התוצאות נשלחו אלינו.` : "כל התוכניות תקינות.");
+          $("result").innerHTML = `<table class="facts"><tbody>${rows.map(([mode, name, ms, e]) =>
+            `<tr><td dir="ltr">${esc(mode)}</td><td dir="ltr">${esc(name)}</td><td dir="ltr">${ms < 0 ? "-" : ms.toFixed(1) + " ms"}</td><td dir="ltr">${esc(typeof e === "number" ? e.toPrecision(2) : e)}${typeof e !== "number" || e > 0.02 ? " ✗" : ""}</td></tr>`).join("")}</tbody></table>`;
+        } catch (e) {
+          report.error = String(e?.message || e);
+          say(`הבדיקה לא הושלמה: ${e?.message || e}`);
+        }
+        fetch("/lab/report?kind=web-turbo-check", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(report) }).catch(() => {});
+        busy = false;
+      }
+
+      $("check").addEventListener("click", checkAll);
+      if (ok && new URLSearchParams(location.search).get("check")) checkAll();
       $("bench").addEventListener("click", () => run("benchmark", fetch(BENCH).then((r) => r.blob())));
       $("file").addEventListener("change", () => {
         const file = $("file").files[0];

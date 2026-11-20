@@ -122,7 +122,8 @@ EMSCRIPTEN_KEEPALIVE int tw_load(const char *path, int gpu) {
         // The app's own WebGPU programs (patches/ggml-webgpu-phones.patch): built for
         // phones' GPUs, and faster than ggml's on GPUs without subgroup matrices, as
         // browsers' are. Read once, as ggml first starts.
-        setenv("GGML_WEBGPU_MOBILE", "1", 1);
+        // (TW_NO_MOBILE, for finding what goes wrong on a GPU: ggml's own programs only.)
+        if (!getenv("TW_NO_MOBILE")) setenv("GGML_WEBGPU_MOBILE", "1", 1);
         // A wait for the GPU may take long in a browser (its first run compiles every
         // program); a GPU that hangs is the browser's to reset, which fails the wait.
         setenv("GGML_WEBGPU_WAIT_MS", "600000", 0);

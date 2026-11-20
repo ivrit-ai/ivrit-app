@@ -58,7 +58,7 @@ final class TurboGpu {
     /** A way to run on the GPU: one of ggml's backends, with switches. */
     static final class Level {
         final String backend; // in ggml's device name: "OpenCL" (GPUOpenCL), "WebGPU", "Vulkan" (Vulkan0)
-        final String[] env; // the backend's switches, set before ggml starts it
+        final String[] env; // the backend's switches ("NAME", or "NAME=VALUE"), set before ggml starts it
         final boolean flash; // whisper.cpp's flash attention
 
         Level(String backend, boolean flash, String... env) {
@@ -358,7 +358,8 @@ final class TurboGpu {
         if (webgpuSet == null) webgpuSet = webgpu(level);
         for (String name : level.env) {
             try {
-                android.system.Os.setenv(name, "1", true);
+                int eq = name.indexOf('=');
+                android.system.Os.setenv(eq < 0 ? name : name.substring(0, eq), eq < 0 ? "1" : name.substring(eq + 1), true);
             } catch (Exception ignored) {
                 // Not set: the GPU runs as at the level before.
             }
@@ -402,8 +403,9 @@ final class TurboGpu {
      * process dying in it, puts it back on the CPU until it is chosen again, and is
      * reported (kind=local-turbo-gpu-crash, crashed "trial:...").
      */
+    // GPU work 8 kernels a submission: a phone's driver stops a long one (as Windows' does).
     static final Level TRIAL_LEVEL = new Level("WebGPU", true, "GGML_WEBGPU_MOBILE", WEBGPU_NO_MATRIX,
-        "GGML_WEBGPU_DISABLE_SUBGROUPS", "GGML_WEBGPU_DISABLE_DOT_PRODUCT");
+        "GGML_WEBGPU_DISABLE_SUBGROUPS", "GGML_WEBGPU_DISABLE_DOT_PRODUCT", "GGML_WEBGPU_SUBMIT_BATCH=8");
 
     /** Before the library loads (Turbo.supported): the trial's switches, where it is chosen. */
     static void early(Context context) {

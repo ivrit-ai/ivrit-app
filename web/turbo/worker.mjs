@@ -1,6 +1,9 @@
 // The Turbo model in the browser (turbo.mjs, scripts/build-web-turbo.sh): the
 // whole chain the apps run (shell/native/wasm/turbo.cpp) in this module worker.
 //   in:  {type: "run", pcm: Float32Array (16 kHz mono), gpu: boolean, beams?: 1 (greedy) | 5 (the default)}
+//        or {type: "check"}: each GPU program the model uses, at its sizes, against the
+//        CPU (tw_bench): out {type: "checked", results: [{name, ms, error}]}.
+// The worker's URL may carry switches for finding what goes wrong on a GPU (switches()).
 //   out: {type: "progress", phase: "downloading" | "loading" | "transcribing" |
 //        "prints" | "speakers", fraction}, then {type: "done", segments, stages:
 //        {download, load, transcribe} (seconds), log} or {type: "error", message, log}.
@@ -25,6 +28,15 @@ const SPEAKERS = {
 const log = [];
 const post = (message) => self.postMessage(message);
 let turbo = null;
+
+// For finding what goes wrong on a GPU, from the worker's URL (the page passes its own):
+// int8=0 the f32 multiply, sg=0 no subgroups, mobile=0 ggml's own programs only.
+function switches(m) {
+  const q = new URLSearchParams(self.location.search);
+  if (q.get("int8") === "0") m.ENV.GGML_WEBGPU_MOBILE_NO_INT8 = "1";
+  if (q.get("sg") === "0") m.ENV.GGML_WEBGPU_DISABLE_SUBGROUPS = "1";
+  if (q.get("mobile") === "0") m.ENV.TW_NO_MOBILE = "1";
+}
 let loaded = null; // "gpu" | "cpu" once the model is in
 
 // The file whole on disk (OPFS): what is there kept, the rest fetched and written as it
@@ -76,6 +88,7 @@ async function ready(gpu) {
   const download = (performance.now() - fetching) / 1000;
   if (!turbo) {
     turbo = await createTurbo({
+      preRun: [switches],
       onProgress: (phase, fraction) => post({ type: "progress", phase, fraction }),
       print: (line) => log.push(line),
       printErr: (line) => log.push(line),
@@ -93,7 +106,44 @@ async function ready(gpu) {
   return download;
 }
 
+// The programs at the model's sizes: the encoder's multiply (1500 frames), a decoder
+// step's (5 beams), the vocabulary's, and the encoder's attention (20 heads).
+const CHECKS = [
+  ["encoder multiply 1280x1280", 0, 1280, 1280, 1500],
+  ["encoder multiply 1280x5120", 0, 1280, 5120, 1500],
+  ["encoder multiply 5120x1280", 0, 5120, 1280, 1500],
+  ["decoder step 1280x1280", 0, 1280, 1280, 5],
+  ["decoder step 5120x1280", 0, 5120, 1280, 5],
+  ["vocabulary 1280x51866", 0, 1280, 51866, 5],
+  ["encoder attention", 1, 64, 20, 1500],
+];
+
+async function check() {
+  if (!turbo) {
+    turbo = await createTurbo({
+      preRun: [switches],
+      print: (line) => log.push(line),
+      printErr: (line) => log.push(line),
+    });
+  }
+  const results = [];
+  for (const [name, what, k, m, n] of CHECKS) {
+    const ms = await turbo._tw_bench(what, k, m, n, 2);
+    const said = turbo.UTF8ToString(turbo._tw_error());
+    results.push({ name, ms, error: ms < 0 ? said : Number(said.replace("error ", "")) });
+  }
+  post({ type: "checked", results, log: log.slice(-40).join("\n") });
+}
+
 self.onmessage = async ({ data }) => {
+  if (data.type === "check") {
+    try {
+      await check();
+    } catch (e) {
+      post({ type: "error", message: String(e?.message || e), log: log.slice(-80).join("\n") });
+    }
+    return;
+  }
   if (data.type !== "run") return;
   try {
     const started = performance.now();

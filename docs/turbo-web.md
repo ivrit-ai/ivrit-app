@@ -77,3 +77,9 @@ the server.
     Iris Xe. Phones' trial keeps f32 (it leaves the dot product off).
 11. **A laptop's own state moves its times by up to twice** (heat, its charger):
     compare versions back to back, alternating, never across hours.
+12. **A Mac's Apple GPU in Chrome: fast, wrong** (the benchmark in 226 s, 82% of its
+    words wrong, 2026-11-20). The Lab page's correctness check (`?check=1`, or its
+    button) times each GPU program at the model's sizes against the CPU, with the
+    8-bit multiply and without, and reports it (kind web-turbo-check); and the page
+    takes switches for the benchmark (`?int8=0`, `?sg=0` no subgroups, `?mobile=0`
+    ggml's own programs only) to find which one is wrong there.
