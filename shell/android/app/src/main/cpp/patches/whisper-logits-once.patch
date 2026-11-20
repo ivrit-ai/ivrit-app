@@ -1,0 +1,27 @@
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -3060,11 +3060,21 @@
+     }
+ 
+     logits_out.resize(n_tokens*n_vocab);
++    // Every token's (beam search's step: a token a beam): in one read. Each read waits for
++    // the GPU, which in a browser is a round trip through its GPU process.
++    bool all_logits = true;
+     for (int i = 0; i < n_tokens; i++) {
+-        if (batch.logits[i] == 0) {
+-            continue;
++        all_logits = all_logits && batch.logits[i] != 0;
++    }
++    if (all_logits) {
++        ggml_backend_tensor_get(logits, logits_out.data(), 0, sizeof(float)*n_vocab*n_tokens);
++    } else {
++        for (int i = 0; i < n_tokens; i++) {
++            if (batch.logits[i] == 0) {
++                continue;
++            }
++            ggml_backend_tensor_get(logits, logits_out.data() + (n_vocab*i), sizeof(float)*(n_vocab*i), sizeof(float)*n_vocab);
+         }
+-        ggml_backend_tensor_get(logits, logits_out.data() + (n_vocab*i), sizeof(float)*(n_vocab*i), sizeof(float)*n_vocab);
+     }
+ 
+     if (batch.n_tokens > 1) {

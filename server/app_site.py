@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 logger = logging.getLogger("transcribe_service.app_site")
@@ -44,10 +44,51 @@ class Pages(StaticFiles):
     for a day."""
 
     def file_response(self, full_path, stat_result, scope, status_code=200):
+        start = range_start(scope, stat_result.st_size)
+        if start is not None:
+            return partial_response(full_path, stat_result.st_size, start)
         response = super().file_response(full_path, stat_result, scope, status_code)
         lasting = str(full_path).endswith((".woff2", ".png", ".svg"))
         response.headers["Cache-Control"] = "public, max-age=86400" if lasting else "no-cache"
+        response.headers["Accept-Ranges"] = "bytes"
         return response
+
+
+def range_start(scope, size: int) -> Optional[int]:
+    """Where an open-ended range ("bytes=N-") asks a GET to start, as the apps resume a
+    model's download (this Starlette serves no ranges); None for the whole file, or for
+    a range of another form."""
+    if scope.get("method") != "GET":
+        return None
+    for name, value in scope.get("headers", []):
+        if name == b"range":
+            text = value.decode("latin-1").strip()
+            if text.startswith("bytes=") and text.endswith("-") and text[6:-1].isdigit():
+                start = int(text[6:-1])
+                return start if 0 < start < size else None
+    return None
+
+
+def partial_response(path, size: int, start: int) -> StreamingResponse:
+    """The file from `start` on: 206, with its Content-Range."""
+
+    def chunks():
+        with open(path, "rb") as f:
+            f.seek(start)
+            while chunk := f.read(1 << 20):
+                yield chunk
+
+    return StreamingResponse(
+        chunks(),
+        status_code=206,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Range": f"bytes {start}-{size - 1}/{size}",
+            "Content-Length": str(size - start),
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 def make_sessions(google_client_id: Optional[str]):

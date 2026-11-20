@@ -59,3 +59,21 @@ the server.
    asks for persistent storage and keeps the screen on while it runs (a phone
    could not hold 900 MB in memory first, nor keep a page alive with the screen
    off).
+9. **Beam search 5, the default** (a fast greedy mode may come as an option; the
+   user's call, 2026-11-20). In the browser a beam step cost twice a greedy one,
+   where on the phone (the decoder on its CPU) they cost the same. Closed most of
+   the gap: the step's five rows of probabilities read in one call
+   (patches/whisper-logits-once.patch: each read is a wait, a round trip to the
+   browser's GPU process); the matrix-vector program compiled for the step's
+   column count (C1..C7: 5 columns cost 5, 1 costs 1) and four threads a row, 64
+   rows a workgroup (the columns' tile shared by more weights). A minute: 94 s to
+   68 s on the Iris Xe, its words the CPU's; greedy 65 s. The rest of a beam step:
+   self-attention over the shared cache (whisper.cpp's beams share one, each step
+   attends up to its highest cell), ~13 ms.
+10. **The encoder's multiply in 8-bit integers** where the GPU has the 4 x 8-bit dot
+    product (mul_mat_mobile_dot.wgsl; GGML_WEBGPU_MOBILE_NO_INT8 for f32): the
+    activations made 8-bit a block at a time, as ggml's CPU does, so its numbers
+    are the CPU's (error 0.0002 against 0.004 for f32), and 10-25% faster on the
+    Iris Xe. Phones' trial keeps f32 (it leaves the dot product off).
+11. **A laptop's own state moves its times by up to twice** (heat, its charger):
+    compare versions back to back, alternating, never across hours.

@@ -45,7 +45,7 @@ export function card(run, url) {
     <dl class="bench-facts">
       <dt>דיוק</dt><dd>${accuracy}</dd>
       <dt>דוברים</dt><dd>${esc(run.speakersFound ?? "—")}</dd>
-      <dt>טלפון</dt><dd>${esc(phone(run))}</dd>
+      <dt>${run.device?.android ? "טלפון" : "מכשיר"}</dt><dd>${esc(phone(run))}</dd>
       ${run.device?.soc ? `<dt>שבב</dt><dd>${esc(run.device.soc)}</dd>` : ""}
       <dt>רץ על</dt><dd>${esc(where(run))}</dd>
     </dl>
@@ -57,7 +57,7 @@ export function card(run, url) {
         <dt>גרסה</dt><dd>${esc(run.app)}</dd>
         ${run.run?.gpu ? `<dt>מעבד גרפי</dt><dd>${esc(run.run.gpu)}</dd>` : ""}
         <dt>תהליכונים</dt><dd>${esc(run.run?.threads)} / מפענח ${esc(run.run?.decodeThreads)}</dd>
-        <dt>Android</dt><dd>${esc(run.device?.android)}</dd>
+        ${run.device?.android ? `<dt>Android</dt><dd>${esc(run.device.android)}</dd>` : ""}
         ${conditions(run)}
       </dl>
     </details>
@@ -76,7 +76,7 @@ export function board(runs, versions) {
     <td class="n">${r.wer == null ? "—" : `${((1 - r.wer) * 100).toFixed(1)}%`}</td>
     <td>${esc(where(r))}</td>
   </tr>`);
-  return `<table class="bench-board"><thead><tr><th>#</th><th>טלפון</th><th>זמן</th><th>מהירות</th><th>דיוק</th><th>רץ על</th></tr></thead>
+  return `<table class="bench-board"><thead><tr><th>#</th><th>מכשיר</th><th>זמן</th><th>מהירות</th><th>דיוק</th><th>רץ על</th></tr></thead>
     <tbody>${rows.join("")}</tbody></table>`;
 }
 

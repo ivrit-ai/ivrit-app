@@ -1,6 +1,6 @@
 // The Turbo model in the browser (turbo.mjs, scripts/build-web-turbo.sh): the
 // whole chain the apps run (shell/native/wasm/turbo.cpp) in this module worker.
-//   in:  {type: "run", pcm: Float32Array (16 kHz mono), gpu: boolean}
+//   in:  {type: "run", pcm: Float32Array (16 kHz mono), gpu: boolean, beams?: 1 (greedy) | 5 (the default)}
 //   out: {type: "progress", phase: "downloading" | "loading" | "transcribing" |
 //        "prints" | "speakers", fraction}, then {type: "done", segments, stages:
 //        {download, load, transcribe} (seconds), log} or {type: "error", message, log}.
@@ -102,7 +102,7 @@ self.onmessage = async ({ data }) => {
     const pcm = data.pcm;
     const at = turbo._malloc(pcm.length * 4);
     turbo.HEAPF32.set(pcm, at / 4);
-    const rc = await turbo._tw_transcribe(at, pcm.length);
+    const rc = await turbo._tw_transcribe(at, pcm.length, data.beams || 0);
     turbo._free(at);
     if (rc !== 0) throw new Error(rc === -2 ? "stopped" : turbo.UTF8ToString(turbo._tw_error()));
     const segments = JSON.parse(turbo.UTF8ToString(turbo._tw_result()));

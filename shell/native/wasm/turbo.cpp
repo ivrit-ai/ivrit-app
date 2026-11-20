@@ -39,7 +39,7 @@ namespace {
 
 constexpr int RATE = WHISPER_SAMPLE_RATE;
 constexpr double PIECE_SECONDS = 600;  // Turbo.CHUNK_SECONDS
-constexpr int BEAMS = 5;               // Turbo.GPU_BEAMS: the server's beam size
+constexpr int BEAMS = 5;               // Turbo.GPU_BEAMS: the server's beam size, by default
 
 whisper_context *g_ctx = nullptr;
 sp_model *g_speakers = nullptr;
@@ -299,9 +299,10 @@ EMSCRIPTEN_KEEPALIVE void tw_stop() {
     g_stop = true;
 }
 
-// The transcript of n samples of 16 kHz mono sound: 0, with the JSON in tw_result();
-// -2 when stopped, -1 when it failed (tw_error()).
-EMSCRIPTEN_KEEPALIVE int tw_transcribe(const float *pcm, size_t n) {
+// The transcript of n samples of 16 kHz mono sound, with beam search of `beams` (0:
+// the server's 5; 1: greedy): 0, with the JSON in tw_result(); -2 when stopped, -1
+// when it failed (tw_error()).
+EMSCRIPTEN_KEEPALIVE int tw_transcribe(const float *pcm, size_t n, int beams) {
     if (!g_ctx) {
         g_error = "no model";
         return -1;
@@ -309,8 +310,10 @@ EMSCRIPTEN_KEEPALIVE int tw_transcribe(const float *pcm, size_t n) {
     g_stop = false;
     g_result.clear();
     try {
-        whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
-        params.beam_search.beam_size = BEAMS;
+        if (beams <= 0) beams = BEAMS;
+        whisper_full_params params =
+            whisper_full_default_params(beams > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
+        if (beams > 1) params.beam_search.beam_size = beams;
         params.n_threads = 1;
         params.language = "he";
         params.suppress_nst = true;
