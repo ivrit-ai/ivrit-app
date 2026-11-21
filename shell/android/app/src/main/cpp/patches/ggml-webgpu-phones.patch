@@ -158,7 +158,7 @@
      } else {
          pipeline = ctx->shader_lib->get_mul_mat_fast_pipeline(shader_lib_ctx, src_overlap);
      }
-@@ -1711,13 +1777,23 @@
+@@ -1711,13 +1777,26 @@
      uint32_t       wg_y           = 1;
      const uint32_t max_wg_per_dim = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
  
@@ -177,13 +177,16 @@
 +        uint32_t total_wg = CEIL_DIV(dst->ne[0], 64) * CEIL_DIV(dst->ne[1], 32) * dst->ne[2] * dst->ne[3];
 +        compute_2d_workgroups(total_wg, max_wg_per_dim, wg_x, wg_y);
 +    } else if (use_mobile) {
-+        uint32_t total_wg = CEIL_DIV(dst->ne[0], 64) * CEIL_DIV(dst->ne[1], 8 * ggml_webgpu_shader_lib::mul_mat_mobile_columns()) *
-+                            dst->ne[2] * dst->ne[3];
++        // 64 x 64 or 64 x 32 a workgroup (8 rows by 8 or 4 columns a thread), or 32 x 32 (4 by 4).
++        const bool     small    = ggml_webgpu_shader_lib::mul_mat_mobile_rows() == 4;
++        const uint32_t tile_m   = small ? 32 : 64;
++        const uint32_t tile_n   = small ? 32 : 8 * ggml_webgpu_shader_lib::mul_mat_mobile_columns();
++        uint32_t       total_wg = CEIL_DIV(dst->ne[0], tile_m) * CEIL_DIV(dst->ne[1], tile_n) * dst->ne[2] * dst->ne[3];
 +        compute_2d_workgroups(total_wg, max_wg_per_dim, wg_x, wg_y);
      } else {
          auto * decisions = static_cast<ggml_webgpu_mul_mat_shader_decisions *>(pipeline.context.get());
  
-@@ -1970,6 +2046,24 @@
+@@ -1970,6 +2049,24 @@
             kv_vec_head_dims_aligned && k_float_vec4_aligned && v_float_vec4_aligned;
  }
  
@@ -208,7 +211,7 @@
  static ggml_webgpu_flash_attn_op ggml_webgpu_flash_attn_prepare(webgpu_context & ctx,
                                                                  ggml_tensor *    Q,
                                                                  ggml_tensor *    K,
-@@ -2275,6 +2369,11 @@
+@@ -2275,6 +2372,11 @@
                                                  ggml_tensor *    sinks,
                                                  ggml_tensor *    dst) {
      ggml_webgpu_flash_attn_op op = ggml_webgpu_flash_attn_prepare(ctx, Q, K, V, mask, sinks, dst);
@@ -220,7 +223,7 @@
      if (ggml_webgpu_flash_attn_use_vec_path(ctx->global_ctx, Q, K, V)) {
          return ggml_webgpu_flash_attn_vec(ctx, Q, K, V, mask, sinks, dst, std::move(op));
      }
-@@ -3638,7 +3737,7 @@
+@@ -3638,7 +3740,7 @@
      wgpu::WaitStatus status =
          event_ctx->global_ctx->instance.WaitAny(event_ctx->future, WEBGPU_RUNTIME_WAIT_TIMEOUT_NS);
      if (status == wgpu::WaitStatus::TimedOut) {
@@ -229,11 +232,17 @@
      }
      event_ctx->recorded = false;
  }
-@@ -4143,11 +4242,20 @@
+@@ -4143,11 +4245,26 @@
      ctx->webgpu_global_ctx->command_submit_batch_size = ggml_backend_webgpu_get_command_submit_batch_size();
      ctx->webgpu_global_ctx->max_inflight_batches      = ggml_backend_webgpu_get_max_inflight_batches();
      ctx->webgpu_global_ctx->vendor                    = info.vendor;
 +    ggml_webgpu_shader_lib::mul_mat_mobile_columns_for(ctx->webgpu_global_ctx->vendor);
++    GGML_LOG_INFO("ggml_webgpu: adapter of \"%s\": %u rows by %u columns a thread, attention %s, 8-bit multiply %s, f16 sums %s\n",
++                  ctx->webgpu_global_ctx->vendor.c_str(), ggml_webgpu_shader_lib::mul_mat_mobile_rows(),
++                  ggml_webgpu_shader_lib::mul_mat_mobile_columns(),
++                  ggml_webgpu_shader_lib::mobile_attention_unrolled ? "written out" : "as loops",
++                  ggml_webgpu_shader_lib::mobile_dot ? "where possible" : "off",
++                  ggml_webgpu_shader_lib::mobile_half ? "on" : "off");
 +    // ivrit-app: GGML_WEBGPU_DISABLE_SUBGROUPS, GGML_WEBGPU_DISABLE_SUBGROUP_MATRIX and
 +    // GGML_WEBGPU_DISABLE_DOT_PRODUCT leave those features unused, and GGML_WEBGPU_KEEP_ROBUSTNESS
 +    // Dawn's bounds checks on, for a driver that loses the device with them (Adreno's).
@@ -252,7 +261,7 @@
  
      bool valid_subgroup_matrix_config = false;
  #ifndef __EMSCRIPTEN__
-@@ -4155,7 +4263,8 @@
+@@ -4155,7 +4272,8 @@
      // NVIDIA GPUs typically report square configs (e.g. 16x16x16),
      // while Intel Xe2 GPUs report non-square configs (e.g. 8x16x16).
      // The shaders are already parameterized to handle any M/N/K dimensions.
@@ -262,7 +271,7 @@
          for (size_t i = 0; i < subgroup_matrix_configs.configCount; i++) {
              const wgpu::SubgroupMatrixConfig config = subgroup_matrix_configs.configs[i];
              if (config.componentType == wgpu::SubgroupMatrixComponentType::F16 &&
-@@ -4206,24 +4315,28 @@
+@@ -4206,24 +4324,28 @@
              GGML_UNUSED(device);
              GGML_LOG_ERROR("ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason),
                             std::string(message).c_str());
@@ -296,7 +305,7 @@
      deviceTogglesDesc.disabledToggles     = deviceDisabledToggles;
      deviceTogglesDesc.disabledToggleCount = 1;
  
-@@ -4254,6 +4367,13 @@
+@@ -4254,6 +4376,13 @@
          "device_desc: %s\n",
          info.vendorID, std::string(info.vendor).c_str(), std::string(info.architecture).c_str(), info.deviceID,
          std::string(info.device).c_str(), std::string(info.description).c_str());
@@ -310,7 +319,7 @@
  }
  
  static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
-@@ -4548,6 +4668,9 @@
+@@ -4548,6 +4677,9 @@
                      supports_op = false;
                      break;
                  }
@@ -322,7 +331,7 @@
  
 --- a/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
 +++ b/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
-@@ -2324,6 +2324,112 @@
+@@ -2324,6 +2324,138 @@
          return mul_mat_fast_pipelines[key];
      }
  
@@ -330,8 +339,8 @@
 +    std::unordered_map<int, webgpu_pipeline> mul_mat_mobile_pipelines;
 +
 +    // Each thread's columns: 8 (64 a workgroup), or 4 (32: fewer registers a thread), as
-+    // the GPU wants them (mul_mat_mobile_columns_for: Intel's 4, measured on an Iris Xe;
-+    // Adreno's 8, on a Galaxy S25), or GGML_WEBGPU_MOBILE_COLUMNS.
++    // the GPU wants them (mul_mat_mobile_columns_for: Intel's and Mali's 4, measured on an
++    // Iris Xe and a Pixel 8a; Adreno's 8, on a Galaxy S25), or GGML_WEBGPU_MOBILE_COLUMNS.
 +    static inline uint32_t mobile_columns = 8;
 +
 +    static uint32_t mul_mat_mobile_columns() {
@@ -342,17 +351,38 @@
 +        return mobile_columns;
 +    }
 +
-+    // And the flash attention: written out (Intel's GPUs: 3-4 times faster), or as loops
-+    // (others: Adreno's compiler lost the device on the written-out one).
-+    static inline bool mobile_attention_unrolled = false;
-+    // And the 8-bit multiply: Intel's GPUs only (10-25% faster there; 2.7 times slower on an Adreno 830).
-+    static inline bool mobile_dot = false;
++    // Each thread's rows: 8, or 4 with 4 columns (a 32 x 32 tile; GGML_WEBGPU_MOBILE_ROWS=4).
++    static uint32_t mul_mat_mobile_rows() {
++        const char * v = getenv("GGML_WEBGPU_MOBILE_ROWS");
++        return v && atoi(v) == 4 ? 4u : 8u;
++    }
 +
++    // And the flash attention: written out (Intel's GPUs: 3-4 times faster; ARM's Mali: 10
++    // times, on a Pixel 8a's G715), or as loops (others: Adreno's compiler lost the device
++    // on the written-out one).
++    static inline bool mobile_attention_unrolled = false;
++    // And the 8-bit multiply: Intel's GPUs only (10-25% faster there; 2.7 times slower on an
++    // Adreno 830, twice on a Mali-G715).
++    static inline bool mobile_dot = false;
++    // And the f32 multiply's sums: a block of 32 at a time in f16, then in f32 (with 4 columns
++    // only): 8-20% faster on a Pixel 8a's Mali, as accurate against the CPU, but its greedy
++    // benchmark then re-decoded far more (hot, too): off until that is understood.
++    static inline bool mobile_half = false;
++
++    // GGML_WEBGPU_MOBILE_INT8, GGML_WEBGPU_MOBILE_UNROLLED and GGML_WEBGPU_MOBILE_HALF ("1" or
++    // "0"): the choice made otherwise, for timing them on a GPU (GGML_WEBGPU_MOBILE_COLUMNS:
++    // the columns; GGML_WEBGPU_MOBILE_ROWS=4: 4 by 4).
 +    static void mul_mat_mobile_columns_for(const std::string & vendor) {
 +        const bool intel = vendor.find("intel") != std::string::npos;
-+        mobile_columns            = intel ? 4u : 8u;
-+        mobile_attention_unrolled = intel;
-+        mobile_dot                = intel;
++        const bool mali  = vendor == "arm";
++        auto chosen = [](const char * name, bool otherwise) {
++            const char * v = getenv(name);
++            return v && *v ? v[0] == '1' : otherwise;
++        };
++        mobile_columns            = intel || mali ? 4u : 8u;
++        mobile_attention_unrolled = chosen("GGML_WEBGPU_MOBILE_UNROLLED", intel || mali);
++        mobile_dot                = chosen("GGML_WEBGPU_MOBILE_INT8", intel);
++        mobile_half               = chosen("GGML_WEBGPU_MOBILE_HALF", false);
 +    }
 +
 +    webgpu_pipeline get_mul_mat_mobile_pipeline(ggml_type src0_type) {
@@ -365,8 +395,13 @@
 +        if (f16) {
 +            defines.push_back("SRC0_F16");
 +        }
-+        if (mul_mat_mobile_columns() == 4) {
++        if (mul_mat_mobile_columns() == 4 || mul_mat_mobile_rows() == 4) {
 +            defines.push_back("TN4");
++        }
++        if (mul_mat_mobile_rows() == 4) {
++            defines.push_back("TM4");
++        } else if (mul_mat_mobile_columns() == 4 && mobile_half) {
++            defines.push_back("HALF");
 +        }
 +        auto processed = preprocessor.preprocess(wgsl_mul_mat_mobile, defines);
 +        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, f16 ? "mul_mat_mobile_f16_f32" : "mul_mat_mobile_q8_0_f32");
@@ -1057,12 +1092,15 @@
 +}
 --- a/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_mobile.wgsl
 +++ b/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_mobile.wgsl
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,288 @@
 +enable f16;
 +
 +// q8_0 (or f16, SRC0_F16) x f32 matrix multiply for phone GPUs, without subgroups:
 +// a 64 x BN tile of the output per workgroup of 64 threads, 8 rows by 8 columns a
-+// thread (BN 64), or by 4 (TN4, BN 32: fewer registers, as Intel's GPUs want). Both
++// thread (BN 64), or by 4 (TN4, BN 32: fewer registers, as Intel's GPUs want); or a
++// 32 x 32 tile, 4 rows by 4 columns a thread (TM4, with TN4: fewer still). HALF
++// (with TN4): each block of 32 k multiplied and summed in f16, then added in f32
++// (Mali does f16 at twice the rate). Both
 +// tiles sit in shared memory as vec4<f16> along M (src0) and N (src1), k by k, so
 +// each step reads a few vectors and does vec4 multiply-adds in f32. The tiles load so
 +// that neighbouring threads read neighbouring memory (a row's block a thread; one k
@@ -1099,7 +1137,11 @@
 +@group(0) @binding(3) var<uniform> params: MulMatParams;
 +
 +const WG_M = 8u;
++#ifdef TM4
++const BM = 32u;
++#else
 +const BM = 64u;
++#endif
 +#ifdef TN4
 +const BN = 32u;
 +#else
@@ -1173,6 +1215,14 @@
 +        f32_at(at + 3u * params.stride_11, in_k && n + 3u < params.n)));
 +}
 +
++// One column's four outputs (rows m0..m0+3), those inside the matrix.
++fn store4(at: u32, m0: u32, lo: vec4<f32>) {
++    if (m0 < params.m) { dst[at] = lo.x; }
++    if (m0 + 1u < params.m) { dst[at + 1u] = lo.y; }
++    if (m0 + 2u < params.m) { dst[at + 2u] = lo.z; }
++    if (m0 + 3u < params.m) { dst[at + 3u] = lo.w; }
++}
++
 +// One column's eight outputs (rows m0..m0+7), those inside the matrix.
 +fn store8(at: u32, m0: u32, lo: vec4<f32>, hi: vec4<f32>) {
 +    if (m0 + 8u <= params.m) {
@@ -1220,7 +1270,7 @@
 +    let src0_base = params.offset_src0 + (dst3_idx / params.broadcast3) * params.stride_03 + (dst2_idx / params.broadcast2) * params.stride_02;
 +    let src1_base = params.offset_src1 + dst3_idx * params.stride_13 + dst2_idx * params.stride_12;
 +
-+    // Computing: thread t's 8 rows by 8 (or 4) columns.
++    // Computing: thread t's 8 (or 4) rows by 8 (or 4) columns.
 +    let lm = t % WG_M;
 +    let ln = t / WG_M;
 +    let kk = t % BK;
@@ -1239,26 +1289,60 @@
 +
 +    for (var k_outer = 0u; k_outer < params.k; k_outer += BK) {
 +        let kb = k_outer / BK;
++#ifdef TM4
++        if (t < BM) { load_row(src0_base, offset_m + t, t, kb); }
++#else
 +        load_row(src0_base, offset_m + t, t, kb);
++#endif
 +        // BN / 4 groups of four columns at BK k: two runs of 32 threads take turns.
 +        for (var group = t / BK; group < BN4; group += 2u) {
 +            load_cols(src1_base, offset_n + 4u * group, k_outer + kk, group, kk);
 +        }
 +        workgroupBarrier();
 +
++#ifdef HALF
++        var p0a = vec4<f16>(0.0h); var p0b = vec4<f16>(0.0h);
++        var p1a = vec4<f16>(0.0h); var p1b = vec4<f16>(0.0h);
++        var p2a = vec4<f16>(0.0h); var p2b = vec4<f16>(0.0h);
++        var p3a = vec4<f16>(0.0h); var p3b = vec4<f16>(0.0h);
 +        for (var k = 0u; k < BK; k++) {
++            let a0 = sa[k * BM4 + 2u * lm];
++            let a1 = sa[k * BM4 + 2u * lm + 1u];
++            let b0 = sb[k * BN4 + ln];
++            p0a = fma(a0, vec4<f16>(b0.x), p0a); p0b = fma(a1, vec4<f16>(b0.x), p0b);
++            p1a = fma(a0, vec4<f16>(b0.y), p1a); p1b = fma(a1, vec4<f16>(b0.y), p1b);
++            p2a = fma(a0, vec4<f16>(b0.z), p2a); p2b = fma(a1, vec4<f16>(b0.z), p2b);
++            p3a = fma(a0, vec4<f16>(b0.w), p3a); p3b = fma(a1, vec4<f16>(b0.w), p3b);
++        }
++        c0a += vec4<f32>(p0a); c0b += vec4<f32>(p0b);
++        c1a += vec4<f32>(p1a); c1b += vec4<f32>(p1b);
++        c2a += vec4<f32>(p2a); c2b += vec4<f32>(p2b);
++        c3a += vec4<f32>(p3a); c3b += vec4<f32>(p3b);
++#else
++        for (var k = 0u; k < BK; k++) {
++#ifdef TM4
++            let a0 = vec4<f32>(sa[k * BM4 + lm]);
++#else
 +            let a0 = vec4<f32>(sa[k * BM4 + 2u * lm]);
 +            let a1 = vec4<f32>(sa[k * BM4 + 2u * lm + 1u]);
++#endif
 +#ifdef TN4
 +            let b0 = vec4<f32>(sb[k * BN4 + ln]);
 +#else
 +            let b0 = vec4<f32>(sb[k * BN4 + 2u * ln]);
 +            let b1 = vec4<f32>(sb[k * BN4 + 2u * ln + 1u]);
 +#endif
++#ifdef TM4
++            c0a = fma(a0, vec4<f32>(b0.x), c0a);
++            c1a = fma(a0, vec4<f32>(b0.y), c1a);
++            c2a = fma(a0, vec4<f32>(b0.z), c2a);
++            c3a = fma(a0, vec4<f32>(b0.w), c3a);
++#else
 +            c0a = fma(a0, vec4<f32>(b0.x), c0a); c0b = fma(a1, vec4<f32>(b0.x), c0b);
 +            c1a = fma(a0, vec4<f32>(b0.y), c1a); c1b = fma(a1, vec4<f32>(b0.y), c1b);
 +            c2a = fma(a0, vec4<f32>(b0.z), c2a); c2b = fma(a1, vec4<f32>(b0.z), c2b);
 +            c3a = fma(a0, vec4<f32>(b0.w), c3a); c3b = fma(a1, vec4<f32>(b0.w), c3b);
++#endif
 +#ifndef TN4
 +            c4a = fma(a0, vec4<f32>(b1.x), c4a); c4b = fma(a1, vec4<f32>(b1.x), c4b);
 +            c5a = fma(a0, vec4<f32>(b1.y), c5a); c5b = fma(a1, vec4<f32>(b1.y), c5b);
@@ -1266,10 +1350,19 @@
 +            c7a = fma(a0, vec4<f32>(b1.w), c7a); c7b = fma(a1, vec4<f32>(b1.w), c7b);
 +#endif
 +        }
++#endif
 +        workgroupBarrier();
 +    }
 +
 +    let dst_base = params.offset_dst + dst3_idx * (params.m * params.n * params.bs02 * params.broadcast2) + dst2_idx * (params.m * params.n);
++#ifdef TM4
++    let m0 = offset_m + 4u * lm;
++    let n0 = offset_n + 4u * ln;
++    if (n0 < params.n) { store4(dst_base + n0 * params.m + m0, m0, c0a); }
++    if (n0 + 1u < params.n) { store4(dst_base + (n0 + 1u) * params.m + m0, m0, c1a); }
++    if (n0 + 2u < params.n) { store4(dst_base + (n0 + 2u) * params.m + m0, m0, c2a); }
++    if (n0 + 3u < params.n) { store4(dst_base + (n0 + 3u) * params.m + m0, m0, c3a); }
++#else
 +    let m0 = offset_m + 8u * lm;
 +#ifdef TN4
 +    let n0 = offset_n + 4u * ln;
@@ -1285,6 +1378,7 @@
 +    if (n0 + 5u < params.n) { store8(dst_base + (n0 + 5u) * params.m + m0, m0, c5a, c5b); }
 +    if (n0 + 6u < params.n) { store8(dst_base + (n0 + 6u) * params.m + m0, m0, c6a, c6b); }
 +    if (n0 + 7u < params.n) { store8(dst_base + (n0 + 7u) * params.m + m0, m0, c7a, c7b); }
++#endif
 +#endif
 +}
 --- a/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_vec_mobile.wgsl

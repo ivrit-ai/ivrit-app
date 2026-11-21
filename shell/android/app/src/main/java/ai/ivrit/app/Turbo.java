@@ -48,13 +48,16 @@ final class Turbo {
      * Beam search (5), as the server: on the GPU (OpenCL, Galaxy S25) it took about
      * as long as greedy decoding (0.6-0.7 of the recording's length either way); on
      * the CPU three times as long as greedy (3.0 against about 1.1), so the CPU
-     * decodes greedily, which made 3 more mistakes in 544 words.
+     * decodes greedily, which made 3 more mistakes in 544 words. The user may ask
+     * for speed (Store.FAST): greedy on the GPU too, where the decoder dominates (a
+     * Pixel 8a's Mali, the decoder on its CPU: 206 s against 392 for the benchmark,
+     * 3 words of 536 different).
      */
     static final int GPU_BEAMS = 5;
     static final int CPU_BEAMS = 1;
 
-    static int beams(boolean gpu) {
-        return gpu ? GPU_BEAMS : CPU_BEAMS;
+    static int beams(Context context, boolean gpu) {
+        return gpu && !Store.FAST.equals(Store.decoding(context)) ? GPU_BEAMS : CPU_BEAMS;
     }
     /**
      * Heard ten minutes at a time, with a checkpoint after each. Each cut hears a

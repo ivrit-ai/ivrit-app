@@ -28,6 +28,7 @@ int guarded_piece(struct whisper_context *ctx, struct whisper_full_params params
                   bool last, tr_state *state, tr_piece *out, char *error, size_t size);
 size_t guarded_gpus(const char **names, const char **descriptions, size_t max, char *error, size_t size);
 bool guarded_probe(int index, char *error, size_t size);
+double guarded_bench(int what, int k, int m, int n, int reps, double *diff, char *error, size_t size);
 
 static void throw_state(JNIEnv *env, const char *message) {
     (*env)->ThrowNew(env, (*env)->FindClass(env, "java/lang/IllegalStateException"), message);
@@ -116,6 +117,22 @@ JNIEXPORT jobjectArray JNICALL Java_ai_ivrit_app_Whisper_gpus(JNIEnv *env, jclas
     return out;
 }
 
+// One GPU program timed against the CPU (shell/native/gpubench): "<ms> <error>". Throws where the GPU failed.
+JNIEXPORT jstring JNICALL Java_ai_ivrit_app_Whisper_bench(JNIEnv *env, jclass cls, jint what, jint k, jint m, jint n, jint reps) {
+    (void) cls;
+    ggml_log_set(on_log, NULL);
+    char error[512] = "";
+    double diff = 0;
+    double ms = guarded_bench(what, k, m, n, reps, &diff, error, sizeof error);
+    if (ms < 0) {
+        throw_state(env, error[0] ? error : "failed");
+        return NULL;
+    }
+    char line[64];
+    snprintf(line, sizeof line, "%.3f %.3g", ms, diff);
+    return (*env)->NewStringUTF(env, line);
+}
+
 // GPU device `index` started and let go: its description. Throws when it would not start.
 JNIEXPORT jstring JNICALL Java_ai_ivrit_app_Whisper_probe(JNIEnv *env, jclass cls, jint index) {
     (void) cls;
@@ -167,6 +184,7 @@ JNIEXPORT void JNICALL Java_ai_ivrit_app_Whisper_free(JNIEnv *env, jclass cls, j
     (void) cls;
     turbo *t = (turbo *) (intptr_t) handle;
     if (!t) return;
+    whisper_print_timings(t->ctx); // to the log (logTo): where the run's time went
     whisper_free(t->ctx);
     free(t);
 }

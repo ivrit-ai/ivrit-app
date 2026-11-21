@@ -143,9 +143,11 @@ public class IvritNativePlugin extends Plugin {
         }
         String model = call.getString("model");
         String processor = call.getString("processor");
+        String decoding = call.getString("decoding");
         if ((model != null && !java.util.Arrays.asList(Turbo.VARIANTS).contains(model))
-            || (processor != null && !java.util.Arrays.asList(TurboGpu.PROCESSORS).contains(processor))) {
-            call.reject("unknown model or processor", "bad_request");
+            || (processor != null && !java.util.Arrays.asList(TurboGpu.PROCESSORS).contains(processor))
+            || (decoding != null && !Store.ACCURATE.equals(decoding) && !Store.FAST.equals(decoding))) {
+            call.reject("unknown model, processor or decoding", "bad_request");
             return;
         }
         if (model != null) {
@@ -156,12 +158,14 @@ public class IvritNativePlugin extends Plugin {
             if (TurboGpu.TRIAL.equals(processor) && !TurboGpu.TRIAL.equals(Store.turboProcessor(context))) TurboGpu.trialReset(context);
             Store.setTurboProcessor(context, processor);
         }
+        if (decoding != null) Store.setDecoding(context, decoding);
         if (model != null || processor != null) PrepareWorker.schedule(context);
         String chosen = Store.onDeviceModel(context);
         JSObject result = new JSObject()
             .put("model", chosen)
             .put("ready", Turbo.ready(context, chosen))
-            .put("processor", Store.turboProcessor(context));
+            .put("processor", Store.turboProcessor(context))
+            .put("decoding", Store.decoding(context));
         if (TurboGpu.TRIAL.equals(Store.turboProcessor(context))) result.put("trial", TurboGpu.trialState(context));
         TurboGpu.Verdict verdict = TurboGpu.load(context);
         if (verdict != null && verdict.state != null && verdict.key.endsWith(" " + chosen)) {
@@ -586,6 +590,9 @@ public class IvritNativePlugin extends Plugin {
         call.resolve(new JSObject().put("key", key));
     }
 
+    /** For the test on phones of other makes (androidTest TrialOnPhones): each benchmark event, as the page gets it. */
+    static volatile java.util.function.Consumer<JSObject> watcher;
+
     /** From LocalTranscribeWorker: a benchmark's phase (as localTranscription's), and its result once done. */
     static void benchmark(String key, String phase, double fraction, org.json.JSONObject result, String error) {
         JSObject data = new JSObject().put("key", key).put("phase", phase).put("fraction", fraction);
@@ -599,6 +606,8 @@ public class IvritNativePlugin extends Plugin {
         }
         IvritNativePlugin plugin = current;
         if (plugin != null) plugin.notifyListeners("benchmark", data, true);
+        java.util.function.Consumer<JSObject> w = watcher;
+        if (w != null) w.accept(data);
     }
 
     /**

@@ -333,6 +333,26 @@ Open to comment; each with what it rests on.
     columns. A minute of Hebrew on the S25, beam 5, the decoder on the CPU: WebGPU
     20.8 and 24.8 s against OpenCL's 20.7 and 22.9 s, the same 126 words. A trial
     that failed is tried again when the app is updated.
+23. **Phones we don't have, on Firebase Test Lab; Mali; accuracy or speed**
+    (2026-11-21). `scripts/test-lab.sh` runs the benchmark as a user would
+    (androidTest TrialOnPhones, kind lab-phones) or only the encoder's GPU programs,
+    each version of them (ProgramsOnPhones, kind lab-programs), on Test Lab's
+    phones: one (the Pixel 8a) unless others are named, capped at 20 minutes ($5 an
+    hour). Ten phones, one of each GPU in Samsungs and Pixels, the trial at 271:
+    Galaxy S24 (Exynos, Xclipse 940) 136 s, S25 143 s, A56 (Xclipse 540) 302 s,
+    Pixel 10 (PowerVR) 751 s, Pixel 8a (Mali-G715) 679 s; the Pixel 6, 7 and A54
+    (Mali) timed out; the S23 (Adreno 740) stalled; the A16 cannot run Turbo. On the
+    8a the attention as loops took 375 ms where the written-out one took 39: so
+    Mali (vendor "arm") takes the written-out attention, 4 columns a thread (8 x 4:
+    a quarter faster than 8 x 8; 4 x 4 no faster) and the f32 multiply. The 8a then:
+    392 s, of which the encoder 231 (17 windows at 13.6 s; the S25's: 3.4 s) and the
+    decoder on its CPU 170. Greedy there: 206 s (fewer windows too), 3 words of 536
+    different. So Settings offers accuracy (beam 5 where the GPU runs, the default)
+    or speed (greedy everywhere: `Store.decoding`, onDeviceModel's `decoding`). The
+    multiply's sums in f16 a block at a time (GGML_WEBGPU_MOBILE_HALF) were 8-20%
+    faster on the 8a and as accurate against the CPU, but greedy with them took 372
+    s, re-decoding far more (4624 batched steps against 299; the phone hot from the
+    run before): off until a cool run tells the two apart.
 
 ## Verified, and not yet
 

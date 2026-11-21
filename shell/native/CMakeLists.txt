@@ -7,8 +7,9 @@ add_library(ivritnative STATIC
     stablets/stablets.c
     speakers/features.c
     speakers/cluster.c
-    speakers/ecapa.cpp)
-target_include_directories(ivritnative PUBLIC transcript whisperwords stablets speakers)
+    speakers/ecapa.cpp
+    gpubench/gpubench.cpp)
+target_include_directories(ivritnative PUBLIC transcript whisperwords stablets speakers gpubench)
 # zlib: faster-whisper's compression ratio, which decides its fallback (the system's).
 find_package(ZLIB REQUIRED)
 target_link_libraries(ivritnative PUBLIC whisper ggml ZLIB::ZLIB)

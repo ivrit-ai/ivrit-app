@@ -731,7 +731,7 @@ final class TurboGpu {
         try {
             if (tuned[0] <= 0) tuned[0] = Whisper.tuneDecoder(handle, sound, sound.length, Turbo.threads());
             long started = System.currentTimeMillis();
-            Object[] heard = Whisper.transcribe(handle, sound, Turbo.LANGUAGE, Turbo.threads(), tuned[0], Turbo.beams(device >= 0),
+            Object[] heard = Whisper.transcribe(handle, sound, Turbo.LANGUAGE, Turbo.threads(), tuned[0], device >= 0 ? Turbo.GPU_BEAMS : Turbo.CPU_BEAMS,
                 progress, 0, true, new double[6], Whisper.prompt());
             took[0] = System.currentTimeMillis() - started;
             if (heard == null) throw new IllegalStateException("stopped");

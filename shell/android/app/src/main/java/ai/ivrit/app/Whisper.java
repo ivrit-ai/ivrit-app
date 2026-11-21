@@ -35,6 +35,14 @@ final class Whisper {
     static native String probe(int index);
 
     /**
+     * One GPU program on WebGPU at the model's sizes, against the CPU (shell/native/gpubench;
+     * the test on phones we don't have): "<milliseconds a run> <largest difference over the
+     * largest value>". what 0: q8_0 x f32, m rows of k by n columns; 1: flash attention,
+     * head size 64, n queries and keys, m heads. Throws IllegalStateException where it failed.
+     */
+    static native String bench(int what, int k, int m, int n, int reps);
+
+    /**
      * A model file loaded on GPU device `device` (of gpus(); -1: the CPU), with flash
      * attention or not, and on a GPU with the decoder on the CPU all the same or not
      * (decoderCpu: a phone's GPU encodes faster, its CPU may take the decoder's small

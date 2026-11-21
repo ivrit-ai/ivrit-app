@@ -550,7 +550,8 @@ public class LocalTranscribeWorker extends Worker {
             .put("threads", threads)
             .put("cores", Runtime.getRuntime().availableProcessors())
             .put("memory", Turbo.memory(context))
-            .put("beams", Turbo.beams(gpu))
+            .put("beams", Turbo.beams(context, gpu))
+            .put("decoding", Store.decoding(context))
             .put("decodeThreads", decodeThreads[0])
             .put("decoderCpu", gpu && verdict.decoderCpu)
             .put("speakers", speakers != 0)
@@ -618,7 +619,7 @@ public class LocalTranscribeWorker extends Worker {
         // On the GPU: a piece taking over twice its length (plus two minutes) has hung.
         try (TurboGpu.Watchdog ignored = watch == null ? null
                 : new TurboGpu.Watchdog(context, variant, watch, "run", (long) (2000 * seconds) + 120_000)) {
-            heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, threads, decodeThreads[0], Turbo.beams(onGpu), percent -> {
+            heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, threads, decodeThreads[0], Turbo.beams(context, onGpu), percent -> {
                 if (duration <= 0) return;
                 double fraction = Math.min(1, (start + seconds * percent / 100.0) / duration);
                 double spent = (System.currentTimeMillis() - started) / 1000.0;

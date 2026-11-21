@@ -105,6 +105,18 @@ final class Store {
         return java.util.Arrays.asList(Turbo.VARIANTS).contains(model) ? model : Turbo.VARIANTS[0];
     }
 
+    /** How Turbo decodes: ACCURATE (beam search where the GPU runs; Turbo.beams) or FAST (greedy). */
+    static final String ACCURATE = "accurate";
+    static final String FAST = "fast";
+
+    static void setDecoding(Context context, String decoding) {
+        prefs(context).edit().putString("turbo_decoding", decoding).apply();
+    }
+
+    static String decoding(Context context) {
+        return FAST.equals(prefs(context).getString("turbo_decoding", ACCURATE)) ? FAST : ACCURATE;
+    }
+
     /** Where the Turbo model runs: TurboGpu.AUTO, CPU or GPU. */
     static void setTurboProcessor(Context context, String processor) {
         prefs(context).edit().putString("turbo_processor", processor).apply();

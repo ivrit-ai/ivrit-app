@@ -7,6 +7,7 @@
 #include <exception>
 
 #include "ggml-backend.h"
+#include "gpubench.h"
 #include "transcript.h"
 #include "whisper.h"
 
@@ -94,4 +95,16 @@ extern "C" bool guarded_probe(int index, char *error, size_t size) {
         say(error, size, "unknown exception");
     }
     return false;
+}
+
+// gb_time's milliseconds (and its error), or -1 when it threw.
+extern "C" double guarded_bench(int what, int k, int m, int n, int reps, double *diff, char *error, size_t size) {
+    try {
+        return gb_time(what, k, m, n, reps, diff);
+    } catch (const std::exception &e) {
+        say(error, size, e.what());
+    } catch (...) {
+        say(error, size, "unknown exception");
+    }
+    return -1;
 }
