@@ -122,7 +122,7 @@
  
      // use MMVQ path for mat-vec
      bool use_mmvq = ggml_webgpu_can_use_mmvq(src0, src1, ctx->global_ctx->capabilities.supports_dot_product,
-@@ -1648,11 +1691,33 @@
+@@ -1648,11 +1691,34 @@
      std::vector<webgpu_dispatch_desc> dispatches;
      const bool src_overlap = ggml_webgpu_tensor_binding_overlap(ctx->global_ctx, src0, src1) && !use_mmvq;
  
@@ -138,9 +138,10 @@
 +                                (src0->type == GGML_TYPE_Q8_0 || (src0->type == GGML_TYPE_F16 && src0->ne[0] % 4 == 0)) &&
 +                                src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 +
-+    // The 8-bit version, for q8_0, where the GPU has the dot product: 10-25% faster than f32 on an Iris
-+    // Xe, and the CPU's own arithmetic (it makes the activations 8-bit too). GGML_WEBGPU_MOBILE_NO_INT8: f32.
-+    const bool use_mobile_dot = use_mobile && src0->type == GGML_TYPE_Q8_0 &&
++    // The 8-bit version, for q8_0, where the GPU has the dot product and is Intel's: 10-25% faster than
++    // f32 on an Iris Xe, and the CPU's own arithmetic (it makes the activations 8-bit too); 2.7 times
++    // slower on an Adreno 830. GGML_WEBGPU_MOBILE_NO_INT8: f32 on Intel too.
++    const bool use_mobile_dot = use_mobile && src0->type == GGML_TYPE_Q8_0 && ggml_webgpu_shader_lib::mobile_dot &&
 +                                ctx->global_ctx->capabilities.supports_dot_product && !getenv("GGML_WEBGPU_MOBILE_NO_INT8");
 +
 +    if (use_mobile_vec) {
@@ -157,7 +158,7 @@
      } else {
          pipeline = ctx->shader_lib->get_mul_mat_fast_pipeline(shader_lib_ctx, src_overlap);
      }
-@@ -1711,13 +1776,23 @@
+@@ -1711,13 +1777,23 @@
      uint32_t       wg_y           = 1;
      const uint32_t max_wg_per_dim = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
  
@@ -182,7 +183,7 @@
      } else {
          auto * decisions = static_cast<ggml_webgpu_mul_mat_shader_decisions *>(pipeline.context.get());
  
-@@ -1970,6 +2045,24 @@
+@@ -1970,6 +2046,24 @@
             kv_vec_head_dims_aligned && k_float_vec4_aligned && v_float_vec4_aligned;
  }
  
@@ -207,7 +208,7 @@
  static ggml_webgpu_flash_attn_op ggml_webgpu_flash_attn_prepare(webgpu_context & ctx,
                                                                  ggml_tensor *    Q,
                                                                  ggml_tensor *    K,
-@@ -2275,6 +2368,11 @@
+@@ -2275,6 +2369,11 @@
                                                  ggml_tensor *    sinks,
                                                  ggml_tensor *    dst) {
      ggml_webgpu_flash_attn_op op = ggml_webgpu_flash_attn_prepare(ctx, Q, K, V, mask, sinks, dst);
@@ -219,7 +220,7 @@
      if (ggml_webgpu_flash_attn_use_vec_path(ctx->global_ctx, Q, K, V)) {
          return ggml_webgpu_flash_attn_vec(ctx, Q, K, V, mask, sinks, dst, std::move(op));
      }
-@@ -3638,7 +3736,7 @@
+@@ -3638,7 +3737,7 @@
      wgpu::WaitStatus status =
          event_ctx->global_ctx->instance.WaitAny(event_ctx->future, WEBGPU_RUNTIME_WAIT_TIMEOUT_NS);
      if (status == wgpu::WaitStatus::TimedOut) {
@@ -228,7 +229,7 @@
      }
      event_ctx->recorded = false;
  }
-@@ -4143,11 +4241,20 @@
+@@ -4143,11 +4242,20 @@
      ctx->webgpu_global_ctx->command_submit_batch_size = ggml_backend_webgpu_get_command_submit_batch_size();
      ctx->webgpu_global_ctx->max_inflight_batches      = ggml_backend_webgpu_get_max_inflight_batches();
      ctx->webgpu_global_ctx->vendor                    = info.vendor;
@@ -251,7 +252,7 @@
  
      bool valid_subgroup_matrix_config = false;
  #ifndef __EMSCRIPTEN__
-@@ -4155,7 +4262,8 @@
+@@ -4155,7 +4263,8 @@
      // NVIDIA GPUs typically report square configs (e.g. 16x16x16),
      // while Intel Xe2 GPUs report non-square configs (e.g. 8x16x16).
      // The shaders are already parameterized to handle any M/N/K dimensions.
@@ -261,7 +262,7 @@
          for (size_t i = 0; i < subgroup_matrix_configs.configCount; i++) {
              const wgpu::SubgroupMatrixConfig config = subgroup_matrix_configs.configs[i];
              if (config.componentType == wgpu::SubgroupMatrixComponentType::F16 &&
-@@ -4206,24 +4314,28 @@
+@@ -4206,24 +4315,28 @@
              GGML_UNUSED(device);
              GGML_LOG_ERROR("ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason),
                             std::string(message).c_str());
@@ -295,7 +296,7 @@
      deviceTogglesDesc.disabledToggles     = deviceDisabledToggles;
      deviceTogglesDesc.disabledToggleCount = 1;
  
-@@ -4254,6 +4366,13 @@
+@@ -4254,6 +4367,13 @@
          "device_desc: %s\n",
          info.vendorID, std::string(info.vendor).c_str(), std::string(info.architecture).c_str(), info.deviceID,
          std::string(info.device).c_str(), std::string(info.description).c_str());
@@ -309,7 +310,7 @@
  }
  
  static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
-@@ -4548,6 +4667,9 @@
+@@ -4548,6 +4668,9 @@
                      supports_op = false;
                      break;
                  }
@@ -321,7 +322,7 @@
  
 --- a/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
 +++ b/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
-@@ -2324,6 +2324,102 @@
+@@ -2324,6 +2324,112 @@
          return mul_mat_fast_pipelines[key];
      }
  
@@ -341,8 +342,17 @@
 +        return mobile_columns;
 +    }
 +
++    // And the flash attention: written out (Intel's GPUs: 3-4 times faster), or as loops
++    // (others: Adreno's compiler lost the device on the written-out one).
++    static inline bool mobile_attention_unrolled = false;
++    // And the 8-bit multiply: Intel's GPUs only (10-25% faster there; 2.7 times slower on an Adreno 830).
++    static inline bool mobile_dot = false;
++
 +    static void mul_mat_mobile_columns_for(const std::string & vendor) {
-+        mobile_columns = vendor.find("intel") != std::string::npos ? 4u : 8u;
++        const bool intel = vendor.find("intel") != std::string::npos;
++        mobile_columns            = intel ? 4u : 8u;
++        mobile_attention_unrolled = intel;
++        mobile_dot                = intel;
 +    }
 +
 +    webgpu_pipeline get_mul_mat_mobile_pipeline(ggml_type src0_type) {
@@ -415,7 +425,8 @@
 +        if (kv_overlap) {
 +            defines.push_back("KV_OVERLAP");
 +        }
-+        auto processed = preprocessor.preprocess(wgsl_flash_attn_mobile, defines);
++        auto processed = preprocessor.preprocess(
++            mobile_attention_unrolled ? wgsl_flash_attn_mobile : wgsl_flash_attn_mobile_loop, defines);
 +        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, kv_overlap ? "flash_attn_mobile_kv_overlap" : "flash_attn_mobile");
 +        flash_attn_mobile_pipelines[(int) kv_overlap] = pipeline;
 +        return pipeline;
@@ -424,6 +435,157 @@
      webgpu_pipeline get_mul_mat_id_gather_pipeline(const ggml_webgpu_shader_lib_context & context) {
          auto it = mul_mat_id_gather_pipelines.find(1);
          if (it != mul_mat_id_gather_pipelines.end()) {
+--- a/ggml/src/ggml-webgpu/wgsl-shaders/flash_attn_mobile_loop.wgsl
++++ b/ggml/src/ggml-webgpu/wgsl-shaders/flash_attn_mobile_loop.wgsl
+@@ -0,0 +1,148 @@
++enable f16;
++
++// Flash attention for phone GPUs, without subgroups: f32 Q, f16 K and V, head size
++// 64, no mask or sinks (Whisper's encoder). One query row per thread, 64 rows per
++// workgroup; keys and values 8 at a time in shared memory, their scores first, then
++// one rescale of the running output per 8 keys (online softmax); the query held in
++// f16 (in f32, registers spilled: twelve times slower). The loops as loops: Adreno's
++// compiler lost the device on the written-out version (flash_attn_mobile.wgsl, which
++// Intel's GPUs take: 3-4 times faster there).
++
++struct Params {
++    offset_q: u32,
++    offset_k: u32,
++    offset_v: u32,
++    offset_mask: u32,
++    offset_sinks: u32,
++    offset_dst: u32,
++    n_heads: u32,
++    seq_len_q: u32,
++    seq_len_kv: u32,
++    stride_q1: u32,
++    stride_q2: u32,
++    stride_q3: u32,
++    stride_k1: u32,
++    stride_k2: u32,
++    stride_k3: u32,
++    stride_v1: u32,
++    stride_v2: u32,
++    stride_v3: u32,
++    stride_mask3: u32,
++    q_per_kv: u32,
++    scale: f32,
++    max_bias: f32,
++    logit_softcap: f32,
++    n_head_log2: f32,
++    m0: f32,
++    m1: f32,
++};
++
++@group(0) @binding(0) var<storage, read_write> Q: array<f32>;
++#ifdef KV_OVERLAP
++@group(0) @binding(1) var<storage, read_write> KV: array<f16>;
++@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
++@group(0) @binding(3) var<uniform> params: Params;
++#define K KV
++#define V KV
++#else
++@group(0) @binding(1) var<storage, read_write> K: array<f16>;
++@group(0) @binding(2) var<storage, read_write> V: array<f16>;
++@group(0) @binding(3) var<storage, read_write> dst: array<f32>;
++@group(0) @binding(4) var<uniform> params: Params;
++#endif
++
++const D = 64u;
++const D4 = 16u;
++const QT = 64u;  // query rows per workgroup, one per thread
++const KT = 8u;   // keys per step
++const NEG = -1.0e30;
++
++var<workgroup> ks: array<vec4<f16>, 128>; // [key][d / 4]
++var<workgroup> vs: array<vec4<f16>, 128>;
++
++@compute @workgroup_size(64)
++fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
++        @builtin(local_invocation_id) local_id: vec3<u32>) {
++    let t = local_id.x;
++    let wg_per_head = (params.seq_len_q + QT - 1u) / QT;
++    let wg_per_batch = wg_per_head * params.n_heads;
++    let batch = wg_id.x / wg_per_batch;
++    let in_batch = wg_id.x % wg_per_batch;
++    let head = in_batch / wg_per_head;
++    let q_row = (in_batch % wg_per_head) * QT + t;
++    let live = q_row < params.seq_len_q;
++    let kv_head = head / params.q_per_kv;
++
++    let k_base = params.offset_k + batch * params.stride_k3 + kv_head * params.stride_k2;
++    let v_base = params.offset_v + batch * params.stride_v3 + kv_head * params.stride_v2;
++
++    var q: array<vec4<f16>, 16>; // f16 to keep registers down; the math is f32
++    if (live) {
++        let at = params.offset_q + batch * params.stride_q3 + head * params.stride_q2 + q_row * params.stride_q1;
++        for (var d4 = 0u; d4 < D4; d4++) {
++            let i = at + 4u * d4;
++            q[d4] = vec4<f16>(vec4<f32>(Q[i], Q[i + 1u], Q[i + 2u], Q[i + 3u]) * params.scale);
++        }
++    }
++
++    var o: array<vec4<f32>, 16>;
++    var m = NEG;
++    var l = 0.0;
++
++    for (var kv0 = 0u; kv0 < params.seq_len_kv; kv0 += KT) {
++        for (var i = 0u; i < 2u; i++) {
++            let idx = t + 64u * i;
++            let key = kv0 + idx / D4;
++            let d = 4u * (idx % D4);
++            var kv = vec4<f16>(0.0);
++            var vv = vec4<f16>(0.0);
++            if (key < params.seq_len_kv) {
++                let ka = k_base + key * params.stride_k1 + d;
++                let va = v_base + key * params.stride_v1 + d;
++                kv = vec4<f16>(K[ka], K[ka + 1u], K[ka + 2u], K[ka + 3u]);
++                vv = vec4<f16>(V[va], V[va + 1u], V[va + 2u], V[va + 3u]);
++            }
++            ks[idx] = kv;
++            vs[idx] = vv;
++        }
++        workgroupBarrier();
++
++        var s: array<f32, 8>;
++        var tile_max = NEG;
++        for (var j = 0u; j < KT; j++) {
++            var acc = 0.0;
++            for (var d4 = 0u; d4 < D4; d4++) {
++                acc += dot(vec4<f32>(q[d4]), vec4<f32>(ks[j * D4 + d4]));
++            }
++            s[j] = select(NEG, acc, kv0 + j < params.seq_len_kv);
++            tile_max = max(tile_max, s[j]);
++        }
++        let m_new = max(m, tile_max);
++        let corr = exp(m - m_new);
++        l *= corr;
++        for (var d4 = 0u; d4 < D4; d4++) {
++            o[d4] *= corr;
++        }
++        for (var j = 0u; j < KT; j++) {
++            let p = exp(s[j] - m_new);
++            l += p;
++            for (var d4 = 0u; d4 < D4; d4++) {
++                o[d4] = fma(vec4<f32>(p), vec4<f32>(vs[j * D4 + d4]), o[d4]);
++            }
++        }
++        m = m_new;
++        workgroupBarrier();
++    }
++
++    if (live) {
++        let inv = select(0.0, 1.0 / l, l > 0.0);
++        let at = params.offset_dst + batch * (D * params.n_heads * params.seq_len_q) + q_row * (D * params.n_heads) + head * D;
++        for (var d4 = 0u; d4 < D4; d4++) {
++            let v = o[d4] * inv;
++            dst[at + 4u * d4] = v.x;
++            dst[at + 4u * d4 + 1u] = v.y;
++            dst[at + 4u * d4 + 2u] = v.z;
++            dst[at + 4u * d4 + 3u] = v.w;
++        }
++    }
++}
 --- a/ggml/src/ggml-webgpu/wgsl-shaders/flash_attn_mobile.wgsl
 +++ b/ggml/src/ggml-webgpu/wgsl-shaders/flash_attn_mobile.wgsl
 @@ -0,0 +1,208 @@

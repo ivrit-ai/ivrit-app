@@ -400,8 +400,9 @@ final class TurboGpu {
      * the decoder on the CPU, without the check (the benchmark's words judge it).
      * Its switches are set as the library loads (early()), as ggml reads them once;
      * chosen with the app running, it needs the app started again. A failure, or the
-     * process dying in it, puts it back on the CPU until it is chosen again, and is
-     * reported (kind=local-turbo-gpu-crash, crashed "trial:...").
+     * process dying in it, puts it back on the CPU until it is chosen again or the
+     * app is updated (a new build may have fixed it), and is reported
+     * (kind=local-turbo-gpu-crash, crashed "trial:...").
      */
     // GPU work 8 kernels a submission: a phone's driver stops a long one (as Windows' does).
     static final Level TRIAL_LEVEL = new Level("WebGPU", true, "GGML_WEBGPU_MOBILE", WEBGPU_NO_MATRIX,
@@ -409,16 +410,32 @@ final class TurboGpu {
 
     /** Before the library loads (Turbo.supported): the trial's switches, where it is chosen. */
     static void early(Context context) {
-        if (TRIAL.equals(Store.turboProcessor(context)) && prefs(context).getString("trial_failed", null) == null) {
+        if (TRIAL.equals(Store.turboProcessor(context)) && trialFailure(context) == null) {
             apply(TRIAL_LEVEL);
         }
     }
 
     /** The trial as it stands here: "ready", "restart" (the app must start again), or "failed: ..." */
     static String trialState(Context context) {
-        String failed = prefs(context).getString("trial_failed", null);
+        String failed = trialFailure(context);
         if (failed != null) return "failed: " + failed;
         return webgpu(TRIAL_LEVEL).equals(webgpuSet) ? "ready" : "restart";
+    }
+
+    /** Why the trial failed in this build, or null (none, or in an earlier build). */
+    static String trialFailure(Context context) {
+        android.content.SharedPreferences p = prefs(context);
+        return p.getLong("trial_failed_build", 0) == build(context) ? p.getString("trial_failed", null) : null;
+    }
+
+    /** The app's build number (versionCode), or 0. */
+    @SuppressWarnings("deprecation") // getLongVersionCode: Android 9 on
+    static long build(Context context) {
+        try {
+            return context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionCode;
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     /** Chosen (again): an earlier failure forgotten. */
@@ -443,7 +460,8 @@ final class TurboGpu {
             v.since = p.getLong("trial_since", 0);
             v.crashed = "trial:run";
             v.step = "trial";
-            p.edit().putBoolean("trial_running", false).putString("trial_failed", "crashed").commit();
+            p.edit().putBoolean("trial_running", false).putString("trial_failed", "crashed")
+                .putLong("trial_failed_build", build(context)).commit();
             report(context, variant, v);
             v.crashed = null;
         }
@@ -471,7 +489,8 @@ final class TurboGpu {
         v.crashed = "trial:failed";
         v.step = "trial";
         v.error = why == null ? "" : why;
-        p.edit().putBoolean("trial_running", false).putString("trial_failed", v.error.isEmpty() ? "failed" : v.error).commit();
+        p.edit().putBoolean("trial_running", false).putString("trial_failed", v.error.isEmpty() ? "failed" : v.error)
+            .putLong("trial_failed_build", build(context)).commit();
         report(context, variant, v);
     }
 

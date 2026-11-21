@@ -324,6 +324,15 @@ Open to comment; each with what it rests on.
     without them. It runs without the check, and the benchmark's words judge it; if
     it holds on Mali (a Pixel), WebGPU can be the one GPU path (OpenCL and Vulkan
     gone), on iPhones and desktops too, and the patch belongs upstream.
+22. **Which program, by the GPU's maker** (2026-11-21; `mul_mat_mobile_columns_for`
+    in the patch). Build 270 lost the S25's device on its first encoder work: the
+    flash attention written out (loops unrolled, 3-4 times faster on Intel's GPUs)
+    is too much for Adreno's compiler. So Intel's GPUs take the written-out one,
+    the 8-bit multiply (10-25% faster there; 2.7 times slower on the S25) and 4
+    columns a thread; all others the attention as loops, the f32 multiply and 8
+    columns. A minute of Hebrew on the S25, beam 5, the decoder on the CPU: WebGPU
+    20.8 and 24.8 s against OpenCL's 20.7 and 22.9 s, the same 126 words. A trial
+    that failed is tried again when the app is updated.
 
 ## Verified, and not yet
 
