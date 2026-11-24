@@ -1853,21 +1853,54 @@ async function askClips() {
 }
 
 function renderClipsSetting() {
-  $("clips-drive").checked = Boolean(state.settings?.clipsToDrive);
-  $("clips-drive").disabled = !state.settings;
+  for (const id of ["clips-drive", "clips-drive-inbox"]) {
+    $(id).checked = Boolean(state.settings?.clipsToDrive);
+    $(id).disabled = !state.settings;
+  }
+  $("clips-bar").hidden = !state.me || !state.settings;
+  $("clips-check").hidden = !state.settings?.clipsToDrive;
+  if (!state.settings?.clipsToDrive) {
+    $("clips-folder").hidden = true;
+    $("clips-status").textContent = state.settings ? t("clipsStatusOff") : "";
+  }
 }
 
-$("clips-drive").addEventListener("change", async (event) => {
-  const on = event.target.checked;
-  event.target.disabled = true;
+// The way to see that it works: what the server finds in the Drive folder itself,
+// not just what this device sent.
+async function checkClips() {
+  $("clips-status").textContent = t("clipsChecking");
   try {
-    if (!(await setClipsToDrive(on))) event.target.checked = !on;
-  } catch {
-    event.target.checked = !on;
-    toast(t("error", "settings"));
+    const r = await server("/clips/status");
+    $("clips-status").textContent = r.count
+      ? t("clipsStatus", r.count, new Date(r.last_saved_at).toLocaleString(locale()))
+      : t("clipsStatusNone");
+    if (r.folder_url) {
+      $("clips-folder").href = r.folder_url;
+      $("clips-folder").hidden = false;
+    }
+  } catch (err) {
+    $("clips-status").textContent = t("error", err.status === 409 ? "drive_not_connected" : "status");
   }
-  renderClipsSetting();
-});
+}
+$("clips-check").addEventListener("click", checkClips);
+
+for (const id of ["clips-drive", "clips-drive-inbox"]) {
+  $(id).addEventListener("change", async (event) => {
+    const on = event.target.checked;
+    event.target.disabled = true;
+    try {
+      if (!(await setClipsToDrive(on))) event.target.checked = !on;
+      else if (on) {
+        await savingClips;
+        checkClips();
+      }
+    } catch {
+      event.target.checked = !on;
+      toast(t("error", "settings"));
+    }
+    renderClipsSetting();
+  });
+}
 
 const isClip = (m) => m.kind === "transcript" && (isAppMessage(m) || m.source_id === "eliezer");
 let savingClips = null;

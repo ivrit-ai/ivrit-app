@@ -129,6 +129,13 @@
           <!-- Linking services (Eliezer…) is for messages, so it lives here, not in the tabs. -->
           <button id="open-sources" class="btn quiet small" type="button"><svg class="i"><use href="#i-sources" /></svg><span data-i18n="sourcesButton"></span></button>
         </div>
+        <!-- Eliezer's transcripts to Drive: the switch, and a check that it works (web/app.js, clips in Drive). -->
+        <div id="clips-bar" class="row clips-bar" hidden>
+          <label class="row"><input id="clips-drive-inbox" type="checkbox" /> <span data-i18n="clipsInboxToggle"></span></label>
+          <span id="clips-status" class="muted small" aria-live="polite"></span>
+          <a id="clips-folder" class="btn quiet small" target="_blank" rel="noopener noreferrer" hidden data-i18n="clipsOpenFolder"></a>
+          <button id="clips-check" class="btn quiet small" type="button" hidden data-i18n="clipsCheck"></button>
+        </div>
         <div id="chips" class="chips" role="tablist"></div>
         <div id="feed" class="feed" aria-live="polite"></div>
       </section>
