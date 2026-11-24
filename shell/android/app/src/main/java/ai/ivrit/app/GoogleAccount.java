@@ -39,38 +39,25 @@ final class GoogleAccount {
     private static final Executor EXECUTOR = Executors.newSingleThreadExecutor();
 
     static void idToken(Activity activity, String clientId, boolean interactive, Result result) {
-        // Silent first: an account this app was already allowed to use, picked automatically.
+        if (interactive) {
+            // Tapping "Sign in with Google": Google's own chooser, every account on
+            // the phone and "Add account", never one picked for the user. (Accounts
+            // already used with the app first, and automatically, would leave
+            // someone with several accounts unable to choose another.)
+            GetSignInWithGoogleOption pick = new GetSignInWithGoogleOption.Builder(clientId).build();
+            request(activity, new GetCredentialRequest.Builder().addCredentialOption(pick).build(), result);
+            return;
+        }
+        // Silent: an account this app was already allowed to use, picked automatically.
         GetGoogleIdOption silent = new GetGoogleIdOption.Builder()
             .setServerClientId(clientId)
             .setFilterByAuthorizedAccounts(true)
             .setAutoSelectEnabled(true)
             .build();
-        request(activity, new GetCredentialRequest.Builder().addCredentialOption(silent).build(), result, error -> {
-            if (!(error instanceof NoCredentialException) || !interactive) return false;
-            // The account sheet, for any Google account on the phone. Signing in
-            // here is what marks the account as this app's, so the silent request
-            // above finds it on the next start (the "Sign in with Google" button
-            // flow may not).
-            GetGoogleIdOption choose = new GetGoogleIdOption.Builder()
-                .setServerClientId(clientId)
-                .setFilterByAuthorizedAccounts(false)
-                .build();
-            request(activity, new GetCredentialRequest.Builder().addCredentialOption(choose).build(), result, again -> {
-                if (!(again instanceof NoCredentialException)) return false;
-                // No Google account on the phone yet: the button flow can add one.
-                GetSignInWithGoogleOption pick = new GetSignInWithGoogleOption.Builder(clientId).build();
-                request(activity, new GetCredentialRequest.Builder().addCredentialOption(pick).build(), result, null);
-                return true;
-            });
-            return true;
-        });
+        request(activity, new GetCredentialRequest.Builder().addCredentialOption(silent).build(), result);
     }
 
-    interface Fallback {
-        boolean handle(GetCredentialException error);
-    }
-
-    private static void request(Activity activity, GetCredentialRequest request, Result result, Fallback fallback) {
+    private static void request(Activity activity, GetCredentialRequest request, Result result) {
         CredentialManager.create(activity).getCredentialAsync(
             activity,
             request,
@@ -95,7 +82,6 @@ final class GoogleAccount {
 
                 @Override
                 public void onError(@NonNull GetCredentialException e) {
-                    if (fallback != null && fallback.handle(e)) return;
                     String code = e instanceof GetCredentialCancellationException
                         ? "cancelled"
                         : e instanceof NoCredentialException ? "no_account" : "failed";

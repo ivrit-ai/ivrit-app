@@ -700,6 +700,9 @@ try {
         appendStaged: async ({ id, data }) => void (fake.staged[id] += atob(data).length),
         discardStaged: async () => ({}),
         saveStaged: async ({ id, name, type }) => ((fake.saved = { name, type, size: fake.staged[id] }), { saved: "downloads" }),
+        authorizeDrive: async (options) => ((fake.drive = options), { code: "drive-code" }),
+        // Kept where a reload (signing out) does not lose it.
+        forgetGoogle: async () => localStorage.setItem("fake-forgot-google", "1"),
         addListener: on("IvritNative"),
       },
       SystemBars: { setStyle: async ({ style }) => void (fake.bars = style) },
@@ -843,6 +846,26 @@ try {
   const linked = await app.waitForSelector("#tr-reader #tr-text .tr-seg", { timeout: 20000 }).catch(() => null);
   await app.screenshot({ path: path.join(OUT, "bt-10-app-link.png") });
   check("a link to app.ivrit.ai opened by the phone opens the transcript in the app", Boolean(linked), app.url());
+
+  // Drive asked for on the phone is the signed-in account's; if Google answers for
+  // another, the way to switch is right there: signing out.
+  await app.route("**/auth/drive", (route) => route.fulfill({ status: 409, contentType: "application/json", body: '{"error":"different_account"}' }));
+  await app.evaluate(() => document.getElementById("connect-drive").click());
+  await app.waitForSelector("#toast:not([hidden]) #toast-action:not([hidden])", { timeout: 8000 }).catch(() => null);
+  const driveAsked = await fake(() => window.__fake.drive);
+  const otherAccount = await app.evaluate(() => [document.getElementById("toast-text").textContent, document.getElementById("toast-action").textContent]);
+  check("in the app, Drive is asked for the signed-in account, and another account's Drive offers signing out",
+    driveAsked?.email === "dana@example.com" && otherAccount[0].includes("חשבון Google אחר") && otherAccount[1] === "התנתקות",
+    JSON.stringify([driveAsked, otherAccount]));
+  const loggedOut = app.waitForRequest((r) => r.url().endsWith("/logout"), { timeout: 10000 }).catch(() => null);
+  // Then the app starts again.
+  const reloaded = app.waitForEvent("load", { timeout: 15000 }).catch(() => null);
+  await app.click("#toast-action", { timeout: 5000 }).catch(() => null);
+  await app.click("#confirm-ok", { timeout: 5000 }).catch(() => null);
+  const signedOut = Boolean(await loggedOut);
+  await reloaded;
+  check("signing out from there forgets the phone's Google account and the server's sign-in",
+    signedOut && (await app.evaluate(() => localStorage.getItem("fake-forgot-google"))) === "1");
   await phone.close();
 
   // --- the iPhone's app, which cannot transcribe a shared recording itself: with
@@ -911,11 +934,22 @@ try {
   await iphone.close();
   await server("/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ localOnly: false }) });
 
-  // --- deleting the account: this server forgets it too, and the browser is signed out here
-  const deletedHere = await server("/account/delete", { method: "POST" });
+  // --- deleting the account, from Settings, where push is missing as in Android's web view:
+  // this server forgets it, Communicator deletes it and refuses the session from before
+  // (another device's, say), and the app is left
+  await page.goto(`${origin}/`);
+  await page.waitForSelector("#tabs button[data-view='settings']", { timeout: 20000 });
+  await page.evaluate(() => delete ServiceWorkerRegistration.prototype.pushManager);
+  await page.click("#tabs button[data-view='settings']");
+  await page.click("#delete-account");
+  await page.click("#confirm-ok");
+  await page.waitForSelector("body.signed-out", { timeout: 20000 }).catch(() => null);
   const bootAfter = await server("/transcribe/boot");
-  check("deleting the account clears this server's records and its sign-in", deletedHere.body?.deleted === true
-    && bootAfter.body?.signedIn === false, JSON.stringify([deletedHere, bootAfter.body]));
+  const meAfter = await comm.call("GET", "/api/me", { bearer: info.session.token });
+  check("deleting the account clears this server's records and its sign-in, and Communicator's account, even without push",
+    bootAfter.body?.signedIn === false && meAfter.status === 401
+      && (await page.evaluate(() => localStorage.getItem("app_session"))) === null,
+    JSON.stringify([bootAfter.body, meAfter.status]));
 
   const realErrors = errors.filter((e) => !/favicon|ERR_|Failed to load resource/.test(e));
   check("no script errors", realErrors.length === 0, realErrors.join(" | ").slice(0, 600));

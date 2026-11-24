@@ -56,37 +56,41 @@ enum GoogleAccount {
         return Account(idToken: token, email: user.profile?.email ?? "", name: user.profile?.name ?? "")
     }
 
-    /// Silent when an account was chosen before; otherwise, only if interactive, Google's sign-in.
+    /// Interactive (tapping "Sign in with Google"): Google's sign-in, choosing among
+    /// every account, never the one chosen before by itself. Otherwise silent: the
+    /// account chosen before, if any.
     @MainActor
     static func idToken(server: String, interactive: Bool, presenting: UIViewController?, done: @escaping (Result<Account, Failure>) -> Void) {
         guard configure(server: server) else { return done(.failure(.notConfigured)) }
-        let interactively = {
-            guard interactive, let presenting else { return done(.failure(.noAccount)) }
+        if interactive {
+            guard let presenting else { return done(.failure(.failed("no screen"))) }
             GIDSignIn.sharedInstance.signIn(withPresenting: presenting) { result, error in
                 if let error { return done(.failure(failure(error))) }
                 guard let user = result?.user, let account = account(user) else { return done(.failure(.failed("no token"))) }
                 done(.success(account))
             }
+            return
         }
-        guard GIDSignIn.sharedInstance.hasPreviousSignIn() else { return interactively() }
+        guard GIDSignIn.sharedInstance.hasPreviousSignIn() else { return done(.failure(.noAccount)) }
         GIDSignIn.sharedInstance.restorePreviousSignIn { user, error in
-            guard let user, error == nil else { return interactively() }
+            guard let user, error == nil else { return done(.failure(.noAccount)) }
             // A fresh ID token: they last an hour.
             user.refreshTokensIfNeeded { user, error in
                 if let user, let account = account(user) { return done(.success(account)) }
-                interactively()
+                done(.failure(.noAccount))
             }
         }
     }
 
     /// Access to the user's Drive, for transcripts: only the files the app makes.
     /// Google's screen, then a code for the server, which exchanges it (with its
-    /// client secret) for lasting access.
+    /// client secret) for lasting access. email: the account signed in to the app,
+    /// offered first; empty when not known.
     @MainActor
-    static func authorizeDrive(server: String, presenting: UIViewController?, done: @escaping (Result<String, Failure>) -> Void) {
+    static func authorizeDrive(server: String, email: String, presenting: UIViewController?, done: @escaping (Result<String, Failure>) -> Void) {
         guard configure(server: server) else { return done(.failure(.notConfigured)) }
         guard let presenting else { return done(.failure(.failed("no screen"))) }
-        let hint = GIDSignIn.sharedInstance.currentUser?.profile?.email
+        let hint = email.isEmpty ? GIDSignIn.sharedInstance.currentUser?.profile?.email : email
         // A full sign-in, not addScopes: that refuses once the scope is granted,
         // and a reconnect after the server lost its access needs a new code.
         GIDSignIn.sharedInstance.signIn(withPresenting: presenting, hint: hint, additionalScopes: [driveFile]) { result, error in

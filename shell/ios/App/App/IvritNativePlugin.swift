@@ -180,8 +180,9 @@ public class IvritNativePlugin: CAPPlugin, CAPBridgedPlugin {
     /// Resolves with {code}, for the server (POST /auth/drive).
     @objc func authorizeDrive(_ call: CAPPluginCall) {
         let clientId = call.getString("clientId") ?? ""
+        let email = call.getString("email") ?? ""
         DispatchQueue.main.async {
-            GoogleAccount.authorizeDrive(server: clientId, presenting: self.bridge?.viewController) { result in
+            GoogleAccount.authorizeDrive(server: clientId, email: email, presenting: self.bridge?.viewController) { result in
                 switch result {
                 case .success(let code): call.resolve(["code": code])
                 case .failure(let failure): call.reject(failure.message, failure.code)

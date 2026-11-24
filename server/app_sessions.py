@@ -51,7 +51,10 @@ class Sessions:
         self.jwks = {"keys": [{"kty": "RSA", "n": n, "e": e, "kid": self.kid, "alg": "RS256", "use": "sig"}]}
         self._google = jwt.PyJWKClient(google_jwks_url or GOOGLE_JWKS_URL, cache_keys=True, lifespan=3600)
 
-    def issue(self, sub: str, email: str, name: Optional[str] = None) -> dict:
+    def issue(self, sub: str, email: str, name: Optional[str] = None, *, auth_time: Optional[int]) -> dict:
+        """auth_time: when the account last signed in with Google (seconds), kept through
+        renewals, so a session from before the account was deleted is told apart from
+        one signed in since (Communicator refuses the first). None when unknown."""
         now = int(time.time())
         claims = {
             "email": email,
@@ -63,6 +66,8 @@ class Sessions:
         }
         if name:
             claims["name"] = name
+        if auth_time is not None:
+            claims["auth_time"] = int(auth_time)
         token = jwt.encode(claims, self.key, algorithm="RS256", headers={"kid": self.kid, "typ": "JWT"})
         return {"token": token, "expires_at": int(time.time() * 1000) + SESSION_DAYS * 86_400_000}
 
@@ -76,7 +81,7 @@ class Sessions:
         )
         if claims.get("email_verified") is not True:
             raise jwt.InvalidTokenError("unverified email")
-        return self.issue(str(claims["sub"]), str(claims["email"]), claims.get("name"))
+        return self.issue(str(claims["sub"]), str(claims["email"]), claims.get("name"), auth_time=int(time.time()))
 
     def renew(self, token: str) -> dict:
         """A session still valid, renewed for another SESSION_DAYS."""
@@ -84,7 +89,7 @@ class Sessions:
             token, self.key.public_key(), algorithms=["RS256"], audience=SESSION_AUDIENCE, issuer=self.issuer,
             options={"require": ["sub", "email", "exp"]},
         )
-        return self.issue(claims["sub"], claims["email"], claims.get("name"))
+        return self.issue(claims["sub"], claims["email"], claims.get("name"), auth_time=claims.get("auth_time"))
 
     def verify(self, token: str) -> dict:
         """The claims of a valid session, or raises."""

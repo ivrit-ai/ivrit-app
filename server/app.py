@@ -3846,6 +3846,8 @@ async def complete_google_sign_in(request: Request, code: str) -> Response:
                             "user_email": user_email,
                             # The Google account itself, for the app's own session (/auth/session).
                             "google_sub": str(user_data.get("id") or ""),
+                            # When, for the app's sessions made from this cookie (their auth_time).
+                            "signed_in_at": int(time.time()),
                             "refresh_token": refresh_token,
                             "runpod_token": runpod_token,
                             "runpod_key_load_failed": runpod_key_load_failed,
@@ -5775,7 +5777,9 @@ if APP_SITE:
             if not sub:
                 return JSONResponse({"error": "signed_out"}, status_code=401)
             response_session = {**session, "google_sub": sub}
-        response = JSONResponse(sessions.issue(sub, session["user_email"]), headers={"Cache-Control": "no-store"})
+        # A cookie from before it kept the time of signing in: unknown.
+        response = JSONResponse(sessions.issue(sub, session["user_email"], auth_time=session.get("signed_in_at")),
+                                headers={"Cache-Control": "no-store"})
         if response_session:
             auth_cookies.write_session(response, response_session)
         return response
@@ -5917,6 +5921,7 @@ if APP_SITE:
             logger.warning("Drive code exchange: no account in Drive's answer (%s)", list(about))
             return JSONResponse({"error": "exchange_failed"}, status_code=401)
         sub = ""
+        signed_in_at = None
         header = request.headers.get("authorization", "")
         if sessions and header.startswith("Bearer "):
             try:
@@ -5928,6 +5933,8 @@ if APP_SITE:
                 logger.warning("Drive code exchange: Drive account differs from the app's")
                 return JSONResponse({"error": "different_account"}, status_code=409)
             sub = claims["sub"]
+            # Drive's consent is not a sign-in: the cookie keeps the session's.
+            signed_in_at = claims.get("auth_time")
         refresh_token = tokens["refresh_token"]
         try:
             runpod_token, load_failed = await runpod_key_store.load(refresh_token), False
@@ -5937,7 +5944,7 @@ if APP_SITE:
         await remember_drive_grant(email, refresh_token)
         response = JSONResponse({"ok": True, "email": email})
         auth_cookies.write_session(response, {
-            "user_email": email, "google_sub": sub, "refresh_token": refresh_token,
+            "user_email": email, "google_sub": sub, "signed_in_at": signed_in_at, "refresh_token": refresh_token,
             "runpod_token": runpod_token, "runpod_key_load_failed": load_failed,
         })
         return response

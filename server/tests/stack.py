@@ -58,7 +58,7 @@ t.wait_until(alive, 60)
 email, sub = "dana@example.com", "dana-sub"
 cookie = Fernet(cookie_key.encode()).encrypt(json.dumps({"user_email": email, "google_sub": sub, "refresh_token": "rt-dana",
         "runpod_token": "", "runpod_key_load_failed": False, "v": 1}).encode()).decode()
-session = Sessions(origin, "test-client", session_key).issue(sub, email, "Dana")
+session = Sessions(origin, "test-client", session_key).issue(sub, email, "Dana", auth_time=int(time.time()))
 print(json.dumps({"cookie": cookie, "session": session, "work": work}), flush=True)
 try:
     while True:

@@ -1234,7 +1234,8 @@ async function appToken() {
   if (Date.now() - (session.renewed_at ?? 0) > DAY_MS && !renewing) {
     renewing = fetch("/auth/renew", { method: "POST", headers: { authorization: `Bearer ${session.token}` } })
       .then(async (res) => {
-        if (res.ok) writeSession({ ...(await res.json()), renewed_at: Date.now() });
+        // Not if the session ended meanwhile (signed out, or refused at start).
+        if (res.ok && readSession()) writeSession({ ...(await res.json()), renewed_at: Date.now() });
         else if (res.status === 401) writeSession(null);
         configureShell();
       })
@@ -1573,7 +1574,8 @@ async function connectDrive() {
   if (shell) {
     let code;
     try {
-      ({ code } = await shell.ivrit.authorizeDrive({ clientId: config.googleClientId }));
+      // The signed-in account's Drive, not whichever account the phone offers first.
+      ({ code } = await shell.ivrit.authorizeDrive({ clientId: config.googleClientId, email: state.me?.email ?? "" }));
     } catch (err) {
       if (err?.code === "UNIMPLEMENTED" || /not implemented/i.test(err?.message ?? "")) toast(t("updateApp"));
       else if (err?.code !== "cancelled") toast(t("googleFailed"));
@@ -1586,7 +1588,8 @@ async function connectDrive() {
       headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ code }),
     }).catch(() => null);
-    if (res?.status === 409) toast(t("driveOtherAccount"));
+    // Drive is another account than the app's: signing out is how to switch.
+    if (res?.status === 409) toast(t("driveOtherAccount"), { label: t("signOut"), run: signOut });
     else if (!res?.ok) toast(t(res ? "googleFailed" : "offline"));
     return Boolean(res?.ok);
   }
@@ -2179,12 +2182,16 @@ $("clear-history").addEventListener("click", async () => {
   toast(t("cleared"));
 });
 
-$("signout").addEventListener("click", async () => {
+// From Settings, and wherever the app finds itself on the wrong Google account.
+async function signOut() {
   const anonymous = state.me.kind === "anonymous";
   if (!(await ask(anonymous ? t("signOutAnonConfirm") : t("signOutConfirm"), { ok: t("signOut"), danger: anonymous }))) return;
-  await forgetThisDevice();
+  // Whatever the device's own cleanup runs into, signing out still happens.
+  await forgetThisDevice().catch((err) => console.warn("forgetThisDevice", err));
   return leaveApp();
-});
+}
+
+$("signout").addEventListener("click", signOut);
 
 $("delete-account").addEventListener("click", async () => {
   if (!(await ask(t("deleteConfirm"), { ok: t("deleteAccount"), danger: true }))) return;
@@ -2196,7 +2203,10 @@ $("delete-account").addEventListener("click", async () => {
     credentials: "same-origin",
     headers: token ? { authorization: `Bearer ${token}` } : {},
   }).catch(() => {});
-  await forgetThisDevice();
+  // Before the inbox account goes: once it has, Communicator answers nothing
+  // for this session. Whatever the device's own cleanup runs into, the account
+  // is still deleted and the app left.
+  await forgetThisDevice().catch((err) => console.warn("forgetThisDevice", err));
   await del("/api/me").catch(() => {});
   return leaveApp();
 });

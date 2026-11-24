@@ -353,7 +353,7 @@ public class IvritNativePlugin extends Plugin {
         if (pendingDrive != null) pendingDrive.reject("superseded", "cancelled");
         pendingDrive = call;
         Identity.getAuthorizationClient(getActivity())
-            .authorize(DriveAccess.request(clientId))
+            .authorize(DriveAccess.request(clientId, call.getString("email", "")))
             .addOnSuccessListener(result -> {
                 if (result.hasResolution() && result.getPendingIntent() != null) {
                     driveConsent.launch(new IntentSenderRequest.Builder(result.getPendingIntent().getIntentSender()).build());

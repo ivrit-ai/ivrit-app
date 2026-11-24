@@ -364,7 +364,7 @@ def main():
         check("a bad Google token is refused", status == 401, (status, body))
         sys.path.insert(0, SERVER)
         from app_sessions import Sessions
-        token = Sessions(f"https://app.ivrit.ai", "test-client", APP_SESSION_KEY).issue("s1", "s1@example.com")["token"]
+        token = Sessions(f"https://app.ivrit.ai", "test-client", APP_SESSION_KEY).issue("s1", "s1@example.com", auth_time=None)["token"]
         status, _, body = get("/auth/renew", method="POST", headers={"Authorization": "Bearer " + token})
         renewed = json.loads(body) if status == 200 else {}
         check("a session renews, for 90 days", renewed.get("token")
@@ -493,7 +493,7 @@ def main():
 
         # --- the Android app's watched folders: uploads with the app's own session, once each
         from app_sessions import Sessions
-        ada_token = Sessions("https://app.ivrit.ai", "test-client", APP_SESSION_KEY).issue("ada-sub", "ada@example.com")["token"]
+        ada_token = Sessions("https://app.ivrit.ai", "test-client", APP_SESSION_KEY).issue("ada-sub", "ada@example.com", auth_time=None)["token"]
         upload_id = "watch-" + uuid.uuid4().hex
         watched = make_audio("watched.ogg", 15)
         status, events, raw = api.upload(None, watched, "watched.ogg", token=ada_token,
