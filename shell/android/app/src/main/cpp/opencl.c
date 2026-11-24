@@ -2,7 +2,9 @@
 // linked against it instead, this library would not load at all where there is
 // none (most phones but Snapdragons), and Turbo would not run even on the CPU.
 // Where it cannot be opened, clGetPlatformIDs finds no platform, so ggml has no
-// OpenCL device; nothing else is called then.
+// OpenCL device; nothing else is called then. Nor is it opened where the app says
+// not to (IVRIT_NO_OPENCL: no Snapdragon, or OpenCL failed its check: TurboGpu.early),
+// so a driver that fails as ggml first looks cannot keep it from WebGPU.
 //
 // The functions ggml-opencl calls (llvm-nm -u libggml-opencl.a), as the Khronos
 // headers declare them (fetch-whisper.sh); a newer whisper.cpp calling one more
@@ -13,10 +15,11 @@
 #include <CL/cl_ext.h>
 #include <dlfcn.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 static void *find(const char *name) {
     static void *lib;
-    if (!lib) lib = dlopen("libOpenCL.so", RTLD_NOW | RTLD_LOCAL);
+    if (!lib && !getenv("IVRIT_NO_OPENCL")) lib = dlopen("libOpenCL.so", RTLD_NOW | RTLD_LOCAL);
     return lib ? dlsym(lib, name) : NULL;
 }
 

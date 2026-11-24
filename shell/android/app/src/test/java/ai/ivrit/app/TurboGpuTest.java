@@ -31,36 +31,45 @@ public class TurboGpuTest {
     }
 
     @Test
-    public void webGpuWithThePhoneProgramsAlone() {
-        assertEquals(1, TurboGpu.LEVELS.length);
-        assertEquals("WebGPU", TurboGpu.LEVELS[0].backend);
-        assertTrue(TurboGpu.LEVELS[0].flash);
-        java.util.List<String> env = java.util.Arrays.asList(TurboGpu.LEVELS[0].env);
+    public void openClThenWebGpuWithThePhonePrograms() {
+        assertEquals(2, TurboGpu.LEVELS.length);
+        assertEquals("OpenCL", TurboGpu.LEVELS[0].backend);
+        assertEquals(0, TurboGpu.LEVELS[0].env.length);
+        assertEquals("WebGPU", TurboGpu.LEVELS[1].backend);
+        java.util.List<String> env = java.util.Arrays.asList(TurboGpu.LEVELS[1].env);
         assertTrue(env.contains("GGML_WEBGPU_MOBILE"));
         assertTrue(env.contains("GGML_WEBGPU_DISABLE_SUBGROUPS"));
         assertTrue(env.contains("GGML_WEBGPU_SUBMIT_BATCH=8"));
+        for (TurboGpu.Level level : TurboGpu.LEVELS) assertTrue(level.flash);
         assertEquals(java.util.Arrays.asList("auto", "cpu", "gpu"), java.util.Arrays.asList(TurboGpu.PROCESSORS));
     }
 
     @Test
-    public void aCheckThatNeverEndedGivesTheGpuUp() {
+    public void aCheckThatNeverEndedTriesWebGpuThenGivesTheGpuUp() {
         TurboGpu.Verdict v = verdict("testing");
+        v.step = "probe";
+        v = TurboGpu.settle(v, "build q8_0");
+        assertNull(v.state);
+        assertEquals(1, v.level);
+        assertEquals("0:probe", v.crashed);
+        v.state = "testing";
         v.step = "gpu-shaders";
         v = TurboGpu.settle(v, "build q8_0");
         assertEquals("crashed", v.state);
-        assertEquals("0:gpu-shaders", v.crashed);
+        assertEquals("1:gpu-shaders", v.crashed);
+        assertTrue(v.crashes.startsWith("0:probe 1:gpu-shaders "));
         assertFalse(TurboGpu.onGpu(v, TurboGpu.GPU));
     }
 
     @Test
-    public void wrongWordsAndReportedFailuresGiveItUpToo() {
+    public void wrongWordsAndReportedFailuresMoveOnToo() {
         TurboGpu.Verdict v = verdict("testing");
         TurboGpu.fail(v, "wrong", "wrong");
-        assertEquals("wrong", v.state);
-        v = verdict("faster");
+        assertNull(v.state);
+        assertEquals(1, v.level);
         TurboGpu.fail(v, "gpu-run-hung", "failed");
         assertEquals("failed", v.state);
-        assertTrue(v.crashes.endsWith("0:gpu-run-hung "));
+        assertTrue(v.crashes.endsWith("1:gpu-run-hung "));
     }
 
     @Test
@@ -73,26 +82,28 @@ public class TurboGpuTest {
         assertNull(v.crashed);
         v.running = true;
         v = TurboGpu.settle(v, "build q8_0");
-        assertEquals("crashed", v.state);
+        assertNull(v.state);
+        assertEquals(1, v.level);
         assertEquals("0:run", v.crashed);
         assertFalse(v.running);
     }
 
     @Test
     public void aVerdictFromAnEarlierLadderStartsOver() throws Exception {
-        // Ladder 9's WebGPU level (Dawn's own programs), passed: checked again.
-        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", "faster").put("level", 1)
-            .put("ladder", 9).put("gpu", "Adreno (TM) 830 · WebGPU").put("crashes", "0:gpu-run ");
+        // Build 274's WebGPU level, passed: checked again, OpenCL first.
+        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", "faster").put("level", 0)
+            .put("ladder", 11).put("gpu", "WebGPU: WebGPU · WebGPU").put("crashes", "0:gpu-run ");
         TurboGpu.Verdict v = TurboGpu.Verdict.of(old);
         assertNull(v.state);
         assertEquals(0, v.level);
         assertEquals("build q8_0", v.key);
-        assertTrue(v.crashes.startsWith("ladder9:0:gpu-run faster"));
+        assertTrue(v.crashes.startsWith("ladder11:0:gpu-run faster"));
         // Of this ladder: kept as it is.
         TurboGpu.Verdict kept = verdict("crashed");
+        kept.level = 1;
         TurboGpu.Verdict back = TurboGpu.Verdict.of(kept.json());
         assertEquals("crashed", back.state);
-        assertEquals(0, back.level);
+        assertEquals(1, back.level);
     }
 
     @Test
@@ -118,12 +129,14 @@ public class TurboGpuTest {
         v.gpu = "WebGPU: WebGPU · WebGPU";
         v.cpuSeconds = 9.5;
         v.deaths = 1;
+        v.level = 1;
         v.step = "gpu-run";
         TurboGpu.Verdict back = TurboGpu.Verdict.of(v.json());
         assertEquals("slower", back.state);
         assertEquals("WebGPU: WebGPU · WebGPU", back.gpu);
         assertEquals(9.5, back.cpuSeconds, 0);
         assertEquals(1, back.deaths);
+        assertEquals(1, back.level);
         assertEquals("gpu-run", back.step);
         assertEquals("WebGPU", v.json().getString("backend"));
         assertNull(TurboGpu.Verdict.of(verdict(null).json()).state);

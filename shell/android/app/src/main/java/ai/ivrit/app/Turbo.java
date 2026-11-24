@@ -20,7 +20,7 @@ import org.json.JSONObject;
  * phone, with whisper.cpp (Whisper): far more accurate than the zipformer
  * (LocalModel), with speakers, and far larger and slower. It transcribes every
  * recording on the phones it is offered on (supported): Galaxy S23 and on, whose
- * GPUs run it through WebGPU (TurboGpu). The zipformer transcribes live, and
+ * GPUs run it through OpenCL or WebGPU (TurboGpu). The zipformer transcribes live, and
  * recordings on all other phones.
  *
  * The model is ggml's q8_0 or q5_1 (scripts/turbo_model.py), served by the site at
@@ -83,11 +83,11 @@ final class Turbo {
     private static Boolean supported;
 
     /**
-     * Galaxy S23 and on, Snapdragon and Exynos alike: the GPU runs Turbo through WebGPU
-     * with the app's own programs (TurboGpu), about a third of the recording's length
-     * on an S25, greedily. Other phones keep the zipformer: on a CPU Turbo takes longer than the
-     * recording, and other phones' GPUs are not known well enough (docs/turbo-android.md,
-     * decisions 24-25). Android 13 (the S23's first) on, 8 GB, dot products and half
+     * Galaxy S23 and on, Snapdragon and Exynos alike: the GPU runs Turbo (TurboGpu),
+     * through OpenCL on Snapdragon (about a third of the recording's length on an S25,
+     * with beam search), through WebGPU with the app's own programs elsewhere. Other
+     * phones keep the zipformer: on a CPU Turbo takes longer than the recording, and
+     * other phones' GPUs are not known well enough (docs/turbo-android.md, decisions 24-26). Android 13 (the S23's first) on, 8 GB, dot products and half
      * floats (the library is built for them). The GPU itself is the check's to judge,
      * in the background (never here: a driver that crashes takes the app with it).
      */
@@ -97,14 +97,14 @@ final class Turbo {
                 && galaxy(Build.MANUFACTURER, Build.MODEL)
                 && Build.SUPPORTED_ABIS.length > 0 && "arm64-v8a".equals(Build.SUPPORTED_ABIS[0])
                 && memory(context) >= MIN_MEMORY && cpuFeatures().containsAll(Arrays.asList("asimddp", "asimdhp"))
-                && early() && Whisper.available();
+                && early(context) && Whisper.available();
         }
         return supported;
     }
 
-    /** WebGPU's switches, before ggml can read them (TurboGpu.early). */
-    private static boolean early() {
-        TurboGpu.early();
+    /** The GPU backends' switches, before ggml can read them (TurboGpu.early). */
+    private static boolean early(Context context) {
+        TurboGpu.early(context);
         return true;
     }
 

@@ -10,11 +10,12 @@ import java.util.List;
 import org.json.JSONObject;
 
 /**
- * Whether the Turbo model runs on the phone's GPU or its CPU. The GPU runs it through
- * ggml's WebGPU backend on Google's Dawn (built into the app, on the phone's Vulkan
- * driver) with the app's own programs for phone GPUs (patches/ggml-webgpu-phones.patch),
- * on the phones Turbo is offered on (Turbo.supported). OpenCL and Vulkan, used before,
- * are out of the build (docs/turbo-android.md, decision 25).
+ * Whether the Turbo model runs on the phone's GPU or its CPU, and through which of
+ * ggml's GPU backends (LEVELS): OpenCL (ggml-opencl, Adreno's: Snapdragon phones),
+ * else WebGPU, on Google's Dawn (built into the app, on the phone's Vulkan driver),
+ * with the app's own programs for phone GPUs (patches/ggml-webgpu-phones.patch); on
+ * the phones Turbo is offered on (Turbo.supported). Vulkan, used before, is out of
+ * the build (docs/turbo-android.md, decision 26).
  *
  * A GPU driver can give wrong text, hang, or bring the app down, so the GPU is used
  * only once it has passed a check on this phone, for this build of its system
@@ -53,7 +54,7 @@ final class TurboGpu {
 
     /** A way to run on the GPU: one of ggml's backends, with switches (as WebGPU and Vulkan had). */
     static final class Level {
-        final String backend; // in ggml's device name: "WebGPU" ("OpenCL", "Vulkan" before)
+        final String backend; // in ggml's device name: "OpenCL" (GPUOpenCL), "WebGPU" ("Vulkan" before)
         final String[] env; // the backend's switches ("NAME", or "NAME=VALUE"), set before ggml starts it
         final boolean flash; // whisper.cpp's flash attention
 
@@ -65,16 +66,18 @@ final class TurboGpu {
     }
 
     /**
+     * Tried in turn, a level a check, until one passes. OpenCL first, where there is one
+     * (ggml-opencl takes Adreno GPUs alone): on the Galaxy S25 the benchmark took 107.5 s
+     * with beam search, against WebGPU's 155 s, the same words (decision 26). Then
      * WebGPU with the app's programs (GGML_WEBGPU_MOBILE: a matrix multiply and a flash
      * attention that need no subgroups, chosen by the GPU's maker; with subgroups,
      * Adreno's and Mali's drivers stopped the work as too slow and lost the device),
-     * without Dawn's bounds checks (25% of the encoder) or subgroup matrices, and its
-     * work sent 8 programs at a time (a phone's driver stops a long submission). On a
-     * Galaxy S25 the CPU's very words, a little faster than OpenCL (decisions 21-25).
-     * A level of its own still, as LEVELS were a ladder of backends and switches
-     * (decision 11).
+     * without Dawn's bounds checks (25% of the encoder) or subgroup matrices, its work
+     * sent 8 programs at a time (a phone's driver stops a long submission): Exynos'
+     * Xclipse, and Snapdragons whose OpenCL failed.
      */
     static final Level[] LEVELS = {
+        new Level("OpenCL", true),
         new Level("WebGPU", true, "GGML_WEBGPU_MOBILE", "GGML_WEBGPU_DISABLE_SUBGROUP_MATRIX",
             "GGML_WEBGPU_DISABLE_SUBGROUPS", "GGML_WEBGPU_DISABLE_DOT_PRODUCT", "GGML_WEBGPU_SUBMIT_BATCH=8"),
     };
@@ -84,9 +87,10 @@ final class TurboGpu {
      * 8: the GPU's run with beam search (Turbo.beams), the CPU's greedy.
      * 9: the decoder's threads tuned, and a run with the decoder on the CPU.
      * 10: OpenCL alone (WebGPU's and Vulkan's levels gone); not released.
-     * 11: WebGPU with the app's programs alone.
+     * 11: WebGPU with the app's programs alone (build 274).
+     * 12: OpenCL, then WebGPU with the app's programs.
      */
-    static final int LADDER = 11;
+    static final int LADDER = 12;
 
     /** What was found on this phone: kept between runs, one at a time. */
     static final class Verdict {
@@ -300,11 +304,26 @@ final class TurboGpu {
     }
 
     /**
-     * Before the library loads (Turbo.supported): the level's switches, as ggml-webgpu
-     * reads its own once, when ggml first starts.
+     * Before the library loads (Turbo.supported): WebGPU's switches, as ggml-webgpu reads
+     * its own once, when ggml first starts (they change nothing for OpenCL); and OpenCL
+     * kept shut (opencl.c) where it has no part: no Snapdragon, or this system build's
+     * check already past it. Its kernels kept where ggml-opencl is told (seconds' work
+     * each time otherwise).
      */
-    static void early() {
-        apply(LEVELS[0]);
+    static void early(Context context) {
+        for (Level level : LEVELS) apply(level);
+        Verdict v = load(context);
+        boolean past = v != null && v.key.startsWith(Build.FINGERPRINT + " ") && v.level > 0;
+        try {
+            boolean snapdragon = Build.VERSION.SDK_INT >= 31 && "QTI".equals(Build.SOC_MANUFACTURER);
+            if (!snapdragon || past) android.system.Os.setenv("IVRIT_NO_OPENCL", "1", true);
+            File dir = new File(context.getCacheDir(), "opencl");
+            //noinspection ResultOfMethodCallIgnored
+            dir.mkdirs();
+            android.system.Os.setenv("GGML_OPENCL_KERNEL_CACHE_DIR", dir.getPath(), false);
+        } catch (Exception ignored) {
+            // OpenCL as ggml finds it; its kernels built again each time.
+        }
     }
 
     /** The level's switches, set before ggml first starts that GPU backend in this process. */
