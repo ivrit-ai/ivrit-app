@@ -456,12 +456,9 @@ public class LocalTranscribeWorker extends Worker {
         double[] state = {done.turbo != null ? done.lastSpeech : from, done.after, from, file[0], file[1], file[2]};
         // On the GPU where it passed its check on this phone (TurboGpu), once checked.
         String processor = Store.turboProcessor(context);
-        // The Lab's WebGPU trial: no check, the encoder on WebGPU where it can run (TurboGpu.trial).
-        boolean trial = TurboGpu.TRIAL.equals(processor);
-        TurboGpu.Verdict verdict = trial ? TurboGpu.trial(context, variant)
-            : TurboGpu.decide(context, variant, processor, fraction -> progress("checking", fraction, null));
+        TurboGpu.Verdict verdict = TurboGpu.decide(context, variant, processor, fraction -> progress("checking", fraction, null));
         long checkMs = System.currentTimeMillis() - checking;
-        boolean gpu = trial ? "trial".equals(verdict.state) : TurboGpu.onGpu(verdict, processor);
+        boolean gpu = TurboGpu.onGpu(verdict, processor);
         long loading = System.currentTimeMillis();
         String path = Turbo.file(context, variant).getPath();
         int device = gpu ? TurboGpu.device(verdict) : -1;
@@ -474,9 +471,8 @@ public class LocalTranscribeWorker extends Worker {
         }
         // The decoder's threads as tuned on this phone; tuned on the first piece if not yet.
         int[] decodeThreads = {verdict.decodeThreads};
-        // A GPU run's pieces are watched for a hang (TurboGpu.Watchdog); the trial's
-        // waits end in a failure of their own (ggml-webgpu-phones.patch).
-        TurboGpu.Verdict watch = gpu && !trial ? verdict : null;
+        // A GPU run's pieces are watched for a hang (TurboGpu.Watchdog).
+        TurboGpu.Verdict watch = gpu ? verdict : null;
         final boolean onGpu = gpu; // beam search on the GPU (Turbo.beams)
         // Checked when it downloaded: not loading is the phone short of memory.
         if (loaded == 0) throw new IllegalStateException("the Turbo model did not load");
@@ -484,8 +480,7 @@ public class LocalTranscribeWorker extends Worker {
         synchronized (this) {
             turbo = handle;
         }
-        if (gpu && trial) TurboGpu.trialStarted(context);
-        else if (gpu) TurboGpu.started(context);
+        if (gpu) TurboGpu.started(context);
         // Speakers too, as the server tells them, where the speaker model came.
         final long speakers = speakerModel(context);
         long started = System.currentTimeMillis();
@@ -514,11 +509,10 @@ public class LocalTranscribeWorker extends Worker {
             if (sound.start < 0) sound.start = from;
             hearTurbo(context, handle, speakers, threads, decodeThreads, sound, segments, state, prompt, true, duration, from, started, variant, onGpu, watch);
         } catch (IllegalStateException e) {
-            // ggml failing on the GPU (guard.cpp): the next level next time; this
+            // ggml failing on the GPU (guard.cpp): the GPU given up (TurboGpu.failed); this
             // recording again, from its last checkpoint, on the CPU (retried).
             if (gpu && !isStopped()) {
-                if (trial) TurboGpu.trialFailed(context, variant, e.getMessage());
-                else TurboGpu.failed(context, variant, e.getMessage());
+                TurboGpu.failed(context, variant, e.getMessage());
                 gpu = false;
             }
             throw e;
@@ -528,8 +522,7 @@ public class LocalTranscribeWorker extends Worker {
                 Whisper.free(handle);
             }
             Speakers.free(speakers);
-            if (gpu && trial) TurboGpu.trialFinished(context);
-            else if (gpu) TurboGpu.finished(context);
+            if (gpu) TurboGpu.finished(context);
         }
         double heard = duration > 0 ? duration - from : 0;
         double took = (System.currentTimeMillis() - started) / 1000.0;

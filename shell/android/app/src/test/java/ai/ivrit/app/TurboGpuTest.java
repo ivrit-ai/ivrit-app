@@ -31,52 +31,36 @@ public class TurboGpuTest {
     }
 
     @Test
-    public void openClIsTriedFirstThenWebGpuThenVulkan() {
-        assertEquals("OpenCL", TurboGpu.LEVELS[0].backend);
+    public void webGpuWithThePhoneProgramsAlone() {
+        assertEquals(1, TurboGpu.LEVELS.length);
+        assertEquals("WebGPU", TurboGpu.LEVELS[0].backend);
         assertTrue(TurboGpu.LEVELS[0].flash);
-        assertEquals("WebGPU", TurboGpu.LEVELS[1].backend);
-        assertEquals("Vulkan", TurboGpu.LEVELS[TurboGpu.LEVELS.length - 1].backend);
-        assertFalse(TurboGpu.LEVELS[TurboGpu.LEVELS.length - 1].flash);
+        java.util.List<String> env = java.util.Arrays.asList(TurboGpu.LEVELS[0].env);
+        assertTrue(env.contains("GGML_WEBGPU_MOBILE"));
+        assertTrue(env.contains("GGML_WEBGPU_DISABLE_SUBGROUPS"));
+        assertTrue(env.contains("GGML_WEBGPU_SUBMIT_BATCH=8"));
+        assertEquals(java.util.Arrays.asList("auto", "cpu", "gpu"), java.util.Arrays.asList(TurboGpu.PROCESSORS));
     }
 
     @Test
-    public void webGpuKeepsItsBoundsChecksAndNoVulkanSwitchCountsForIt() {
-        // The Galaxy S25 lost the device without them (build 254).
-        assertTrue(TurboGpu.webgpu(TurboGpu.LEVELS[1]).contains("GGML_WEBGPU_KEEP_ROBUSTNESS "));
-        assertTrue(TurboGpu.webgpu(TurboGpu.LEVELS[2]).contains("GGML_WEBGPU_DISABLE_SUBGROUPS "));
-        assertEquals("", TurboGpu.webgpu(TurboGpu.LEVELS[0]));
-        assertEquals("", TurboGpu.webgpu(TurboGpu.LEVELS[TurboGpu.LEVELS.length - 1]));
-    }
-
-    @Test
-    public void aCheckThatNeverEndedIsCheckedAgainAnotherWay() {
+    public void aCheckThatNeverEndedGivesTheGpuUp() {
         TurboGpu.Verdict v = verdict("testing");
-        v.step = "probe";
-        v = TurboGpu.settle(v, "build q8_0");
-        assertNull(v.state);
-        assertEquals(1, v.level);
-        assertEquals("0:probe", v.crashed);
-        while (v.level < TurboGpu.LEVELS.length - 1) {
-            v.state = "testing";
-            v.step = "gpu-shaders";
-            v = TurboGpu.settle(v, "build q8_0");
-        }
-        v.state = "testing";
+        v.step = "gpu-shaders";
         v = TurboGpu.settle(v, "build q8_0");
         assertEquals("crashed", v.state);
-        assertTrue(v.crashes.startsWith("0:probe 1:gpu-shaders 2:gpu-shaders "));
+        assertEquals("0:gpu-shaders", v.crashed);
+        assertFalse(TurboGpu.onGpu(v, TurboGpu.GPU));
     }
 
     @Test
-    public void wrongWordsAndReportedFailuresMoveOnToo() {
+    public void wrongWordsAndReportedFailuresGiveItUpToo() {
         TurboGpu.Verdict v = verdict("testing");
         TurboGpu.fail(v, "wrong", "wrong");
-        assertNull(v.state);
-        assertEquals(1, v.level);
-        v.level = TurboGpu.LEVELS.length - 1;
+        assertEquals("wrong", v.state);
+        v = verdict("faster");
         TurboGpu.fail(v, "gpu-run-hung", "failed");
         assertEquals("failed", v.state);
-        assertTrue(v.crashes.endsWith((TurboGpu.LEVELS.length - 1) + ":gpu-run-hung "));
+        assertTrue(v.crashes.endsWith("0:gpu-run-hung "));
     }
 
     @Test
@@ -89,28 +73,26 @@ public class TurboGpuTest {
         assertNull(v.crashed);
         v.running = true;
         v = TurboGpu.settle(v, "build q8_0");
-        assertNull(v.state);
-        assertEquals(1, v.level);
+        assertEquals("crashed", v.state);
         assertEquals("0:run", v.crashed);
         assertFalse(v.running);
     }
 
     @Test
     public void aVerdictFromAnEarlierLadderStartsOver() throws Exception {
-        // The Galaxy S25 after build 252: ggml-vulkan's every level, wrong at the last.
-        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", "wrong").put("level", 4)
-            .put("ladder", 3).put("gpu", "Adreno (TM) 830").put("crashes", "0:probe 1:gpu-shaders ");
+        // Ladder 9's WebGPU level (Dawn's own programs), passed: checked again.
+        org.json.JSONObject old = new org.json.JSONObject().put("key", "build q8_0").put("state", "faster").put("level", 1)
+            .put("ladder", 9).put("gpu", "Adreno (TM) 830 · WebGPU").put("crashes", "0:gpu-run ");
         TurboGpu.Verdict v = TurboGpu.Verdict.of(old);
         assertNull(v.state);
         assertEquals(0, v.level);
         assertEquals("build q8_0", v.key);
-        assertTrue(v.crashes.startsWith("ladder3:0:probe 1:gpu-shaders wrong"));
+        assertTrue(v.crashes.startsWith("ladder9:0:gpu-run faster"));
         // Of this ladder: kept as it is.
         TurboGpu.Verdict kept = verdict("crashed");
-        kept.level = 3;
         TurboGpu.Verdict back = TurboGpu.Verdict.of(kept.json());
         assertEquals("crashed", back.state);
-        assertEquals(3, back.level);
+        assertEquals(0, back.level);
     }
 
     @Test
@@ -133,17 +115,15 @@ public class TurboGpuTest {
     @Test
     public void verdictsSurviveBeingKept() throws Exception {
         TurboGpu.Verdict v = verdict("slower");
-        v.gpu = "Adreno (TM) 830 · WebGPU";
+        v.gpu = "WebGPU: WebGPU · WebGPU";
         v.cpuSeconds = 9.5;
         v.deaths = 1;
-        v.level = 1;
         v.step = "gpu-run";
         TurboGpu.Verdict back = TurboGpu.Verdict.of(v.json());
         assertEquals("slower", back.state);
-        assertEquals("Adreno (TM) 830 · WebGPU", back.gpu);
+        assertEquals("WebGPU: WebGPU · WebGPU", back.gpu);
         assertEquals(9.5, back.cpuSeconds, 0);
         assertEquals(1, back.deaths);
-        assertEquals(1, back.level);
         assertEquals("gpu-run", back.step);
         assertEquals("WebGPU", v.json().getString("backend"));
         assertNull(TurboGpu.Verdict.of(verdict(null).json()).state);

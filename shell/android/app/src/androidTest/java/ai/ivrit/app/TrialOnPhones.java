@@ -20,16 +20,18 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 /**
- * The benchmark on phones we don't have (Firebase Test Lab: scripts/test-lab.sh), as
- * a user runs it from the Lab page: Turbo on the processor asked for (argument
- * "processor": "webgpu", the trial, by default; "auto", "cpu"; "decoding": "accurate",
- * the default, or "fast", as Settings has them), the benchmark
+ * The benchmark on a phone (over adb: am instrument; or Firebase Test Lab:
+ * scripts/test-lab.sh), as a user runs it from the Lab page: Turbo on the processor
+ * asked for (argument "processor": "auto", the default, "gpu" or "cpu"; "decoding":
+ * "accurate", the default, or "fast", as Settings has them; "screen": "false" for the
+ * GPU's check), the benchmark
  * recording transcribed by LocalTranscribeWorker, and what happened posted to the
  * site's log (POST /lab/report?kind=lab-phones): the phone, each phase, the result
  * with its transcript (scored against the reference afterwards, off the
- * leaderboard), or the trial's failure. The worker's own reports go as from any
- * phone (local-turbo, local-turbo-gpu-crash). A failed trial ends the run: the CPU
- * that would follow is not what is being tested.
+ * leaderboard), and every progress event as the page got it ("events": phase,
+ * fraction, seconds left, when), with "backwards": those whose share went down
+ * within their phase. The worker's own reports go as from any phone (local-turbo,
+ * local-turbo-gpu, local-turbo-gpu-crash).
  */
 @RunWith(AndroidJUnit4.class)
 public class TrialOnPhones {
@@ -38,13 +40,11 @@ public class TrialOnPhones {
     @Test
     public void benchmark() throws Exception {
         Bundle args = InstrumentationRegistry.getArguments();
-        String processor = args.getString("processor", TurboGpu.TRIAL);
+        String processor = args.getString("processor", TurboGpu.AUTO);
         long minutes = Long.parseLong(args.getString("minutes", "25"));
         String decoding = args.getString("decoding", Store.ACCURATE);
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
 
-        // As the Lab's switch sets it, before the library loads (Turbo.supported applies the trial's switches).
-        TurboGpu.trialReset(context);
         Store.setTurboProcessor(context, processor);
         Store.setDecoding(context, decoding);
         JSONObject report = new JSONObject()
@@ -52,9 +52,12 @@ public class TrialOnPhones {
             .put("decoding", decoding)
             .put("device", Benchmark.device(context))
             .put("app", context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName)
-            .put("build", TurboGpu.build(context));
+            .put("build", context.getPackageManager().getPackageInfo(context.getPackageName(), 0).getLongVersionCode());
         JSONArray phases = new JSONArray();
         report.put("phases", phases);
+        JSONArray events = new JSONArray();
+        int[] backwards = {0};
+        double[] shown = {-1};
         long since = System.currentTimeMillis();
         if (!Turbo.supported(context)) {
             post(context, report.put("error", "unsupported"));
@@ -62,9 +65,11 @@ public class TrialOnPhones {
         }
         report.put("gpus", new JSONArray(Whisper.gpus()));
 
-        // On the screen, as when a user runs it (the worker runs in the foreground).
+        // On the screen, as when a user runs it (the worker runs in the foreground); argument
+        // "screen" false leaves it off, so that the GPU's check runs (never with the app on
+        // the screen: TurboGpu.decide).
         Intent open = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
-        if (open != null) context.startActivity(open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        if (open != null && !"false".equals(args.getString("screen"))) context.startActivity(open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
 
         CountDownLatch finished = new CountDownLatch(1);
         JSONObject[] last = new JSONObject[1];
@@ -73,10 +78,16 @@ public class TrialOnPhones {
             if (!key.equals(event.getString("key"))) return;
             String phase = event.getString("phase");
             try {
+                double fraction = event.optDouble("fraction", 0);
                 if (phases.length() == 0 || !phase.equals(phases.getJSONObject(phases.length() - 1).getString("phase"))) {
                     phases.put(new JSONObject().put("phase", phase).put("at", (System.currentTimeMillis() - since) / 1000.0));
                     Log.i(TAG, "phase " + phase);
+                    shown[0] = -1;
                 }
+                if (fraction < shown[0]) backwards[0]++;
+                shown[0] = Math.max(shown[0], fraction);
+                events.put(new JSONObject().put("phase", phase).put("fraction", fraction)
+                    .put("left", event.optString("secondsLeft", "")).put("at", (System.currentTimeMillis() - since) / 1000.0));
             } catch (Exception ignored) {
                 // Only the timeline is short.
             }
@@ -89,18 +100,14 @@ public class TrialOnPhones {
             .input("benchmark", key, "", "benchmark", "audio/flac", "", false, "benchmark").build());
 
         long deadline = since + TimeUnit.MINUTES.toMillis(minutes);
-        String failure = null;
         while (!finished.await(5, TimeUnit.SECONDS)) {
-            failure = TurboGpu.TRIAL.equals(processor) ? TurboGpu.trialFailure(context) : null;
-            if (failure != null || System.currentTimeMillis() > deadline) break;
+            if (System.currentTimeMillis() > deadline) break;
         }
         IvritNativePlugin.watcher = null;
-        report.put("took", (System.currentTimeMillis() - since) / 1000.0);
-        if (failure == null && TurboGpu.TRIAL.equals(processor)) failure = TurboGpu.trialFailure(context);
-        if (failure != null) report.put("trialFailed", failure);
+        report.put("took", (System.currentTimeMillis() - since) / 1000.0).put("events", events).put("backwards", backwards[0]);
         if (last[0] == null) {
             WorkManager.getInstance(context).cancelAllWork();
-            if (failure == null) report.put("error", "timed out after " + minutes + " minutes");
+            report.put("error", "timed out after " + minutes + " minutes");
         } else if ("failed".equals(last[0].getString("phase"))) {
             report.put("error", last[0].optString("error", "failed"));
         } else {
@@ -115,7 +122,8 @@ public class TrialOnPhones {
             }
             report.put("timings", timings);
         }
-        Log.i(TAG, "finished: " + (failure != null ? "trial failed: " + failure : report.optString("error", "done")));
+        Log.i(TAG, "finished: " + report.optString("error", "done"));
+        Log.i(TAG, "report: " + report);
         post(context, report);
     }
 

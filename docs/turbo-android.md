@@ -4,11 +4,12 @@ The Android app transcribes recordings in the background, with the app closed
 too (`LocalTranscribeWorker`): shared recordings, watched folders, and files
 handed over from the app. It does so with the zipformer (sherpa-onnx, bundled),
 or, where the user chooses it in Settings, with ivrit.ai's Turbo model
-(whisper-large-v3-turbo trained further on Hebrew): whisper.cpp, on the CPU, or
-on the GPU through Vulkan where the phone's GPU passes a check. Live and the
-page's own transcription (without Drive) keep the zipformer.
+(whisper-large-v3-turbo trained further on Hebrew): whisper.cpp, on the GPU
+through WebGPU with the app's own programs where the phone's GPU passes a check,
+or on the CPU. Live and the page's own transcription (without Drive) keep the
+zipformer.
 
-Target: Android phones from 2023 on, mid-range and up.
+Offered on Galaxy S23s and later (decisions 24-25).
 
 ## How it fits together
 
@@ -16,7 +17,7 @@ Target: Android phones from 2023 on, mid-range and up.
 |---|---|
 | The model, quantized from ivrit-ai's f16 ggml file when the server starts, served at `/models/turbo/` | `scripts/turbo_model.py`, `launch.sh`, `server/app_site.py` |
 | whisper.cpp 1.9.5 and the Vulkan and SPIR-V headers, fetched pinned | `scripts/fetch-whisper.sh` |
-| The native library: whisper.cpp with ggml's CPU and Vulkan backends, and the JNI bridge | `shell/android/app/src/main/cpp/` |
+| The native library: whisper.cpp with ggml's CPU and WebGPU backends (Google's Dawn), and the JNI bridge | `shell/android/app/src/main/cpp/` |
 | Which phones, the download, threads | `Turbo.java` |
 | GPU or CPU: the check, crash guard, the user's choice | `TurboGpu.java` |
 | Words, segments and speakers as the server makes them (ports of faster-whisper, stable-ts and ivrit's diarization); sound to 16 kHz | `shell/native/` (its README), `TurboTranscript.java`, `Speakers.java`, `Resampler.java` |
@@ -60,10 +61,11 @@ Open to comment; each with what it rests on.
    its words differed from the server's more (decision 15). On the CPU beam 5
    took three times the recording's length, greedy about 1.1.
 
-4. **Who is offered Turbo:** arm64, CPU with dot products and half floats
-   (`asimddp`, `asimdhp`), about 6 GB of memory (5 GiB reported). The
-   library is built for `armv8.2-a+dotprod+fp16`: a phone without them would
-   crash, so the check is a must, not a nicety.
+4. **Who is offered Turbo:** Galaxy S23s and later (decisions 24-25), Android
+   13 on, 8 GB, arm64 with dot products and half floats
+   (`asimddp`, `asimdhp`). The library is built for `armv8.2-a+dotprod+fp16`:
+   a phone without them would crash, so that check is a must, not a nicety.
+   Up to build 272: any such phone with about 6 GB.
 
 5. **Threads:** the cores at least half as capable as the best, by the
    kernel's own measure (`cpu_capacity`), at most eight: all eight on a Galaxy
@@ -106,7 +108,7 @@ Open to comment; each with what it rests on.
    comma here and there. Memory: about 70 MB of sound and spectrogram a
    piece.
 
-9. **Two GPU backends: WebGPU first, then Vulkan.** Both in the same library,
+9. **Two GPU backends: WebGPU first, then Vulkan** (since decision 25: WebGPU with our programs alone). Both in the same library,
    with the same model file. WebGPU is ggml's WebGPU backend on Google's Dawn
    (its Android release, built into the app; Dawn runs on the phone's Vulkan
    driver but writes its own, conservative shaders, and carries workarounds for
@@ -353,6 +355,47 @@ Open to comment; each with what it rests on.
     faster on the 8a and as accurate against the CPU, but greedy with them took 372
     s, re-decoding far more (4624 batched steps against 299; the phone hot from the
     run before): off until a cool run tells the two apart.
+
+24. **OpenCL on Galaxy S23s and later, no other phones** (2026-11-24, never
+    released: decision 25 replaced it the same day;
+    `Turbo.supported`, `TurboGpu.LEVELS`). Turbo is worth it where the GPU runs
+    it: on the S25's Adreno 830 through OpenCL, 0.6 of the recording's length with
+    beam search, against about 1.1 on its CPU greedily (and mid-range CPUs are
+    slower). OpenCL is efficient there and already done; ggml-opencl takes Adreno
+    GPUs alone. So Turbo is offered on Samsung's S series from the S23 (model
+    numbers SM-S91x, S92x, S93x and on, and the FEs S711, S721, S731), Android 13
+    on, 8 GB, where the SoC is Qualcomm's (`Build.SOC_MANUFACTURER` QTI) and
+    ggml finds an Adreno through OpenCL. Every S23 is Snapdragon (Adreno 740; the
+    S23 FE: 730 or Exynos), the S25s too (Adreno 830; not the S25 FE); the S24 and
+    S24+ are Exynos (Xclipse 940) in many countries, Europe's among them, and
+    Snapdragon in others; the S24 Ultra is Snapdragon everywhere. Exynos phones and all others keep the zipformer, and a phone that
+    had Turbo before lets its downloads go (about 900 MB). The check stays, OpenCL
+    its one level (ladder 10, so earlier verdicts are checked again); WebGPU and
+    Vulkan are out of the build (gradle `-PturboWebgpu=ON`, `-PturboVulkan=ON`
+    bring them back), with the Lab's WebGPU trial and its programs' test
+    (decisions 21-23); their code and patches stay, and the browser's Turbo
+    (`/lab/turbo`) keeps WebGPU. The S23 never ran Turbo on OpenCL: its WebGPU
+    trial stalled on Test Lab, which says nothing of OpenCL.
+
+25. **WebGPU with our programs, the one GPU path; OpenCL deprecated** (2026-11-24;
+    `TurboGpu.LEVELS`, `Turbo.supported`). The Lab's WebGPU trial (decisions
+    21-23) becomes Turbo's GPU path: the same switches (`GGML_WEBGPU_MOBILE`, no
+    subgroups or subgroup matrices, no dot product, 8 programs a submission), now
+    behind the check (decision 10), its one level (ladder 11). On the Galaxy S25,
+    the benchmark (297 s of Hebrew) greedily: WebGPU 98.1 s (2.57% WER; the
+    user's run from the Lab, app on the screen), OpenCL 88.8 s (screen off, over
+    adb); with beam search OpenCL 107.5 s; a minute over adb, beam 5, WebGPU 20.8
+    and 24.8 s against OpenCL's 20.7 and 22.9 s, the same words. About even on
+    Adreno; WebGPU also runs Exynos' Xclipse (an S24 on Test Lab: 136 s) and Mali,
+    and is the path the browser and iPhones can share. So Turbo is offered on
+    every Galaxy S23 and later, Exynos ones too (decision 24's rule without the
+    Snapdragon test); the GPU itself is the check's to judge, in the background,
+    and a phone whose GPU fails it transcribes on the CPU. OpenCL and Vulkan are
+    out of the build (gradle `-PturboOpencl=ON`, `-PturboVulkan=ON` bring them
+    back); their code and patches stay. Open: the S23 (Adreno 740), whose trial
+    stalled on Test Lab at build 271, with decision 22's programs; the check, its
+    watchdog included, is what stands between an S23 and a stalled recording (on
+    the CPU then).
 
 ## Verified, and not yet
 

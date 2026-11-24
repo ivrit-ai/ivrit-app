@@ -44,10 +44,6 @@
         <h2>בדיקת מהירות לטלפון</h2>
         <p>מתמללים 5 דקות של עברית (ראיון, שני דוברים) עם מודל ה-Turbo, בדיוק כמו תמלול רגיל בטלפון, ומודדים כמה זמן זה לוקח וכמה מדויק התמלול. בפעם הראשונה מורידים את המודל (874MB, עדיף ב-Wi-Fi) ובודקים את המעבד הגרפי, וזה לוקח יותר זמן.</p>
         <div class="tests"><button id="bench-start" class="btn primary" type="button">התחלת הבדיקה</button></div>
-        <!-- The WebGPU trial (TurboGpu.trial, processor "webgpu"): recordings and this
-             benchmark with the app's own WebGPU programs for phone GPUs. -->
-        <label id="trial-box" class="note" hidden><input id="trial" type="checkbox" /> מנוע GPU חדש (WebGPU, ניסיוני)</label>
-        <div id="trial-state" class="note" hidden></div>
         <div id="bench-status" class="verdict" hidden></div>
         <div id="bench-result"></div>
         <div id="bench-actions" class="tests" hidden>
@@ -336,33 +332,6 @@
             status("לא ניתן להתחיל את הבדיקה בטלפון הזה.");
             $("bench-start").disabled = false;
           }
-        });
-        // The WebGPU trial: chosen here, its state from the app ("ready", "restart", "failed: ...").
-        const TRIAL = {
-          ready: "פעיל: התמלולים והבדיקה ירוצו על המעבד הגרפי עם המנוע החדש.",
-          restart: "כדי להפעיל, יש לסגור את האפליקציה לגמרי (מרשימת האפליקציות האחרונות) ולפתוח אותה שוב.",
-        };
-        const showTrial = (current) => {
-          const on = current?.processor === "webgpu";
-          $("trial").checked = on;
-          const state = current?.trial || "";
-          $("trial-state").hidden = !on;
-          $("trial-state").textContent = TRIAL[state] || (state.startsWith("failed") ? `המנוע החדש נכשל בטלפון הזה, והתמלול חזר למעבד הרגיל. כדי לנסות שוב: לכבות ולהדליק. (${state.slice(8)})` : "");
-        };
-        try {
-          showTrial(await native("onDeviceModel"));
-          $("trial-box").hidden = false;
-        } catch {
-          // No Turbo on this phone: no trial either.
-        }
-        $("trial").addEventListener("change", async () => {
-          $("trial").disabled = true;
-          try {
-            showTrial(await native("onDeviceModel", { processor: $("trial").checked ? "webgpu" : "auto" }));
-          } catch {
-            status("לא הצלחנו לשנות את ההגדרה.");
-          }
-          $("trial").disabled = false;
         });
         $("bench-share").addEventListener("click", () => {
           if (shared) native("shareText", { title: "בדיקת מהירות · ivrit.ai", text: `${shared.text}\n${shared.url}` }).catch(() => {});

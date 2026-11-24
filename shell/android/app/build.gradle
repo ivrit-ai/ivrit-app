@@ -16,11 +16,11 @@ android {
         externalNativeBuild {
             cmake {
                 abiFilters 'arm64-v8a'
-                // -PturboVulkan=OFF, -PturboWebgpu=OFF, -PturboOpencl=OFF: without that GPU backend
-                // (src/main/cpp/CMakeLists.txt).
-                arguments '-DCMAKE_BUILD_TYPE=Release', "-DIVRIT_TURBO_VULKAN=${project.findProperty('turboVulkan') ?: 'ON'}",
+                // WebGPU alone (TurboGpu); -PturboOpencl=ON, -PturboVulkan=ON bring back those
+                // GPU backends, which no check tries (src/main/cpp/CMakeLists.txt).
+                arguments '-DCMAKE_BUILD_TYPE=Release', "-DIVRIT_TURBO_VULKAN=${project.findProperty('turboVulkan') ?: 'OFF'}",
                     "-DIVRIT_TURBO_WEBGPU=${project.findProperty('turboWebgpu') ?: 'ON'}",
-                    "-DIVRIT_TURBO_OPENCL=${project.findProperty('turboOpencl') ?: 'ON'}"
+                    "-DIVRIT_TURBO_OPENCL=${project.findProperty('turboOpencl') ?: 'OFF'}"
             }
         }
         aaptOptions {

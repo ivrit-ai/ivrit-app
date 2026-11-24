@@ -10,29 +10,26 @@ import java.util.List;
 import org.json.JSONObject;
 
 /**
- * Whether the Turbo model runs on the phone's GPU or its CPU, and through which of
- * ggml's GPU backends: WebGPU (Google's Dawn, built into the app, on the phone's
- * Vulkan driver, with Dawn's own shaders and its workarounds for drivers' bugs) or
- * Vulkan directly (ggml-vulkan).
+ * Whether the Turbo model runs on the phone's GPU or its CPU. The GPU runs it through
+ * ggml's WebGPU backend on Google's Dawn (built into the app, on the phone's Vulkan
+ * driver) with the app's own programs for phone GPUs (patches/ggml-webgpu-phones.patch),
+ * on the phones Turbo is offered on (Turbo.supported). OpenCL and Vulkan, used before,
+ * are out of the build (docs/turbo-android.md, decision 25).
  *
- * Phones' GPU drivers vary, and a bad one can give wrong text, hang, or bring the app
- * down, so the GPU is used only once it has passed a check on this phone, for this
- * build of its system (drivers come with it) and this model: a 12-second Hebrew
- * recording (res/raw/turbo_check, store/fixtures/hebrew-12s.ogg) on the CPU, then on
- * the GPU, twice (the first run also builds its shaders). It passes when the GPU's
- * words agree with the CPU's (AGREEMENT) and its second run is faster. What it found
- * is reported to the site (POST /lab/report?kind=local-turbo-gpu).
+ * A GPU driver can give wrong text, hang, or bring the app down, so the GPU is used
+ * only once it has passed a check on this phone, for this build of its system
+ * (drivers come with it) and this model: a 12-second Hebrew recording
+ * (res/raw/turbo_check, store/fixtures/hebrew-12s.ogg) on the CPU, then on the GPU,
+ * twice (the first run also builds its programs). It passes when the GPU's words agree
+ * with the CPU's (AGREEMENT) and its second run is faster. What it found is reported
+ * to the site (POST /lab/report?kind=local-turbo-gpu).
  *
- * The check tries LEVELS one at a time, a level per transcription, until one passes:
- * OpenCL first (Adreno's alone), then WebGPU, then ggml-vulkan with ever safer
- * switches. A level fails when ggml
- * says so (the driver refusing a shader: guard.cpp), when the process dies in it
- * (found the next time), when a GPU step runs far past its time (Watchdog: the
- * process is ended, as a hung GPU cannot be interrupted), or, for GPU runs after a
- * pass, when two die in a row. Each failure is reported (kind=local-turbo-gpu-crash)
- * with the step, ggml's log, and from Android 11 the phone's exit records with native
- * tombstones; the recording goes on on the CPU. After the last level, the GPU is
- * given up.
+ * The check fails when ggml says so (guard.cpp), when the process dies in it (found
+ * the next time), when a GPU step runs far past its time (Watchdog: the process is
+ * ended, as a hung GPU cannot be interrupted), or, for GPU runs after a pass, when
+ * two die in a row. Each failure is reported (kind=local-turbo-gpu-crash) with the
+ * step, ggml's log, and the phone's exit records with native tombstones; the
+ * recording goes on on the CPU, and the GPU is given up for that system build.
  *
  * The user can choose (the web app's Settings): automatic (the GPU when it passed and
  * is faster), the CPU, or the GPU whenever it gives the right words, faster or not.
@@ -43,8 +40,7 @@ final class TurboGpu {
     static final String AUTO = "auto";
     static final String CPU = "cpu";
     static final String GPU = "gpu";
-    static final String TRIAL = "webgpu"; // the Lab's WebGPU trial (trial())
-    static final String[] PROCESSORS = {AUTO, CPU, GPU, TRIAL};
+    static final String[] PROCESSORS = {AUTO, CPU, GPU};
     /** The GPU's words against the CPU's: a little apart is half floats, more is a broken driver. */
     static final double AGREEMENT = 0.85;
     /** GPU runs that died in a row before the level is given up. */
@@ -55,9 +51,9 @@ final class TurboGpu {
         void at(double fraction);
     }
 
-    /** A way to run on the GPU: one of ggml's backends, with switches. */
+    /** A way to run on the GPU: one of ggml's backends, with switches (as WebGPU and Vulkan had). */
     static final class Level {
-        final String backend; // in ggml's device name: "OpenCL" (GPUOpenCL), "WebGPU", "Vulkan" (Vulkan0)
+        final String backend; // in ggml's device name: "WebGPU" ("OpenCL", "Vulkan" before)
         final String[] env; // the backend's switches ("NAME", or "NAME=VALUE"), set before ggml starts it
         final boolean flash; // whisper.cpp's flash attention
 
@@ -68,45 +64,29 @@ final class TurboGpu {
         }
     }
 
-    private static final String NO_COOPMAT = "GGML_VK_DISABLE_COOPMAT";
-    private static final String NO_COOPMAT2 = "GGML_VK_DISABLE_COOPMAT2";
-    // The app's own (patches/ggml-vulkan-switches.patch).
-    private static final String KEEP_ROBUSTNESS = "GGML_VK_KEEP_ROBUSTNESS";
-    private static final String NO_SUBGROUPS = "GGML_VK_DISABLE_SUBGROUP_ARITHMETIC";
-    // patches/ggml-webgpu-phones.patch: Dawn's bounds checks kept, features left unused, the phone programs.
-    private static final String WEBGPU = "GGML_WEBGPU_";
-    private static final String WEBGPU_ROBUSTNESS = "GGML_WEBGPU_KEEP_ROBUSTNESS";
-    private static final String WEBGPU_NO_MATRIX = "GGML_WEBGPU_DISABLE_SUBGROUP_MATRIX";
-
     /**
-     * Safest last. On the Galaxy S25 (Adreno 830), ggml-vulkan: with cooperative
-     * matrices the GPU did not start; without, the driver refused the q8_0
-     * matrix-vector shader (also with robustness kept); without subgroup reductions
-     * it hung; with everything off its words were wrong. Hence WebGPU first. As
-     * ggml-webgpu has it (no bounds checks, cooperative matrices), the S25 lost the
-     * device on the first work sent, with flash attention and without (build 254):
-     * so it is not tried so. OpenCL (ggml-opencl, which takes Adreno GPUs alone)
-     * gave the CPU's very words there, twice as fast (over adb).
+     * WebGPU with the app's programs (GGML_WEBGPU_MOBILE: a matrix multiply and a flash
+     * attention that need no subgroups, chosen by the GPU's maker; with subgroups,
+     * Adreno's and Mali's drivers stopped the work as too slow and lost the device),
+     * without Dawn's bounds checks (25% of the encoder) or subgroup matrices, and its
+     * work sent 8 programs at a time (a phone's driver stops a long submission). On a
+     * Galaxy S25 the CPU's very words, a little faster than OpenCL (decisions 21-25).
+     * A level of its own still, as LEVELS were a ladder of backends and switches
+     * (decision 11).
      */
     static final Level[] LEVELS = {
-        new Level("OpenCL", true),
-        new Level("WebGPU", true, WEBGPU_ROBUSTNESS, WEBGPU_NO_MATRIX),
-        new Level("WebGPU", false, WEBGPU_ROBUSTNESS, WEBGPU_NO_MATRIX,
-            "GGML_WEBGPU_DISABLE_SUBGROUPS", "GGML_WEBGPU_DISABLE_DOT_PRODUCT"),
-        new Level("Vulkan", true),
-        new Level("Vulkan", true, NO_COOPMAT, NO_COOPMAT2),
-        new Level("Vulkan", true, NO_COOPMAT, NO_COOPMAT2, KEEP_ROBUSTNESS),
-        new Level("Vulkan", true, NO_COOPMAT, NO_COOPMAT2, KEEP_ROBUSTNESS, NO_SUBGROUPS),
-        new Level("Vulkan", false, NO_COOPMAT, NO_COOPMAT2, KEEP_ROBUSTNESS, NO_SUBGROUPS,
-            "GGML_VK_DISABLE_INTEGER_DOT_PRODUCT", "GGML_VK_DISABLE_F16", "GGML_VK_DISABLE_FUSION"),
+        new Level("WebGPU", true, "GGML_WEBGPU_MOBILE", "GGML_WEBGPU_DISABLE_SUBGROUP_MATRIX",
+            "GGML_WEBGPU_DISABLE_SUBGROUPS", "GGML_WEBGPU_DISABLE_DOT_PRODUCT", "GGML_WEBGPU_SUBMIT_BATCH=8"),
     };
     /**
      * These levels' version: a verdict from an earlier one starts over (Verdict.of).
      * 7: the check's run includes DTW's pass for word times (shell/native/transcript).
      * 8: the GPU's run with beam search (Turbo.beams), the CPU's greedy.
      * 9: the decoder's threads tuned, and a run with the decoder on the CPU.
+     * 10: OpenCL alone (WebGPU's and Vulkan's levels gone); not released.
+     * 11: WebGPU with the app's programs alone.
      */
-    static final int LADDER = 9;
+    static final int LADDER = 11;
 
     /** What was found on this phone: kept between runs, one at a time. */
     static final class Verdict {
@@ -126,7 +106,6 @@ final class TurboGpu {
         String crashed; // set when one failed just now (not kept)
         int decodeThreads; // the decoder's fastest thread count here (Whisper.tuneDecoder); 0: not yet tuned
         boolean decoderCpu; // the decoder faster on the CPU, the encoder on the GPU (Whisper.load)
-        Level forced; // the trial's level (trial()), not one of LEVELS; never saved
         double splitSeconds; // the timed GPU run with the decoder on the CPU
 
         Verdict(String key) {
@@ -168,7 +147,7 @@ final class TurboGpu {
         }
 
         Level level() {
-            return forced != null ? forced : LEVELS[level];
+            return LEVELS[level];
         }
 
         /** Gives the right words on the GPU. */
@@ -321,41 +300,15 @@ final class TurboGpu {
     }
 
     /**
-     * ggml-opencl keeps its built kernels (seconds' work) where it is told, before
-     * it starts: else in a temporary directory an app may not have.
+     * Before the library loads (Turbo.supported): the level's switches, as ggml-webgpu
+     * reads its own once, when ggml first starts.
      */
-    private static void caches(Context context) {
-        try {
-            File dir = new File(context.getCacheDir(), "opencl");
-            dir.mkdirs();
-            android.system.Os.setenv("GGML_OPENCL_KERNEL_CACHE_DIR", dir.getPath(), false);
-        } catch (Exception ignored) {
-            // Built again each time.
-        }
-    }
-
-    /** ggml-webgpu's switches as the process set them first, or null before any. */
-    private static String webgpuSet;
-
-    /** The switches of a level as one string, those of ggml-webgpu alone. */
-    static String webgpu(Level level) {
-        StringBuilder set = new StringBuilder();
-        for (String name : level.env) if (name.startsWith(WEBGPU)) set.append(name).append(' ');
-        return set.toString();
-    }
-
-    /**
-     * Whether the level's switches can be had in this process: ggml-webgpu reads
-     * its own once, as ggml first starts (which the first apply() comes before), so a
-     * WebGPU level after another in one process needs a new one.
-     */
-    private static boolean applicable(Level level) {
-        return !"WebGPU".equals(level.backend) || webgpuSet == null || webgpuSet.equals(webgpu(level));
+    static void early() {
+        apply(LEVELS[0]);
     }
 
     /** The level's switches, set before ggml first starts that GPU backend in this process. */
     private static void apply(Level level) {
-        if (webgpuSet == null) webgpuSet = webgpu(level);
         for (String name : level.env) {
             try {
                 int eq = name.indexOf('=');
@@ -373,7 +326,6 @@ final class TurboGpu {
      * goes on the CPU, and a later one, in the background, checks.
      */
     static Verdict decide(Context context, String variant, String processor, Progress checking) throws Exception {
-        caches(context);
         Verdict v = settle(load(context), key(variant));
         save(context, v);
         if (v.crashed != null) report(context, variant, v);
@@ -390,108 +342,6 @@ final class TurboGpu {
         android.app.ActivityManager.RunningAppProcessInfo me = new android.app.ActivityManager.RunningAppProcessInfo();
         android.app.ActivityManager.getMyMemoryState(me);
         return me.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
-    }
-
-    /**
-     * The Lab's trial of WebGPU with the app's own programs for phone GPUs
-     * (patches/ggml-webgpu-phones.patch, GGML_WEBGPU_MOBILE: a matrix multiply and a
-     * flash attention that need no subgroups; with subgroups, Adreno's and Mali's
-     * drivers stop the work as too slow and lose the device): the encoder on WebGPU,
-     * the decoder on the CPU, without the check (the benchmark's words judge it).
-     * Its switches are set as the library loads (early()), as ggml reads them once;
-     * chosen with the app running, it needs the app started again. A failure, or the
-     * process dying in it, puts it back on the CPU until it is chosen again or the
-     * app is updated (a new build may have fixed it), and is reported
-     * (kind=local-turbo-gpu-crash, crashed "trial:...").
-     */
-    // GPU work 8 kernels a submission: a phone's driver stops a long one (as Windows' does).
-    static final Level TRIAL_LEVEL = new Level("WebGPU", true, "GGML_WEBGPU_MOBILE", WEBGPU_NO_MATRIX,
-        "GGML_WEBGPU_DISABLE_SUBGROUPS", "GGML_WEBGPU_DISABLE_DOT_PRODUCT", "GGML_WEBGPU_SUBMIT_BATCH=8");
-
-    /** Before the library loads (Turbo.supported): the trial's switches, where it is chosen. */
-    static void early(Context context) {
-        if (TRIAL.equals(Store.turboProcessor(context)) && trialFailure(context) == null) {
-            apply(TRIAL_LEVEL);
-        }
-    }
-
-    /** The trial as it stands here: "ready", "restart" (the app must start again), or "failed: ..." */
-    static String trialState(Context context) {
-        String failed = trialFailure(context);
-        if (failed != null) return "failed: " + failed;
-        return webgpu(TRIAL_LEVEL).equals(webgpuSet) ? "ready" : "restart";
-    }
-
-    /** Why the trial failed in this build, or null (none, or in an earlier build). */
-    static String trialFailure(Context context) {
-        android.content.SharedPreferences p = prefs(context);
-        return p.getLong("trial_failed_build", 0) == build(context) ? p.getString("trial_failed", null) : null;
-    }
-
-    /** The app's build number (versionCode), or 0. */
-    @SuppressWarnings("deprecation") // getLongVersionCode: Android 9 on
-    static long build(Context context) {
-        try {
-            return context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionCode;
-        } catch (Exception e) {
-            return 0;
-        }
-    }
-
-    /** Chosen (again): an earlier failure forgotten. */
-    static void trialReset(Context context) {
-        prefs(context).edit().remove("trial_failed").remove("trial_running").commit();
-    }
-
-    /**
-     * A verdict for one run with the trial: state "trial" when it is to run on
-     * WebGPU, else why not (the run goes on the CPU). A run that died in it is
-     * found here, the next time.
-     */
-    static Verdict trial(Context context, String variant) {
-        caches(context);
-        android.content.SharedPreferences p = prefs(context);
-        Verdict v = new Verdict(key(variant));
-        Verdict saved = load(context);
-        if (saved != null && v.key.equals(saved.key)) v.decodeThreads = saved.decodeThreads;
-        v.forced = TRIAL_LEVEL;
-        v.decoderCpu = true;
-        if (p.getBoolean("trial_running", false)) {
-            v.since = p.getLong("trial_since", 0);
-            v.crashed = "trial:run";
-            v.step = "trial";
-            p.edit().putBoolean("trial_running", false).putString("trial_failed", "crashed")
-                .putLong("trial_failed_build", build(context)).commit();
-            report(context, variant, v);
-            v.crashed = null;
-        }
-        String state = trialState(context);
-        v.state = "ready".equals(state) ? "trial" : state;
-        if ("trial".equals(v.state)) {
-            for (String g : Whisper.gpus()) if (g.startsWith(TRIAL_LEVEL.backend)) v.gpu = g;
-        }
-        return v;
-    }
-
-    static void trialStarted(Context context) {
-        prefs(context).edit().putBoolean("trial_running", true).putLong("trial_since", System.currentTimeMillis()).commit();
-    }
-
-    static void trialFinished(Context context) {
-        prefs(context).edit().putBoolean("trial_running", false).commit();
-    }
-
-    /** ggml failed on WebGPU (guard.cpp; the patch throws where ggml-webgpu ended the process): reported, then the CPU. */
-    static void trialFailed(Context context, String variant, String why) {
-        android.content.SharedPreferences p = prefs(context);
-        Verdict v = new Verdict(key(variant));
-        v.since = p.getLong("trial_since", 0);
-        v.crashed = "trial:failed";
-        v.step = "trial";
-        v.error = why == null ? "" : why;
-        p.edit().putBoolean("trial_running", false).putString("trial_failed", v.error.isEmpty() ? "failed" : v.error)
-            .putLong("trial_failed_build", build(context)).commit();
-        report(context, variant, v);
     }
 
     /** ggml's device index for the verdict's backend, for Whisper.load, or -1 where it has none. */
@@ -530,11 +380,6 @@ final class TurboGpu {
     }
 
     private static void check(Context context, String variant, Verdict v, Progress progress) throws Exception {
-        if (!applicable(v.level())) {
-            // A WebGPU level after another failed in this process (not by crashing): in a
-            // new one, as a crash would have it (WorkManager starts the work again).
-            android.os.Process.killProcess(android.os.Process.myPid());
-        }
         apply(v.level());
         v.state = "testing";
         v.since = System.currentTimeMillis();

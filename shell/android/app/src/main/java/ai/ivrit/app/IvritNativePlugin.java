@@ -71,8 +71,10 @@ public class IvritNativePlugin extends Plugin {
         // Watched folders: looked at whenever the app opens, and every 15 minutes.
         FolderWatchWorker.schedule(getContext());
         FolderWatchWorker.checkNow(getContext());
-        // Turbo ready ahead where this phone transcribes recordings (on Wi-Fi, charging).
+        // Turbo ready ahead where this phone transcribes recordings (on Wi-Fi, charging);
+        // its downloads let go where it is no longer offered.
         PrepareWorker.schedule(getContext());
+        if (!Turbo.supported(getContext())) Turbo.forgetAll(getContext());
     }
 
     @Override
@@ -154,10 +156,7 @@ public class IvritNativePlugin extends Plugin {
             Store.setOnDeviceModel(context, model);
             for (String variant : Turbo.VARIANTS) if (!variant.equals(model)) Turbo.forget(context, variant);
         }
-        if (processor != null) {
-            if (TurboGpu.TRIAL.equals(processor) && !TurboGpu.TRIAL.equals(Store.turboProcessor(context))) TurboGpu.trialReset(context);
-            Store.setTurboProcessor(context, processor);
-        }
+        if (processor != null) Store.setTurboProcessor(context, processor);
         if (decoding != null) Store.setDecoding(context, decoding);
         if (model != null || processor != null) PrepareWorker.schedule(context);
         String chosen = Store.onDeviceModel(context);
@@ -166,7 +165,6 @@ public class IvritNativePlugin extends Plugin {
             .put("ready", Turbo.ready(context, chosen))
             .put("processor", Store.turboProcessor(context))
             .put("decoding", Store.decoding(context));
-        if (TurboGpu.TRIAL.equals(Store.turboProcessor(context))) result.put("trial", TurboGpu.trialState(context));
         TurboGpu.Verdict verdict = TurboGpu.load(context);
         if (verdict != null && verdict.state != null && verdict.key.endsWith(" " + chosen)) {
             result.put("gpu", new JSObject()

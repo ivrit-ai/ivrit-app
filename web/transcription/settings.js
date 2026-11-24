@@ -125,10 +125,8 @@ async function phoneModel(host, onModel) {
     ? el("span", { text: tr(`phoneModel_${sizes[0][0]}`, { megabytes: sizes[0][1] }) })
     : el("select", { class: "tr-select", "aria-label": tr("phoneModelTitle") },
       sizes.map(([value, megabytes]) => el("option", { value, text: tr(`phoneModel_${value}`, { megabytes }) })));
-  // The Lab's WebGPU trial ("webgpu") is shown here only while it is chosen there.
-  const processors = current.processor === "webgpu" ? [...PROCESSORS, "webgpu"] : PROCESSORS;
   const processor = el("select", { class: "tr-select", "aria-label": tr("phoneProcessorTitle") },
-    processors.map((value) => el("option", { value, text: tr(`phoneProcessor_${value}`) })));
+    PROCESSORS.map((value) => el("option", { value, text: tr(`phoneProcessor_${value}`) })));
   const note = el("span", { class: "sub" });
   const gpuNote = el("span", { class: "sub" });
   const processorField = el("label", { class: "tr-field" }, [el("span", { text: tr("phoneProcessorTitle") }), processor, gpuNote]);

@@ -19,9 +19,9 @@ import org.json.JSONObject;
  * ivrit.ai's Turbo model (whisper-large-v3-turbo, trained further on Hebrew) on the
  * phone, with whisper.cpp (Whisper): far more accurate than the zipformer
  * (LocalModel), with speakers, and far larger and slower. It transcribes every
- * recording on phones that can run it (supported): arm64 with dot products and half
- * floats, and about 6 GB of memory, as it takes about 1 GB while it works. The
- * zipformer transcribes live, and recordings on the phones that cannot.
+ * recording on the phones it is offered on (supported): Galaxy S23 and on, whose
+ * GPUs run it through WebGPU (TurboGpu). The zipformer transcribes live, and
+ * recordings on all other phones.
  *
  * The model is ggml's q8_0 or q5_1 (scripts/turbo_model.py), served by the site at
  * /models/turbo/ and downloaded the first time it is used, resumed where a download
@@ -64,7 +64,7 @@ final class Turbo {
      * sentence again (shell/native/transcript): 120-second pieces took 29% longer than one.
      */
     static final double CHUNK_SECONDS = 600;
-    private static final long MIN_MEMORY = 5L << 30; // a 6 GB phone reports about 5.5
+    private static final long MIN_MEMORY = 6L << 30; // an 8 GB phone reports about 7.3 GB (6.8 GiB)
 
     interface Progress {
         void downloaded(long done, long total);
@@ -82,21 +82,39 @@ final class Turbo {
 
     private static Boolean supported;
 
+    /**
+     * Galaxy S23 and on, Snapdragon and Exynos alike: the GPU runs Turbo through WebGPU
+     * with the app's own programs (TurboGpu), about a third of the recording's length
+     * on an S25, greedily. Other phones keep the zipformer: on a CPU Turbo takes longer than the
+     * recording, and other phones' GPUs are not known well enough (docs/turbo-android.md,
+     * decisions 24-25). Android 13 (the S23's first) on, 8 GB, dot products and half
+     * floats (the library is built for them). The GPU itself is the check's to judge,
+     * in the background (never here: a driver that crashes takes the app with it).
+     */
     static synchronized boolean supported(Context context) {
         if (supported == null) {
-            // Android 9 on: the library links Vulkan 1.1 (src/main/cpp/CMakeLists.txt).
-            supported = Build.VERSION.SDK_INT >= 28
+            supported = Build.VERSION.SDK_INT >= 33
+                && galaxy(Build.MANUFACTURER, Build.MODEL)
                 && Build.SUPPORTED_ABIS.length > 0 && "arm64-v8a".equals(Build.SUPPORTED_ABIS[0])
                 && memory(context) >= MIN_MEMORY && cpuFeatures().containsAll(Arrays.asList("asimddp", "asimdhp"))
-                && early(context) && Whisper.available();
+                && early() && Whisper.available();
         }
         return supported;
     }
 
-    /** The Lab's WebGPU trial's switches, before ggml can read them (TurboGpu.early). */
-    private static boolean early(Context context) {
-        TurboGpu.early(context);
+    /** WebGPU's switches, before ggml can read them (TurboGpu.early). */
+    private static boolean early() {
+        TurboGpu.early();
         return true;
+    }
+
+    /**
+     * A Galaxy S23 or later, FE editions too, by Samsung's model number: SM-S91x the S23s,
+     * S92x the S24s, S93x the S25s and on; S711, S721, S731 the FEs. (Phones of a decade
+     * ago had SM-S9xx numbers too, and fail the other tests.)
+     */
+    static boolean galaxy(String manufacturer, String model) {
+        return "samsung".equalsIgnoreCase(manufacturer) && model != null && model.matches("SM-S(9[1-9]|7[1-9])\\d.*");
     }
 
     static long memory(Context context) {
@@ -261,6 +279,19 @@ final class Turbo {
         String name = "ggml-turbo-" + variant;
         File model = model(context, name);
         for (File f : new File[] {model, manifest(context, name), new File(model.getPath() + ".part")}) {
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+        }
+    }
+
+    /**
+     * Every model kept, and any download: on a phone Turbo is no longer offered on
+     * (earlier builds offered it to any arm64 phone with 6 GB), about 900 MB back.
+     */
+    static void forgetAll(Context context) {
+        File[] files = dir(context).listFiles();
+        if (files == null) return;
+        for (File f : files) {
             //noinspection ResultOfMethodCallIgnored
             f.delete();
         }

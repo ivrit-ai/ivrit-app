@@ -1,6 +1,6 @@
 # The Turbo model's runtime (Whisper.java): whisper.cpp (scripts/fetch-whisper.sh)
-# on the CPU, and on the GPU, through OpenCL (Adreno's), WebGPU (Google's Dawn) or
-# Vulkan, where the phone's passes its check (TurboGpu), linked into one library
+# on the CPU, and on the GPU through WebGPU (Google's Dawn, with the app's programs
+# for phone GPUs), where the phone's passes its check (TurboGpu), linked into one library
 # with turbo.c, and shell/native's transcript and speakers (speakers.c for
 # Speakers.java). Built for arm64-v8a with dot
 # products and half floats, which every phone it is offered on has (Turbo.supported
@@ -8,11 +8,12 @@
 cmake_minimum_required(VERSION 3.22)
 project(ivritturbo C CXX)
 
-# Each GPU backend can be left out (gradle -PturboVulkan=OFF, -PturboWebgpu=OFF,
-# -PturboOpencl=OFF).
-option(IVRIT_TURBO_VULKAN "the Turbo model on the GPU too, through Vulkan" ON)
+# Each GPU backend can be left out or put in (gradle -PturboWebgpu=OFF,
+# -PturboOpencl=ON, -PturboVulkan=ON). OpenCL (Adreno's) and Vulkan are out:
+# TurboGpu tries WebGPU alone (docs/turbo-android.md, decision 25).
+option(IVRIT_TURBO_VULKAN "the Turbo model on the GPU too, through Vulkan" OFF)
 option(IVRIT_TURBO_WEBGPU "the Turbo model on the GPU too, through WebGPU (Dawn)" ON)
-option(IVRIT_TURBO_OPENCL "the Turbo model on the GPU too, through OpenCL" ON)
+option(IVRIT_TURBO_OPENCL "the Turbo model on the GPU too, through OpenCL" OFF)
 
 foreach(dir whisper.cpp vulkan-headers spirv-headers dawn-android dawn-headers opencl-headers)
     if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${dir})

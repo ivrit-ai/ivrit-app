@@ -122,8 +122,10 @@ final class Store {
         prefs(context).edit().putString("turbo_processor", processor).apply();
     }
 
+    /** The Lab's WebGPU trial ("webgpu", builds 264-272) is automatic now. */
     static String turboProcessor(Context context) {
-        return prefs(context).getString("turbo_processor", TurboGpu.AUTO);
+        String processor = prefs(context).getString("turbo_processor", TurboGpu.AUTO);
+        return java.util.Arrays.asList(TurboGpu.PROCESSORS).contains(processor) ? processor : TurboGpu.AUTO;
     }
 
     static String site(Context context) {

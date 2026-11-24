@@ -23,7 +23,7 @@ import org.junit.runner.RunWith;
 @RunWith(AndroidJUnit4.class)
 public class ProgramsOnPhones {
     private static final String TAG = "ProgramsOnPhones";
-    // The trial's switches (TurboGpu.TRIAL_LEVEL), and a wait long enough to time a slow program.
+    // TurboGpu.LEVELS' switches, and a wait long enough to time a slow program.
     private static final String[] TRIAL = {"GGML_WEBGPU_MOBILE", "GGML_WEBGPU_DISABLE_SUBGROUP_MATRIX",
         "GGML_WEBGPU_DISABLE_SUBGROUPS", "GGML_WEBGPU_SUBMIT_BATCH=8", "GGML_WEBGPU_WAIT_MS=120000"};
     // {what, K, M, N}: the attention's projections, the MLP's two (a 30 s window: 1500 frames), the attention.
@@ -43,7 +43,7 @@ public class ProgramsOnPhones {
         for (String s : switches) set(s);
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         JSONObject report = new JSONObject().put("version", version).put("switches", new JSONArray(switches))
-            .put("device", Benchmark.device(context)).put("build", TurboGpu.build(context));
+            .put("device", Benchmark.device(context)).put("build", context.getPackageManager().getPackageInfo(context.getPackageName(), 0).getLongVersionCode());
         JSONArray results = new JSONArray();
         report.put("results", results);
         try {
