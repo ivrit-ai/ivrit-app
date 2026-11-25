@@ -10,7 +10,8 @@
         "popup": "boolean: messages show on screen (Android: the channel's importance; iPhone: banners allowed)",
         "platform": "\"android\" | \"ios\": for wording only (which settings to describe), never for behaviour",
         "importance": "number, Android only: the channel's importance",
-        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\", \"localTranscription\", \"appSettings\", \"saveFiles\", \"readShared\", \"bundledModel\", \"turboModel\")"
+        "features": "string[], optional: what this shell can do beyond the contract's common methods (\"watchFolders\", \"localTranscription\", \"appSettings\", \"saveFiles\", \"readShared\", \"bundledModel\", \"turboModel\")",
+        "turbo": "optional, Android from the build that offers Turbo to every capable phone: {offered: boolean, why: absent where offered, else \"android\" | \"processor\" | \"memory\" | \"library\" (the phone cannot run it) | \"slow\" | \"failing\" (given up on it)}: the page tells the user once"
       }
     },
     "requestPermission": {
@@ -190,14 +191,15 @@
         "android"
       ],
       "feature": "turboModel",
-      "note": "The model the phone transcribes recordings with, in the background (shared, watched, handed over): ivrit.ai's Turbo model (whisper.cpp; scripts/turbo_model.py's quantizations), on the phones it is offered on (Galaxy S23 and on: Turbo.supported; elsewhere, and live, the zipformer), and where that runs: the GPU (OpenCL on Snapdragon, else WebGPU with the app's programs) once it has passed a check on the phone (TurboGpu), or the CPU. The Turbo model downloads the first time it transcribes; choosing another lets go of it. Builds up to 259 also offered \"zipformer\" (and had it by default).",
+      "note": "The model the phone transcribes recordings with, in the background (shared, watched, handed over): ivrit.ai's Turbo model (whisper.cpp; scripts/turbo_model.py's quantizations), on the phones it is offered on (arm64 with dot products, Android 9, 4 GB: Turbo.supported; elsewhere, where it proved too slow or kept failing, and live, the zipformer), and where that runs: the GPU (OpenCL on Snapdragon, else WebGPU with the app's programs) once it has passed a check on the phone (TurboGpu), or the CPU. The Turbo model downloads the first time it transcribes. Builds up to 259 also offered \"zipformer\" (and had it by default).",
       "options": {
-        "model": "string, optional: \"q8_0\" (the one size; \"q5_1\" is no longer offered), to choose it",
+        "model": "string, optional: ignored (the size goes by the phone's memory; earlier pages send \"q8_0\")",
         "processor": "string, optional: \"auto\" (the GPU when it passed its check and is faster) | \"cpu\" | \"gpu\" (whenever it gives the right words), to choose it",
         "decoding": "string, optional: \"accurate\" (beam search, 5, where the GPU runs; the CPU decodes greedily) | \"fast\" (greedy everywhere: up to twice as fast where the decoder dominates, a few more mistakes), to choose it"
       },
       "result": {
-        "model": "\"q8_0\" (the one size; \"q5_1\" is no longer offered): the one chosen",
+        "model": "\"q8_0\", or \"q4_0\" on phones with less than 8 GB (Turbo.variant; \"q5_1\" is no longer offered): the phone's size",
+        "off": "string or null: why Turbo was given up on this phone (\"slow\", \"failing\"; the zipformer transcribes until an app or system update)",
         "ready": "boolean: it needs no download",
         "processor": "\"auto\" | \"cpu\" | \"gpu\": the one chosen",
         "decoding": "\"accurate\" | \"fast\": the one chosen (builds up to 271: absent, accurate)",

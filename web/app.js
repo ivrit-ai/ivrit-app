@@ -132,9 +132,11 @@ function toast(message, action) {
   toastTimer = setTimeout(() => (box.hidden = true), action ? 6000 : 3500);
 }
 
-function ask(message, { ok = t("continue"), danger = false } = {}) {
+function ask(message, { ok = t("continue"), danger = false, cancel = true } = {}) {
   const dialog = $("confirm");
   $("confirm-text").textContent = message;
+  // Without cancel: a notice, its one button to close it.
+  dialog.querySelector('button[value="no"]').hidden = !cancel;
   const button = $("confirm-ok");
   button.textContent = ok;
   button.className = `btn ${danger ? "danger" : "primary"}`;
@@ -379,6 +381,23 @@ async function askNotificationsOnce() {
   }
   await enableNotifications({ unasked: true });
   if (state.view === "settings") renderPermission();
+}
+
+// The phone does not get the Turbo model for its own transcription (it cannot run
+// it, or gave it up as too slow or failing: nativeStatus.turbo): once for each
+// reason, say so and why. Not while another dialog is open.
+async function tellNoTurboOnce() {
+  const turbo = nativeStatus?.turbo;
+  if (!shell || !turbo || turbo.offered || $("confirm").open || $("sheet").open) return false;
+  const key = `no_turbo_told_${turbo.why}`;
+  try {
+    if (localStorage.getItem(key)) return false;
+    localStorage.setItem(key, "1");
+  } catch {
+    return false;
+  }
+  await ask(t("noTurbo", turbo.why), { ok: t("gotIt"), cancel: false });
+  return true;
 }
 
 // The Android app could not ask for notifications before build 234 (R8 had
@@ -2342,6 +2361,8 @@ async function lookAgain() {
       renderDevices().catch(() => {});
     }
     watchJobs();
+    // Turbo given up on while the app was in the background.
+    tellNoTurboOnce();
   }
   reconcile();
   refreshInbox();
@@ -2537,7 +2558,7 @@ async function start() {
   // A transcript's link (a notification, or a link from transcribe.ivrit.ai).
   if (new URLSearchParams(location.search).has("results")) showView("transcribe");
   reconcile();
-  if (!(await announceNotifications())) askClips();
+  if (!(await tellNoTurboOnce()) && !(await announceNotifications())) askClips();
 }
 
 start();

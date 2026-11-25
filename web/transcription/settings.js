@@ -103,11 +103,11 @@ export async function render(box, host, onChange) {
 // one is live transcription's only), a large download the first time (sizes:
 // scripts/turbo_model.py's files). Only on phones that can run it. Then where it runs:
 // the GPU once it passed its check on the phone (automatic), the CPU, or the GPU
-// whenever it gives the right words; and what that check found. One size only
-// (docs/turbo-android.md, decision 2): shown, not chosen, while that is so. Then
+// whenever it gives the right words; and what that check found. Its size goes by the
+// phone's memory (q4_0 below 8 GB; Turbo.variant): shown, not chosen. Then
 // accuracy or speed: beam search where the GPU runs, or greedy (builds that don't
 // say which: not shown).
-const PHONE_MODELS = { q8_0: 875 };
+const PHONE_MODELS = { q8_0: 875, q4_0: 474 };
 const PROCESSORS = ["auto", "cpu", "gpu"];
 const DECODINGS = ["accurate", "fast"];
 
@@ -120,11 +120,8 @@ async function phoneModel(host, onModel) {
     current = null;
   }
   if (!current) return null;
-  const sizes = Object.entries(PHONE_MODELS);
-  const model = sizes.length === 1
-    ? el("span", { text: tr(`phoneModel_${sizes[0][0]}`, { megabytes: sizes[0][1] }) })
-    : el("select", { class: "tr-select", "aria-label": tr("phoneModelTitle") },
-      sizes.map(([value, megabytes]) => el("option", { value, text: tr(`phoneModel_${value}`, { megabytes }) })));
+  const shown = PHONE_MODELS[current.model] ? current.model : "q8_0";
+  const model = el("span", { text: tr(`phoneModel_${shown}`, { megabytes: PHONE_MODELS[shown] }) });
   const processor = el("select", { class: "tr-select", "aria-label": tr("phoneProcessorTitle") },
     PROCESSORS.map((value) => el("option", { value, text: tr(`phoneProcessor_${value}`) })));
   const note = el("span", { class: "sub" });
@@ -136,28 +133,28 @@ async function phoneModel(host, onModel) {
     ? el("label", { class: "tr-field" }, [el("span", { text: tr("phoneDecodingTitle") }), decoding, el("span", { class: "sub", text: tr("phoneDecodingNote") })])
     : null;
   const show = () => {
-    if (sizes.length > 1) model.value = current.model;
     processor.value = current.processor || "auto";
     decoding.value = current.decoding || "accurate";
-    note.textContent = tr(current.ready ? "phoneModelTurboBody" : "phoneModelTurboDownload");
+    // Given up on here (too slow, or failing again and again): the small model transcribes.
+    note.textContent = tr(current.off ? `phoneTurboOff_${current.off === "slow" ? "slow" : "failing"}`
+      : current.ready ? "phoneModelTurboBody" : "phoneModelTurboDownload");
     const gpu = current.gpu;
     gpuNote.textContent = !gpu
       ? tr("phoneGpuUnchecked")
       : tr(`phoneGpu_${gpu.state}`, { name: gpu.name ? `(${gpu.name})` : "", cpu: gpu.cpuSeconds?.toFixed(1), gpu: gpu.gpuSeconds?.toFixed(1) });
   };
   const choose = (options) => async () => {
-    model.disabled = processor.disabled = decoding.disabled = true;
+    processor.disabled = decoding.disabled = true;
     try {
       current = await host.onDeviceModel(options());
     } catch {
       host.toast(tr("errorInternalServer"));
     } finally {
-      model.disabled = processor.disabled = decoding.disabled = false;
+      processor.disabled = decoding.disabled = false;
       show();
       onModel?.();
     }
   };
-  model.addEventListener("change", choose(() => ({ model: model.value })));
   processor.addEventListener("change", choose(() => ({ processor: processor.value })));
   decoding.addEventListener("change", choose(() => ({ decoding: decoding.value })));
   show();

@@ -196,6 +196,18 @@ const STRINGS = {
 
     notNow: "Not now",
     continue: "Continue",
+    gotIt: "Got it",
+    // The phone does not get the Turbo model (nativeStatus.turbo.why), told once.
+    noTurbo: (why) =>
+      `Transcribing on this phone: ivrit.ai's Turbo model isn't available here, because ${({
+        android: "its Android version is older than 9",
+        processor: "its processor lacks what the model needs",
+        memory: "it has less than 4 GB of memory",
+        library: "the model's engine doesn't start on it",
+        slow: "it turned out too slow for it",
+        failing: "the model failed on it several times",
+      })[why] ?? "it can't run it"}. Recordings transcribed on the phone use the small model instead: less accurate, and without telling speakers apart. Transcribing on ivrit.ai's servers isn't affected.${
+        why === "slow" || why === "failing" ? " We'll try again after an app or phone update." : ""}`,
     cancel: "Cancel",
 
 
@@ -483,6 +495,17 @@ const STRINGS = {
 
     notNow: "לא עכשיו",
     continue: "המשך",
+    gotIt: "הבנתי",
+    noTurbo: (why) =>
+      `תמלול בטלפון: מודל ה-Turbo של ivrit.ai לא זמין בטלפון הזה, כי ${({
+        android: "גרסת האנדרואיד שלו ישנה מ-9",
+        processor: "המעבד שלו לא תומך במה שהמודל צריך",
+        memory: "יש לו פחות מ-4GB זיכרון",
+        library: "מנוע המודל לא עולה עליו",
+        slow: "התברר שהוא איטי מדי בשבילו",
+        failing: "המודל נכשל עליו כמה פעמים",
+      })[why] ?? "הוא לא יכול להריץ אותו"}. הקלטות שמתומללות בטלפון יתומללו במודל הקטן: פחות מדויק, ובלי זיהוי דוברים. התמלול בשרתים של ivrit.ai לא מושפע.${
+        why === "slow" || why === "failing" ? " אחרי עדכון של האפליקציה או של הטלפון ננסה שוב." : ""}`,
     cancel: "ביטול",
 
 
@@ -773,6 +796,17 @@ STRINGS.yi = {
 
   notNow: "ניט איצט",
   continue: "ווײַטער",
+  gotIt: "פֿאַרשטאַנען",
+  noTurbo: (why) =>
+    `טראַנסקריבירן אויפֿן טעלעפֿאָן: דער Turbo־מאָדעל פֿון ivrit.ai איז ניטאָ אויף דעם טעלעפֿאָן, ווײַל ${({
+      android: "זײַן אַנדראָיד־ווערסיע איז עלטער ווי 9",
+      processor: "זײַן פּראָצעסאָר שטיצט ניט וואָס דער מאָדעל דאַרף",
+      memory: "ער האָט ווייניקער ווי 4GB זכּרון",
+      library: "דער מאָדעלס מאָטאָר הייבט זיך ניט אָן אויף אים",
+      slow: "ער האָט זיך אַרויסגעוויזן צו פּאַמעלעך דערפֿאַר",
+      failing: "דער מאָדעל איז אויף אים דורכגעפֿאַלן עטלעכע מאָל",
+    })[why] ?? "ער קען אים ניט לויפֿן"}. רעקאָרדירונגען וואָס ווערן טראַנסקריבירט אויפֿן טעלעפֿאָן ניצן אַנשטאָט דעם קליינעם מאָדעל: ווייניקער גענוי, און אָן רעדנדיקע. טראַנסקריבירן אויף ivrit.ai׳ס סערווערס ווערט ניט באַווירקט.${
+      why === "slow" || why === "failing" ? " נאָך אַ דערהײַנטיקונג פֿון דער אַפּ אָדער פֿונעם טעלעפֿאָן פּרובירן מיר ווידער." : ""}`,
   cancel: "אַנולירן",
 
 

@@ -22,6 +22,23 @@ public class TurboGpuTest {
     }
 
     @Test
+    public void paceIsTheWayItWouldRun() throws Exception {
+        TurboGpu.Verdict v = verdict("faster");
+        assertEquals(0, TurboGpu.pace(v, false), 0); // not timed
+        v.cpuSeconds = 15;
+        assertEquals(0, TurboGpu.pace(v, false), 0); // the recording's length not known
+        v.sampleSeconds = 12;
+        v.gpuSeconds = 6;
+        v.splitSeconds = 4;
+        assertEquals(1.25, TurboGpu.pace(v, false), 1e-9);
+        assertEquals(0.5, TurboGpu.pace(v, true), 1e-9);
+        v.decoderCpu = true;
+        assertEquals(4 / 12.0, TurboGpu.pace(v, true), 1e-9);
+        // Kept between runs.
+        assertEquals(12, TurboGpu.Verdict.of(v.json()).sampleSeconds, 0);
+    }
+
+    @Test
     public void chosenGpuNeedsTheRightWordsNotSpeed() {
         assertTrue(TurboGpu.onGpu(verdict("slower"), TurboGpu.GPU));
         for (String bad : new String[] {"wrong", "failed", "crashed", "none", null}) {

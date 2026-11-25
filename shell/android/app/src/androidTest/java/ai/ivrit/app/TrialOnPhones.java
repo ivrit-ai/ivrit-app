@@ -44,6 +44,29 @@ public class TrialOnPhones {
         long minutes = Long.parseLong(args.getString("minutes", "25"));
         String decoding = args.getString("decoding", Store.ACCURATE);
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        // Another size than the phone's memory picks ("q4_0"), and the GPU's check from a
+        // later level ("1": WebGPU on a Snapdragon), checked again.
+        if (args.getString("variant") != null) Turbo.testVariant = args.getString("variant");
+        if (args.getString("level") != null) {
+            context.getSharedPreferences("ivrit_turbo_gpu", Context.MODE_PRIVATE).edit().putString("verdict", new JSONObject()
+                .put("key", android.os.Build.FINGERPRINT + " " + Store.onDeviceModel(context)).put("state", JSONObject.NULL)
+                .put("level", Integer.parseInt(args.getString("level"))).put("ladder", TurboGpu.LADDER).toString()).commit();
+        }
+
+        // A recording as one handed over is ("staged"), queued and left to run: for what
+        // happens when its runs die (killed from outside), with no benchmark to wait for.
+        if ("staged".equals(args.getString("enqueue"))) {
+            java.io.File copy = new java.io.File(context.getCacheDir(), "fallback-test.flac");
+            java.nio.file.Files.copy(Turbo.model(context, Benchmark.NAME).toPath(), copy.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            LocalTranscribeWorker.enqueue(context, LocalTranscribeWorker.input("staged", "fallback-test", copy.getPath(),
+                "fallback test", "audio/flac", "", false, "test").build());
+            // Queued in the background: kept before this process ends with the test.
+            for (int i = 0; i < 100 && WorkManager.getInstance(context).getWorkInfosForUniqueWork("local-fallback-test").get().isEmpty(); i++) {
+                Thread.sleep(100);
+            }
+            Log.i(TAG, "queued fallback-test");
+            return;
+        }
 
         Store.setTurboProcessor(context, processor);
         Store.setDecoding(context, decoding);
@@ -124,6 +147,9 @@ public class TrialOnPhones {
         }
         Log.i(TAG, "finished: " + report.optString("error", "done"));
         Log.i(TAG, "report: " + report);
+        // Whole, where the log cuts it short: adb shell run-as <package> cat files/trial-report.json (a debug build).
+        java.nio.file.Files.write(new java.io.File(context.getFilesDir(), "trial-report.json").toPath(),
+            report.toString().getBytes(StandardCharsets.UTF_8));
         post(context, report);
     }
 

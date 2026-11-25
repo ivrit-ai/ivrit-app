@@ -4,7 +4,7 @@
 The app transcribes with whisper.cpp (shell/android/app/src/main/cpp), which needs
 the model in ggml's format. ivrit-ai publishes it only in f16 (1.6 GB); until the
 quantized files are published there too, the app serves them: this re-quantizes
-the f16 file, pinned and checked against its hash, into q8_0 (and q4_0 on request), in the
+the f16 file, pinned and checked against its hash, into q8_0 and q4_0 (phones with less than 8 GB), in the
 background as the server starts (launch.sh), as whisper.cpp's own quantize tool
 does (examples/quantize: every 2-D tensor but the positional embeddings; the same
 block layouts and rounding, quantize_row_q4_0_ref and quantize_row_q8_0_ref).
@@ -163,7 +163,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default=SOURCE)
     ap.add_argument("--out", default=os.environ.get("TURBO_MODELS_DIR", "/tmp/turbo-models"))
-    ap.add_argument("dtypes", nargs="*", default=["q8_0"])  # what the app offers
+    ap.add_argument("dtypes", nargs="*", default=["q8_0", "q4_0"])  # what the app offers (Turbo.variant)
     args = ap.parse_args()
     for d in args.dtypes:
         if d not in QUANTIZE:

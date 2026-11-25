@@ -3,15 +3,11 @@
 # PID 1 and receives stop signals directly. The server (server/app.py) serves the
 # app's pages (web/) and the transcription API; its schema migrates at startup.
 set -eu
-# The on-device lab's quantized models (scripts/lab_models.py), made in the
-# background at low priority while the server serves; nothing without
-# web/lab/models.json.
-export LAB_MODELS_DIR=/tmp/lab-models
-nice -n 19 python3 scripts/lab_models.py > /tmp/lab-models.log 2>&1 &
-# The Android app's Turbo model (scripts/turbo_model.py), the same way. (Its
-# speaker model is on Hugging Face: scripts/speaker_model.py.)
+# The Android app's Turbo models (scripts/turbo_model.py), made in the
+# background at low priority while the server serves. (Its speaker model is on
+# Hugging Face: scripts/speaker_model.py.)
 export TURBO_MODELS_DIR=/tmp/turbo-models
-nice -n 19 python3 scripts/turbo_model.py > /tmp/turbo-models.log 2>&1 &
+nice -n 19 python3 scripts/turbo_model.py q8_0 q4_0 > /tmp/turbo-models.log 2>&1 &
 cd server
 exec uvicorn app:app --host 0.0.0.0 --port "${XHOSTD_HTTP_PORT:-${PORT:-8080}}" \
   --proxy-headers --forwarded-allow-ips='*'

@@ -9,7 +9,8 @@ through OpenCL (Snapdragon) or WebGPU with the app's own programs, where the
 phone's GPU passes a check, or on the CPU. Live and the page's own transcription
 (without Drive) keep the zipformer.
 
-Offered on Galaxy S23s and later (decisions 24-26).
+Offered on every arm64 phone with dot products, Android 9 and 4 GB on; the
+zipformer wherever Turbo proves too slow or keeps failing (decision 28).
 
 ## How it fits together
 
@@ -50,10 +51,10 @@ Open to comment; each with what it rests on.
    and q4_0 for ARM's dot-product instructions), so it is 3-4 times slower,
    and less accurate, for 250 MB less to download. A phone that had chosen it
    falls back to q8_0 (Store.onDeviceModel) and lets its file go
-   (Turbo.RETIRED); Settings shows the one size instead of a choice.
+   (Turbo.RETIRED); Settings shows the phone's size instead of a choice.
    A smaller size, if one is ever wanted, is q4_0 (118-135 s on that podcast,
    faster than q8_0), only after its words are scored against q8_0's and the
-   server's.
+   server's: scored, and offered below 8 GB (27).
 
 3. **Beam search (5) on the GPU, greedy on the CPU** (`Turbo.beams`), as the
    server decodes with beam 5. On the Galaxy S25's GPU (OpenCL) beam 5 took
@@ -61,8 +62,9 @@ Open to comment; each with what it rests on.
    its words differed from the server's more (decision 15). On the CPU beam 5
    took three times the recording's length, greedy about 1.1.
 
-4. **Who is offered Turbo:** Galaxy S23s and later (decisions 24-26), Android
-   13 on, 8 GB, arm64 with dot products and half floats
+4. **Who is offered Turbo:** Android 9 on, 4 GB (q4_0 below 8: decision 27),
+   arm64 with dot products and half floats (decision 28; Galaxy S23s and later
+   with 8 GB before: decisions 24-26)
    (`asimddp`, `asimdhp`). The library is built for `armv8.2-a+dotprod+fp16`:
    a phone without them would crash, so that check is a must, not a nicety.
    Up to build 272: any such phone with about 6 GB.
@@ -412,6 +414,53 @@ Open to comment; each with what it rests on.
     Snapdragon, or once this system build's check is past OpenCL, so a driver that
     fails as ggml first looks cannot keep a phone from WebGPU. Both backends in the
     library (Vulkan out); Turbo offered on Galaxy S23s and later, as in 25.
+
+27. **q4_0 on phones with less than 8 GB, q8_0 on the rest** (2026-11-25;
+    `Turbo.variant`, by the memory the phone reports: 8 GB reads as about 6.8 GiB,
+    so 6 GiB is the line; 6 GB phones, about 5.1 GiB, are the floor, at 4.5 GiB).
+    Measured on the Galaxy S25 over adb, the benchmark with beam search, OpenCL,
+    phone cool (33.6 °C) and screen off: q4_0 106.5 s (95.9 s transcribing),
+    q8_0 107.5 s (98.6 s); 2.39% of 544 words wrong against 2.76% (one recording;
+    q4_0 gave the same words in both its runs). Half the memory and download (474
+    MB against 874), no slower and no worse there, so the smaller phones get it;
+    q8_0 stays where memory allows, as the size measured longest. Decision 2's
+    laptop scores (q4 5.15% against q8's 3.31%, at whisper-gpu's own q4 layout)
+    did not carry to the phone. The size is not a choice (Settings shows it); a
+    phone downloads only its own, and the GPU's check runs again for it (the
+    verdict's key has the size). The site makes both (scripts/turbo_model.py).
+    Our WebGPU programs take q4_0 too (the matrix multiply and the matrix-vector
+    one: `SRC0_Q4_0`, the block's 16 bytes' low halves weights 0-15, high 16-31).
+
+28. **Turbo on every capable phone, the zipformer wherever Turbo does not work
+    out** (2026-11-25; `Turbo.supported`): arm64 with dot products and half floats,
+    Android 9 on, 4 GB (a 4 GB phone reports about 3.4 GiB; the floor is 3), no
+    longer Galaxy S23s alone (a Galaxy S22 Ultra's Lab had no speed test). What
+    keeps a phone from getting stuck:
+    - *Too slow* (`Turbo.SLOW`, 3 seconds of work a second of sound on the check's
+      12-second recording, the way Turbo would run there; `TurboGpu.pace`): the
+      zipformer transcribes that recording, and once that is final (the GPU
+      checked, or the CPU chosen), Turbo is given up on the phone. The CPU is timed ahead
+      (PrepareWorker) and in the check, also where there is no GPU for Turbo.
+    - *A recording Turbo cannot finish*: each Turbo run on it is counted before it
+      starts (kept at once), so a crash, a hang the watchdog ends, or the system
+      ending the process counts too; after `Turbo.TRIES` (3: two GPU levels may
+      each fail their check and the CPU still have its turn), the zipformer has it.
+      A run stopped (not failed) does not count.
+    - *Again and again*: `Turbo.GIVE_UP` (2) recordings in a row that Turbo could
+      not finish, and it is given up on the phone.
+    Given up (`Turbo.off`: "slow" or "failing") holds for that system build, app
+    build and size: either updated, or another processor chosen in Settings,
+    Turbo is tried again. Its model is let go,
+    the site told (`kind=local-turbo-off`), and Settings says why. A phone that
+    does not get Turbo, either way (it cannot run it: `Turbo.unsupported`, "android",
+    "processor", "memory", "library"; or gave it up), says so in `notificationStatus`'s
+    `turbo`, and the page tells the user once for each reason, in a popup
+    (web/app.js, `tellNoTurboOnce`): at the start, or back in front. The benchmark
+    still measures Turbo where it was given up. Snapdragons before Android 12 are
+    known by `Build.HARDWARE` "qcom" (no `SOC_MANUFACTURER`), for OpenCL.
+    The Lab is now only the device's facts, the phone's speed test and the
+    boards: the whisper-gpu tests (a kernel benchmark, a sample, q8/q5/q4) are gone,
+    with `scripts/lab_models.py` and `web/lab/whisper/`.
 
 ## Verified, and not yet
 

@@ -19,30 +19,43 @@ import org.json.JSONObject;
  * ivrit.ai's Turbo model (whisper-large-v3-turbo, trained further on Hebrew) on the
  * phone, with whisper.cpp (Whisper): far more accurate than the zipformer
  * (LocalModel), with speakers, and far larger and slower. It transcribes every
- * recording on the phones it is offered on (supported): Galaxy S23 and on, whose
- * GPUs run it through OpenCL or WebGPU (TurboGpu). The zipformer transcribes live, and
- * recordings on all other phones.
+ * recording on the phones it is offered on (supported), on the GPU where it passes
+ * its check (TurboGpu: OpenCL or WebGPU), else on the CPU. The zipformer transcribes
+ * live, and recordings on other phones, and wherever Turbo turns out too slow or
+ * keeps failing (chosen, off): a recording is never left waiting on Turbo.
  *
- * The model is ggml's q8_0 or q5_1 (scripts/turbo_model.py), served by the site at
- * /models/turbo/ and downloaded the first time it is used, resumed where a download
- * broke off, and checked against the site's hash. Only the chosen one is kept. Its
+ * The model is ggml's q8_0, or q4_0 on phones with less than 8 GB (variant;
+ * scripts/turbo_model.py), served by the site at /models/turbo/ and downloaded the
+ * first time it is used, resumed where a download broke off, and checked against the
+ * site's hash. Only the phone's one is kept. Its
  * transcripts have speakers, with the speaker model (Speakers) from there too.
  */
 final class Turbo {
     private Turbo() {}
 
     /**
-     * The one size: as accurate as the full model, and fastest on ARM (ggml repacks it).
-     * q5_1 is gone for good (docs/turbo-android.md, decision 2): a choice of it falls
-     * back to this one (Store.onDeviceModel), and its download is let go (RETIRED).
+     * The sizes, chosen by the phone's memory (variant), not by its user: q8_0, as
+     * accurate as the full model and fastest on ARM (ggml repacks it); q4_0, half its
+     * memory and download, as fast and as accurate on a Galaxy S25 (106.5 s against
+     * 107.5 for the benchmark, 2.39% of words wrong against 2.76%; docs/turbo-android.md,
+     * decision 27). q5_1 is gone for good (decision 2): its download is let go (RETIRED).
      */
-    static final String[] VARIANTS = {"q8_0"};
+    static final String[] VARIANTS = {"q8_0", "q4_0"};
     private static final String[] RETIRED = {"q5_1"};
 
     /** A variant's download, as Settings tells it (scripts/turbo_model.py's files). */
     static int megabytes(String variant) {
-        return 874;
+        return "q4_0".equals(variant) ? 474 : 874;
     }
+
+    /** This phone's size: q8_0 with 8 GB of memory or more, q4_0 with less. */
+    static String variant(Context context) {
+        if (testVariant != null) return testVariant;
+        return memory(context) >= Q8_MEMORY ? "q8_0" : "q4_0";
+    }
+
+    /** Another size, for a test on the phone (TrialOnPhones' "variant"); null in use. */
+    static String testVariant;
     static final String LANGUAGE = "he";
     /**
      * Beam search (5), as the server: on the GPU (OpenCL, Galaxy S25) it took about
@@ -64,7 +77,8 @@ final class Turbo {
      * sentence again (shell/native/transcript): 120-second pieces took 29% longer than one.
      */
     static final double CHUNK_SECONDS = 600;
-    private static final long MIN_MEMORY = 6L << 30; // an 8 GB phone reports about 7.3 GB (6.8 GiB)
+    private static final long Q8_MEMORY = 6L << 30; // an 8 GB phone reports about 7.3 GB (6.8 GiB)
+    private static final long MIN_MEMORY = 3L << 30; // a 4 GB phone reports about 3.6 GB (3.4 GiB)
 
     interface Progress {
         void downloaded(long done, long total);
@@ -74,32 +88,49 @@ final class Turbo {
         return "whisper-turbo-he-" + variant;
     }
 
-    /** The Turbo model to transcribe recordings with, or null for the zipformer where this phone cannot run it. */
+    /** The Turbo model to transcribe recordings with, or null for the zipformer where this phone cannot run it, or gave it up (off). */
     static String chosen(Context context) {
+        String model = offered(context);
+        return model != null && off(context) == null ? model : null;
+    }
+
+    /** The Turbo model this phone could run, given up on or not: what the benchmark measures. */
+    static String offered(Context context) {
         String model = Store.onDeviceModel(context);
         return Arrays.asList(VARIANTS).contains(model) && supported(context) ? model : null;
     }
 
-    private static Boolean supported;
+    private static String unsupported;
 
     /**
-     * Galaxy S23 and on, Snapdragon and Exynos alike: the GPU runs Turbo (TurboGpu),
-     * through OpenCL on Snapdragon (about a third of the recording's length on an S25,
-     * with beam search), through WebGPU with the app's own programs elsewhere. Other
-     * phones keep the zipformer: on a CPU Turbo takes longer than the recording, and
-     * other phones' GPUs are not known well enough (docs/turbo-android.md, decisions 24-26). Android 13 (the S23's first) on, 8 GB, dot products and half
-     * floats (the library is built for them). The GPU itself is the check's to judge,
-     * in the background (never here: a driver that crashes takes the app with it).
+     * Any arm64 phone with dot products and half floats (the library is built for
+     * them), Android 9 on, 4 GB (q4_0 below 8; variant): the GPU runs Turbo where it
+     * passes its check (TurboGpu: OpenCL on Snapdragon, a third of the recording's
+     * length on a Galaxy S25 with beam search; WebGPU with the app's own programs
+     * elsewhere), else the CPU. Where that is too slow (SLOW), or Turbo keeps failing
+     * (TRIES, GIVE_UP), the zipformer transcribes (docs/turbo-android.md, decision 28).
+     * The GPU itself is the check's to judge, in the background (never here: a driver
+     * that crashes takes the app with it).
      */
-    static synchronized boolean supported(Context context) {
-        if (supported == null) {
-            supported = Build.VERSION.SDK_INT >= 33
-                && galaxy(Build.MANUFACTURER, Build.MODEL)
-                && Build.SUPPORTED_ABIS.length > 0 && "arm64-v8a".equals(Build.SUPPORTED_ABIS[0])
-                && memory(context) >= MIN_MEMORY && cpuFeatures().containsAll(Arrays.asList("asimddp", "asimdhp"))
-                && early(context) && Whisper.available();
+    static boolean supported(Context context) {
+        return unsupported(context) == null;
+    }
+
+    /**
+     * Why this phone cannot run Turbo (supported), for the page to tell the user once:
+     * "android" (before 9), "processor" (not arm64, or without dot products and half
+     * floats), "memory" (under 4 GB), "library" (the library would not load); null where it can.
+     */
+    static synchronized String unsupported(Context context) {
+        if (unsupported == null) {
+            unsupported = Build.VERSION.SDK_INT < 28 ? "android"
+                : Build.SUPPORTED_ABIS.length == 0 || !"arm64-v8a".equals(Build.SUPPORTED_ABIS[0]) ? "processor"
+                : memory(context) < MIN_MEMORY ? "memory"
+                : !cpuFeatures().containsAll(Arrays.asList("asimddp", "asimdhp")) ? "processor"
+                : !(early(context) && Whisper.available()) ? "library"
+                : "";
         }
-        return supported;
+        return unsupported.isEmpty() ? null : unsupported;
     }
 
     /** The GPU backends' switches, before ggml can read them (TurboGpu.early). */
@@ -109,12 +140,70 @@ final class Turbo {
     }
 
     /**
-     * A Galaxy S23 or later, FE editions too, by Samsung's model number: SM-S91x the S23s,
-     * S92x the S24s, S93x the S25s and on; S711, S721, S731 the FEs. (Phones of a decade
-     * ago had SM-S9xx numbers too, and fail the other tests.)
+     * Slower than this on the GPU check's recording (TurboGpu.pace: seconds per second of
+     * sound, the way it would run), Turbo is not worth it here and the zipformer
+     * transcribes. The 12-second recording costs a whole 30-second window, so it reads
+     * slower than a long one: the Galaxy S25's CPU 1.2-1.35 there against 1.1 over five
+     * minutes; a Galaxy S24's Xclipse 2.2 there.
      */
-    static boolean galaxy(String manufacturer, String model) {
-        return "samsung".equalsIgnoreCase(manufacturer) && model != null && model.matches("SM-S(9[1-9]|7[1-9])\\d.*");
+    static final double SLOW = 3.0;
+    /** Turbo runs a recording may start without finishing (a crash, the process ended, ggml failing): then the zipformer. */
+    static final int TRIES = 3; // two GPU levels may each fail their check, and the CPU still have its turn
+    /** Recordings in a row that Turbo could not finish before it is given up on this phone (off). */
+    static final int GIVE_UP = 2;
+
+    /** Turbo too slow here for this recording (SLOW): the zipformer has it. */
+    static final class TooSlow extends Exception {
+        TooSlow(double pace) {
+            super("Turbo too slow here: " + pace + " s a second");
+        }
+    }
+
+    private static android.content.SharedPreferences prefs(Context context) {
+        return context.getSharedPreferences("ivrit_turbo", Context.MODE_PRIVATE);
+    }
+
+    /** What a give-up holds for: this system build (drivers come with it), this build of the app, this size. */
+    private static String offKey(Context context, String variant) {
+        return Build.FINGERPRINT + " " + LocalTranscribeWorker.appVersion(context) + " " + variant;
+    }
+
+    /** Why Turbo is given up on this phone ("slow", "failing"), or null. A new system or app build tries again. */
+    static String off(Context context) {
+        String saved = prefs(context).getString("off", null);
+        if (saved == null) return null;
+        int space = saved.indexOf(' ');
+        return space > 0 && saved.substring(space + 1).equals(offKey(context, Store.onDeviceModel(context))) ? saved.substring(0, space) : null;
+    }
+
+    /** Turbo given up on here (off): its model let go (874 or 474 MB back), and the site told. */
+    static void giveUp(Context context, String variant, String why, JSONObject details) {
+        prefs(context).edit().putString("off", why + " " + offKey(context, variant)).commit();
+        forget(context, variant);
+        try {
+            LocalTranscribeWorker.post(context, "local-turbo-off", details.put("why", why).put("engine", engine(variant))
+                .put("memory", memory(context)).put("threads", threads()));
+        } catch (Exception ignored) {
+            // Only the report is lost.
+        }
+    }
+
+    /** Turbo tried again (the user chose another processor): given up no more, till it is again. */
+    static void tryAgain(Context context) {
+        prefs(context).edit().remove("off").apply();
+    }
+
+    /** A recording Turbo could not finish (TRIES): after GIVE_UP in a row, given up on here. */
+    static void couldNotFinish(Context context, String variant, JSONObject details) {
+        String key = "unfinished " + offKey(context, variant);
+        int n = prefs(context).getInt(key, 0) + 1;
+        prefs(context).edit().putInt(key, n).commit();
+        if (n >= GIVE_UP) giveUp(context, variant, "failing", details);
+    }
+
+    /** A recording Turbo finished: the count of those it could not starts again. */
+    static void finished(Context context, String variant) {
+        prefs(context).edit().remove("unfinished " + offKey(context, variant)).apply();
     }
 
     static long memory(Context context) {

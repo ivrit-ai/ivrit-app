@@ -208,12 +208,6 @@ def install_routes(app: FastAPI, google_client_id: Optional[str]):
 
 
 def mount_pages(app: FastAPI):
-    # The lab's quantized models, made at start-up into LAB_MODELS_DIR
-    # (scripts/lab_models.py); missing until then.
-    lab_models = os.environ.get("LAB_MODELS_DIR")
-    if lab_models:
-        os.makedirs(lab_models, exist_ok=True)
-        app.mount("/lab/models", Pages(directory=lab_models), name="lab-models")
     # The Turbo model for the Android app's on-device transcription, made at
     # start-up into TURBO_MODELS_DIR (scripts/turbo_model.py); missing until then.
     turbo_models = os.environ.get("TURBO_MODELS_DIR")

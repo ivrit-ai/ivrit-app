@@ -78,15 +78,10 @@ final class Store {
         return prefs(context).getBoolean("used_on_device", false);
     }
 
-    /** The Turbo model this phone transcribes recordings with: one of Turbo.VARIANTS. */
-    static void setOnDeviceModel(Context context, String model) {
-        prefs(context).edit().putString("on_device_model", model).apply();
-    }
-
     /**
-     * Turbo, the first of Turbo.VARIANTS unless another was chosen. The zipformer
-     * (once the default, and a choice) transcribes only live, and recordings only
-     * where Turbo cannot run (Turbo.chosen).
+     * The Turbo model this phone transcribes recordings with: the size its memory
+     * takes (Turbo.variant). The zipformer (once the default, and a choice)
+     * transcribes only live, and recordings only where Turbo cannot run (Turbo.chosen).
      */
     /** On a charger now. */
     static boolean charging(Context context) {
@@ -101,8 +96,7 @@ final class Store {
     }
 
     static String onDeviceModel(Context context) {
-        String model = prefs(context).getString("on_device_model", Turbo.VARIANTS[0]);
-        return java.util.Arrays.asList(Turbo.VARIANTS).contains(model) ? model : Turbo.VARIANTS[0];
+        return Turbo.variant(context);
     }
 
     /** How Turbo decodes: ACCURATE (beam search where the GPU runs; Turbo.beams) or FAST (greedy). */

@@ -14,7 +14,8 @@ import org.json.JSONObject;
  * ggml's GPU backends (LEVELS): OpenCL (ggml-opencl, Adreno's: Snapdragon phones),
  * else WebGPU, on Google's Dawn (built into the app, on the phone's Vulkan driver),
  * with the app's own programs for phone GPUs (patches/ggml-webgpu-phones.patch); on
- * the phones Turbo is offered on (Turbo.supported). Vulkan, used before, is out of
+ * the phones Turbo is offered on (Turbo.supported). What the check times also says
+ * whether Turbo is fast enough here at all (pace, Turbo.SLOW). Vulkan, used before, is out of
  * the build (docs/turbo-android.md, decision 26).
  *
  * A GPU driver can give wrong text, hang, or bring the app down, so the GPU is used
@@ -111,6 +112,7 @@ final class TurboGpu {
         int decodeThreads; // the decoder's fastest thread count here (Whisper.tuneDecoder); 0: not yet tuned
         boolean decoderCpu; // the decoder faster on the CPU, the encoder on the GPU (Whisper.load)
         double splitSeconds; // the timed GPU run with the decoder on the CPU
+        double sampleSeconds; // the check's recording, as cpuSeconds and the rest timed it; 0: not timed
 
         Verdict(String key) {
             this.key = key;
@@ -122,6 +124,7 @@ final class TurboGpu {
                 .put("error", error).put("deaths", deaths).put("running", running).put("level", level).put("step", step)
                 .put("since", since).put("crashes", crashes).put("ladder", LADDER)
                 .put("decodeThreads", decodeThreads).put("decoderCpu", decoderCpu).put("splitSeconds", splitSeconds)
+                .put("sampleSeconds", sampleSeconds)
                 .put("backend", level().backend).put("flash", level().flash);
         }
 
@@ -147,6 +150,7 @@ final class TurboGpu {
             v.decodeThreads = o.optInt("decodeThreads", 0);
             v.decoderCpu = o.optBoolean("decoderCpu", false);
             v.splitSeconds = o.optDouble("splitSeconds", 0);
+            v.sampleSeconds = o.optDouble("sampleSeconds", 0);
             return v;
         }
 
@@ -199,6 +203,15 @@ final class TurboGpu {
     static boolean onGpu(Verdict v, String processor) {
         if (AUTO.equals(processor)) return "faster".equals(v.state);
         return GPU.equals(processor) && v.works();
+    }
+
+    /**
+     * Seconds of work a second of sound, the way Turbo would run here (on the GPU or the
+     * CPU, as `gpu`), on the check's recording; 0 where that was not timed.
+     */
+    static double pace(Verdict v, boolean gpu) {
+        double seconds = gpu ? (v.decoderCpu ? v.splitSeconds : v.gpuSeconds) : v.cpuSeconds;
+        return v.sampleSeconds > 0 && seconds > 0 ? seconds / v.sampleSeconds : 0;
     }
 
     /** ggml's GPU device for a backend, among Whisper.gpus() (whisper.cpp's gpu_device), or -1. */
@@ -258,7 +271,7 @@ final class TurboGpu {
     }
 
     /**
-     * Ready ahead (PrepareWorker): the decoder's threads tuned, on the CPU, on the
+     * Ready ahead (PrepareWorker): the decoder's threads tuned, and the CPU timed, on the
      * check's own recording. Not the GPU's check: a driver that crashes takes the app's
      * process with it, and the app is often open then (the work starts with it); a
      * recording checks it, in the background, as before.
@@ -266,25 +279,30 @@ final class TurboGpu {
     static void prepare(Context context, String variant) throws Exception {
         Verdict v = load(context);
         if (v == null || !key(variant).equals(v.key)) v = new Verdict(key(variant));
-        if (v.decodeThreads > 0) return;
-        long handle = Whisper.load(Turbo.file(context, variant).getPath(), -1, true, false);
-        if (handle == 0) throw new IllegalStateException("the Turbo model did not load");
-        try {
-            float[] sound = sample(context);
-            int threads = Whisper.tuneDecoder(handle, sound, sound.length, Turbo.threads());
-            if (threads > 0) {
-                v.decodeThreads = threads;
-                save(context, v);
-            }
-        } finally {
-            Whisper.free(handle);
-        }
+        if (v.decodeThreads > 0 && v.cpuSeconds > 0) return;
+        timeCpu(context, variant, v, percent -> {});
+        save(context, v);
     }
 
-    /** What PrepareWorker can do is done: the decoder tuned (the GPU's check is a recording's). */
+    /** What PrepareWorker can do is done: the decoder tuned, the CPU timed (the GPU's check is a recording's). */
     static boolean prepared(Context context, String variant) {
         Verdict v = load(context);
-        return v != null && key(variant).equals(v.key) && v.decodeThreads > 0;
+        return v != null && key(variant).equals(v.key) && v.decodeThreads > 0 && v.cpuSeconds > 0;
+    }
+
+    /**
+     * The check's recording on the CPU, as it transcribes there (greedily), the decoder's
+     * threads tuned first where they are not: its words, and its time in the verdict.
+     */
+    private static String timeCpu(Context context, String variant, Verdict v, Whisper.Listener progress) throws Exception {
+        float[] sound = sample(context);
+        long[] took = new long[1];
+        int[] tuned = {v.decodeThreads};
+        String words = hear(Turbo.file(context, variant).getPath(), -1, true, false, tuned, sound, took, progress);
+        v.decodeThreads = tuned[0];
+        v.cpuSeconds = took[0] / 1000.0;
+        v.sampleSeconds = sound.length / 16000.0;
+        return words;
     }
 
     /**
@@ -315,7 +333,8 @@ final class TurboGpu {
         Verdict v = load(context);
         boolean past = v != null && v.key.startsWith(Build.FINGERPRINT + " ") && v.level > 0;
         try {
-            boolean snapdragon = Build.VERSION.SDK_INT >= 31 && "QTI".equals(Build.SOC_MANUFACTURER);
+            // Android 12 on says who made the chip; before, Qualcomm's boards call themselves qcom.
+            boolean snapdragon = Build.VERSION.SDK_INT >= 31 ? "QTI".equals(Build.SOC_MANUFACTURER) : "qcom".equalsIgnoreCase(Build.HARDWARE);
             if (!snapdragon || past) android.system.Os.setenv("IVRIT_NO_OPENCL", "1", true);
             File dir = new File(context.getCacheDir(), "opencl");
             //noinspection ResultOfMethodCallIgnored
@@ -408,6 +427,13 @@ final class TurboGpu {
         String[] gpus = Whisper.gpus();
         while (device(gpus, v.level().backend) < 0) {
             if (v.level + 1 >= LEVELS.length) {
+                // No GPU for Turbo: the CPU timed, for whether Turbo is worth it here (pace).
+                try {
+                    step(context, v, "cpu");
+                    timeCpu(context, variant, v, within(progress, 1));
+                } catch (Exception e) {
+                    v.error = String.valueOf(e.getMessage());
+                }
                 v.state = "none";
                 save(context, v);
                 return;
@@ -420,17 +446,15 @@ final class TurboGpu {
         try {
             v.gpu = Whisper.probe(device) + " · " + level.backend;
             step(context, v, "cpu");
+            // Each as it would transcribe: the CPU greedily, the GPU with beam search; the
+            // decoder's threads tuned first (the CPU's run), for the CPU and the split.
+            String cpu = timeCpu(context, variant, v, within(progress, 1));
             float[] sound = sample(context);
             String path = Turbo.file(context, variant).getPath();
             long[] took = new long[1];
-            // Each as it would transcribe: the CPU greedily, the GPU with beam search; the
-            // decoder's threads tuned first (the CPU's run), for the CPU and the split.
             int[] tuned = {v.decodeThreads};
-            String cpu = hear(path, -1, true, false, tuned, sound, took, within(progress, 1));
-            v.decodeThreads = tuned[0];
-            v.cpuSeconds = took[0] / 1000.0;
             // Shaders take a while to build the first time; past these, the GPU has hung.
-            long limit = Math.max(120_000, 10 * took[0]);
+            long limit = Math.max(120_000, (long) (10_000 * v.cpuSeconds));
             step(context, v, "gpu-shaders");
             try (Watchdog ignored = new Watchdog(context, variant, v, v.step, limit)) {
                 hear(path, device, level.flash, false, tuned, sound, took, within(progress, 2));

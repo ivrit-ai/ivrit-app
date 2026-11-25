@@ -65,7 +65,7 @@ public class LocalTranscribeWorker extends Worker {
 
     /**
      * One more recording, after those already waiting. While the Turbo model is not
-     * downloaded yet (874 MB), it waits for Wi-Fi (an unmetered network) to fetch it,
+     * downloaded yet (874 MB, 474 for q4_0), it waits for Wi-Fi (an unmetered network) to fetch it,
      * and pauses there if Wi-Fi goes, to resume the download where it stopped. A
      * watched folder's file ("charging": its watch's chargingOnly) waits for the
      * charger, and pauses if it is unplugged; what the user asked for starts at once.
@@ -116,12 +116,20 @@ public class LocalTranscribeWorker extends Worker {
     private String name;
     private String folder;
     private long told;
+    // The phase last told, and how far: within a phase the share never goes back (its
+    // downloads, one after another, each from 0), as the page and the notification show it.
+    private String toldPhase;
+    private double toldFraction;
     private String engine = LocalModel.ENGINE;
     // A benchmark's (Benchmark) result as it is made, and each stage's milliseconds; null otherwise.
     private JSONObject bench;
     private long tuneMs, transcribeMs, printsMs;
     // The Turbo model while it is loaded, so stopping the work stops it (onStopped).
     private long turbo;
+    // Turbo is downloading or transcribing (its failure is retried, then the zipformer's: Turbo.TRIES).
+    private boolean inTurbo;
+    // This run counted against Turbo ("turbo:<key>"), until it is stopped (not failed): uncount.
+    private boolean counted;
 
     @NonNull
     @Override
@@ -160,14 +168,34 @@ public class LocalTranscribeWorker extends Worker {
         } catch (Exception e) {
             Log.w(TAG, "could not run in the foreground", e);
         }
+        boolean benchmark = "benchmark".equals(kind);
         try {
-            String variant = Turbo.chosen(context);
-            boolean benchmark = "benchmark".equals(kind);
+            // The benchmark measures Turbo where the phone gave it up too (Turbo.off).
+            String variant = benchmark ? Turbo.offered(context) : Turbo.chosen(context);
             if (benchmark && variant == null) return done(kind, input, null, "unsupported");
             if (benchmark) bench = new JSONObject();
+            // Turbo started on this recording TRIES times and never finished it (the process
+            // ended, or ggml failed): the zipformer has it, and Turbo is closer to given up.
+            if (!benchmark && variant != null && count(context, "turbo:" + key, 0) >= Turbo.TRIES) {
+                Turbo.couldNotFinish(context, variant, new JSONObject().put("kind", kind).put("app", appVersion(context)));
+                variant = null;
+            }
             if (variant != null) {
                 engine = Turbo.engine(variant);
+                // Counted from its download on: a download that keeps failing (the site not
+                // serving the model, say) is Turbo not finishing too, and the zipformer has it.
+                if (!benchmark) {
+                    count(context, "turbo:" + key, 1);
+                    counted = true;
+                }
+                inTurbo = true;
                 Turbo.ensure(context, variant, (done, total) -> progress("downloading", done / (double) Math.max(1, total), null));
+                // The speaker model with it, so that downloading is one phase, before the GPU's check.
+                try {
+                    Speakers.ensure(context, (got, total) -> progress("downloading", got / (double) Math.max(1, total), null));
+                } catch (Exception e) {
+                    Log.w(TAG, "no speaker model yet", e); // tried again where it is loaded
+                }
             } else {
                 LocalModel.ensure(context, (done, total) -> progress("model", done / (double) Math.max(1, total), null));
             }
@@ -176,11 +204,26 @@ public class LocalTranscribeWorker extends Worker {
             // A benchmark measures the phone, so it runs at normal priority (asked for, and
             // watched); a recording yields to whatever the phone is doing.
             if (benchmark) bench.put("conditions", new JSONObject().put("start", Benchmark.conditions(context)));
-            JSONArray segments = variant == null ? transcribe(context, source, duration)
-                : benchmark ? transcribeTurbo(context, kind, source, duration, variant)
-                : turboYielding(context, kind, source, duration, variant);
+            JSONArray segments = null;
+            if (variant != null) {
+                try {
+                    segments = benchmark ? transcribeTurbo(context, kind, source, duration, variant)
+                        : turboYielding(context, kind, source, duration, variant);
+                    if (!benchmark) Turbo.finished(context, variant);
+                } catch (Turbo.TooSlow e) {
+                    Log.i(TAG, e.getMessage() + ": the zipformer, then");
+                    engine = LocalModel.ENGINE;
+                    LocalModel.ensure(context, (done, total) -> progress("model", done / (double) Math.max(1, total), null));
+                }
+                // Past here (not thrown out of it), Turbo did not fail.
+                inTurbo = false;
+            }
+            if (segments == null) segments = transcribe(context, source, duration);
             if (benchmark) bench.getJSONObject("conditions").put("end", Benchmark.conditions(context));
-            if (isStopped()) return Result.success();
+            if (isStopped()) {
+                uncount(context);
+                return Result.success();
+            }
             if (benchmark) {
                 StringBuilder text = new StringBuilder();
                 for (int i = 0; i < segments.length(); i++) text.append(segments.getJSONObject(i).optString("text")).append(' ');
@@ -207,10 +250,18 @@ public class LocalTranscribeWorker extends Worker {
         } catch (Refused e) {
             return done(kind, input, null, e.getMessage());
         } catch (Exception | LinkageError e) {
-            if (isStopped()) return Result.success();
+            if (isStopped()) {
+                uncount(context);
+                return Result.success();
+            }
             Log.w(TAG, "transcribing on the phone failed", e);
             report(context, kind, e);
-            if (failures(context, key, 1) < 2 && e instanceof Exception) return Result.retry();
+            // Turbo failed: again, until its tries are spent and the zipformer has it.
+            if (inTurbo && !benchmark) {
+                inTurbo = false;
+                return Result.retry();
+            }
+            if (count(context, "failures:" + key, 1) < 2 && e instanceof Exception) return Result.retry();
             String detail = e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage());
             return done(kind, input, null, detail.length() > 200 ? detail.substring(0, 200) : detail);
         }
@@ -230,14 +281,30 @@ public class LocalTranscribeWorker extends Worker {
         }
     }
 
-    /** This recording's failures so far, after adding `add` (cleared when it is done). */
-    private static synchronized int failures(Context context, String key, int add) {
+    /**
+     * A recording's count ("failures:<key>", its failures; "turbo:<key>", Turbo runs started
+     * on it), after adding `add`; kept at once, so a run that takes the process down is
+     * counted. Cleared when the recording is done (forget).
+     */
+    private static synchronized int count(Context context, String name, int add) {
         android.content.SharedPreferences prefs = context.getSharedPreferences("ivrit_local", Context.MODE_PRIVATE);
-        int n = prefs.getInt("failures:" + key, 0) + add;
-        if (add == 0 && n == 0) return 0;
-        if (add < 0) prefs.edit().remove("failures:" + key).apply();
-        else prefs.edit().putInt("failures:" + key, n).apply();
+        int n = Math.max(0, prefs.getInt(name, 0) + add);
+        if (add == 0) return n;
+        if (n == 0) prefs.edit().remove(name).commit();
+        else prefs.edit().putInt(name, n).commit();
         return n;
+    }
+
+    /** Stopped (Wi-Fi gone, say), not failed: this run does not count against Turbo. */
+    private void uncount(Context context) {
+        if (!counted) return;
+        counted = false;
+        count(context, "turbo:" + key, -1);
+    }
+
+    private static synchronized void forget(Context context, String key) {
+        context.getSharedPreferences("ivrit_local", Context.MODE_PRIVATE).edit()
+            .remove("failures:" + key).remove("turbo:" + key).apply();
     }
 
     /** What went wrong, to the site's log (POST /lab/report), so a failure on a phone can be seen. */
@@ -282,7 +349,7 @@ public class LocalTranscribeWorker extends Worker {
         }
     }
 
-    private static String appVersion(Context context) {
+    static String appVersion(Context context) {
         try {
             android.content.pm.PackageInfo info = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
             long code = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
@@ -459,6 +526,16 @@ public class LocalTranscribeWorker extends Worker {
         TurboGpu.Verdict verdict = TurboGpu.decide(context, variant, processor, fraction -> progress("checking", fraction, null));
         long checkMs = System.currentTimeMillis() - checking;
         boolean gpu = TurboGpu.onGpu(verdict, processor);
+        // Too slow here, as the check timed it: the zipformer (the benchmark measures it
+        // anyway). Once that is final (the GPU checked, or the CPU chosen), Turbo is given
+        // up here; until then (the GPU not checked yet, the app on the screen), only for this one.
+        double pace = TurboGpu.pace(verdict, gpu);
+        if (!"benchmark".equals(kind) && pace > Turbo.SLOW) {
+            if (verdict.state != null || TurboGpu.CPU.equals(processor)) {
+                Turbo.giveUp(context, variant, "slow", verdict.json().put("pace", pace).put("app", appVersion(context)));
+            }
+            throw new Turbo.TooSlow(pace);
+        }
         long loading = System.currentTimeMillis();
         String path = Turbo.file(context, variant).getPath();
         int device = gpu ? TurboGpu.device(verdict) : -1;
@@ -752,7 +829,7 @@ public class LocalTranscribeWorker extends Worker {
         Context context = getApplicationContext();
         Notifications.cancelLocalProgress(context, key);
         Checkpoint.forget(context, key);
-        failures(context, key, -1);
+        forget(context, key);
         if ("share".equals(kind)) {
             Shares.discard(context, input.getString("shareId"));
         } else if ("staged".equals(kind)) {
@@ -801,6 +878,9 @@ public class LocalTranscribeWorker extends Worker {
     }
 
     private void progress(String phase, double fraction, Double secondsLeft) {
+        if (phase.equals(toldPhase)) fraction = Math.max(fraction, toldFraction);
+        toldPhase = phase;
+        toldFraction = fraction;
         long now = System.currentTimeMillis();
         if (now - told < 1000 && fraction < 1) return;
         told = now;

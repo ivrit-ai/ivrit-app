@@ -119,7 +119,20 @@ public class IvritNativePlugin extends Plugin {
             .put("popup", importance >= NotificationManager.IMPORTANCE_HIGH)
             .put("importance", importance)
             .put("platform", "android")
-            .put("features", features());
+            .put("features", features())
+            .put("turbo", turbo());
+    }
+
+    /**
+     * Whether this phone transcribes recordings with the Turbo model, and if not why: {offered,
+     * why: "android" | "processor" | "memory" | "library" (Turbo.unsupported), or "slow" |
+     * "failing" (given up here: Turbo.off); null where it does}. The page tells the user once.
+     */
+    private JSObject turbo() {
+        Context context = getContext();
+        String why = Turbo.unsupported(context);
+        if (why == null) why = Turbo.off(context);
+        return new JSObject().put("offered", why == null).put("why", why);
     }
 
     private JSArray features() {
@@ -131,10 +144,12 @@ public class IvritNativePlugin extends Plugin {
     }
 
     /**
-     * The Turbo model this phone transcribes recordings with ("q8_0", the one size; Turbo;
-     * the zipformer is live transcription's only), whether that one is downloaded, where it runs ("auto", "cpu",
-     * "gpu"; TurboGpu) and what the GPU's check found. Given `model` or `processor`,
-     * chooses it; choosing a model lets go of any other Turbo model downloaded.
+     * The Turbo model this phone transcribes recordings with ("q8_0", or "q4_0" with less
+     * than 8 GB: Turbo.variant, not a choice; the zipformer is live transcription's only),
+     * whether that one is downloaded, where it runs ("auto", "cpu", "gpu"; TurboGpu) and
+     * what the GPU's check found; `off`, why Turbo was given up here ("slow", "failing";
+     * the zipformer transcribes), or null. Given `processor` or `decoding`, chooses it; a `model`
+     * (earlier pages send one) changes nothing.
      */
     @PluginMethod
     public void onDeviceModel(PluginCall call) {
@@ -152,17 +167,17 @@ public class IvritNativePlugin extends Plugin {
             call.reject("unknown model, processor or decoding", "bad_request");
             return;
         }
-        if (model != null) {
-            Store.setOnDeviceModel(context, model);
-            for (String variant : Turbo.VARIANTS) if (!variant.equals(model)) Turbo.forget(context, variant);
+        if (processor != null) {
+            Store.setTurboProcessor(context, processor);
+            Turbo.tryAgain(context);
         }
-        if (processor != null) Store.setTurboProcessor(context, processor);
         if (decoding != null) Store.setDecoding(context, decoding);
-        if (model != null || processor != null) PrepareWorker.schedule(context);
+        if (processor != null) PrepareWorker.schedule(context);
         String chosen = Store.onDeviceModel(context);
         JSObject result = new JSObject()
             .put("model", chosen)
             .put("ready", Turbo.ready(context, chosen))
+            .put("off", Turbo.off(context))
             .put("processor", Store.turboProcessor(context))
             .put("decoding", Store.decoding(context));
         TurboGpu.Verdict verdict = TurboGpu.load(context);

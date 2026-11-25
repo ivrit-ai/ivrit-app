@@ -108,12 +108,11 @@ addresses.
 
 ## Lab
 
-`app.ivrit.ai/lab/` (linked from Settings → Diagnostics) tests transcription on
-the device itself: whether WebGPU is there (in Chrome, and in the app's
-WebView), a kernel benchmark, and a 30-second Hebrew sample through ivrit.ai's
-turbo model. It runs the whisper-gpu engine, built into `web/lab/whisper/` by
-`scripts/build-lab.sh`. Every result is posted to `/lab/report` and logged as
-a `lab_report` line.
+`app.ivrit.ai/lab/` (linked from Settings → Diagnostics) shows what the device
+is (its GPU as WebGPU sees it, cores, memory), and, in the Android app, the
+phone's speed test: five minutes of Hebrew through the Turbo model as the phone
+transcribes, scored and posted to the boards at `/bench/`. The device's facts
+are posted to `/lab/report` and logged as a `lab_report` line.
 
 `web/icons/whatsapp-glyph-2026.svg` is WhatsApp's official glyph (Digital_Glyph_Green_RGB_2026,
 from the logo pack at meta.com/brand/resources/whatsapp/whatsapp-brand), used
