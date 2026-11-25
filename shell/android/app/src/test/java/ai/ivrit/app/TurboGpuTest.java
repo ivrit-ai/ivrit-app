@@ -79,6 +79,23 @@ public class TurboGpuTest {
     }
 
     @Test
+    public void theDecoderBesideTheGpuDyingChecksTheGpuAloneNext() {
+        TurboGpu.Verdict v = verdict("testing");
+        v.step = "gpu-split";
+        assertFalse(TurboGpu.splitDied(v));
+        v = TurboGpu.settle(v, "build q8_0");
+        assertNull(v.state);
+        assertEquals(0, v.level);
+        assertNull(v.crashed);
+        assertTrue(TurboGpu.splitDied(v));
+        // Only at that level: WebGPU's check tries it again.
+        v.level = 1;
+        assertFalse(TurboGpu.splitDied(v));
+        v.crashes = "ladder11:1:gpu-split ";
+        assertFalse(TurboGpu.splitDied(v));
+    }
+
+    @Test
     public void wrongWordsAndReportedFailuresMoveOnToo() {
         TurboGpu.Verdict v = verdict("testing");
         TurboGpu.fail(v, "wrong", "wrong");
@@ -145,6 +162,7 @@ public class TurboGpuTest {
         TurboGpu.Verdict v = verdict("slower");
         v.gpu = "WebGPU: WebGPU · WebGPU";
         v.cpuSeconds = 9.5;
+        v.cpuWords = "בפרק של היום";
         v.deaths = 1;
         v.level = 1;
         v.step = "gpu-run";
@@ -152,6 +170,7 @@ public class TurboGpuTest {
         assertEquals("slower", back.state);
         assertEquals("WebGPU: WebGPU · WebGPU", back.gpu);
         assertEquals(9.5, back.cpuSeconds, 0);
+        assertEquals("בפרק של היום", back.cpuWords);
         assertEquals(1, back.deaths);
         assertEquals(1, back.level);
         assertEquals("gpu-run", back.step);

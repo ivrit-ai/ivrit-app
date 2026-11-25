@@ -523,7 +523,7 @@ public class LocalTranscribeWorker extends Worker {
         double[] state = {done.turbo != null ? done.lastSpeech : from, done.after, from, file[0], file[1], file[2]};
         // On the GPU where it passed its check on this phone (TurboGpu), once checked.
         String processor = Store.turboProcessor(context);
-        TurboGpu.Verdict verdict = TurboGpu.decide(context, variant, processor, fraction -> progress("checking", fraction, null));
+        TurboGpu.Verdict verdict = TurboGpu.decide(context, variant, processor, "benchmark".equals(kind), fraction -> progress("checking", fraction, null));
         long checkMs = System.currentTimeMillis() - checking;
         boolean gpu = TurboGpu.onGpu(verdict, processor);
         // Too slow here, as the check timed it: the zipformer (the benchmark measures it

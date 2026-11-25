@@ -186,7 +186,7 @@ public class IvritNativePlugin extends Plugin {
                 .put("name", verdict.gpu)
                 .put("state", verdict.state)
                 .put("cpuSeconds", verdict.cpuSeconds)
-                .put("gpuSeconds", verdict.gpuSeconds));
+                .put("gpuSeconds", verdict.decoderCpu ? verdict.splitSeconds : verdict.gpuSeconds));
         }
         call.resolve(result);
     }

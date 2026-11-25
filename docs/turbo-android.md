@@ -308,7 +308,7 @@ Open to comment; each with what it rests on.
     Android 17, crashed at its shaders, the app open: builds 261-262 started the
     check with the app). The background preparation leaves the check alone; a
     recording made with the app open goes on the CPU, unchecked, and the next one
-    in the background checks.
+    in the background checks. The benchmark is the exception (decision 29).
 
 21. **WebGPU with programs of our own for phone GPUs, on trial** (the Lab's switch,
     processor `webgpu`; `TurboGpu.trial`; `patches/ggml-webgpu-phones.patch`, which
@@ -461,6 +461,24 @@ Open to comment; each with what it rests on.
     The Lab is now only the device's facts, the phone's speed test and the
     boards: the whisper-gpu tests (a kernel benchmark, a sample, q8/q5/q4) are gone,
     with `scripts/lab_models.py` and `web/lab/whisper/`.
+
+29. **The benchmark checks the GPU first, on the screen too; a lighter check**
+    (2026-11-25; `TurboGpu.decide`'s `test`, `TurboGpu.check`). On the S25 the Lab's
+    speed test, with the GPU unchecked and the app open, ran on the CPU (212 s for
+    297 s, build 275): a test is there to measure the phone as it will transcribe,
+    so it checks first even on the screen, at the risk of decision 20 (a driver
+    that crashes closes the app; `settle` counts it and the next level is checked
+    next time). Recordings still check only in the background. The check was four
+    runs of its 12 s recording, each loading the model: the CPU, the GPU's shaders,
+    the GPU timed, then the GPU with the decoder on the CPU (65-70 s on the S25).
+    Now: the CPU's run is PrepareWorker's where it ran (its words kept in the
+    verdict, `cpuWords`); the GPU with the decoder on the CPU first, its shaders
+    built on the recording's first 3 s in the same load (the encoder's work is the
+    same on any length), then timed; the GPU alone only where that gave the wrong
+    words or failed. Where the decoder beside the GPU crashed, `settle` no longer
+    takes the GPU as passed: the next check runs the GPU alone (`splitDied`). The
+    GPU alone is no longer timed where the split worked, so a GPU whose own
+    decoder would beat the CPU's is not found (on the S25 the split was 40% faster).
 
 ## Verified, and not yet
 

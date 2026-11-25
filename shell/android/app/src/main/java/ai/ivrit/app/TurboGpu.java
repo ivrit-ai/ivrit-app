@@ -6,6 +6,7 @@ import android.net.Uri;
 import android.os.Build;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.json.JSONObject;
 
@@ -99,13 +100,14 @@ final class TurboGpu {
         String state; // null (not checked), "testing", "faster", "slower", "wrong", "failed", "crashed", "none"
         String gpu = "";
         double cpuSeconds;
+        String cpuWords = ""; // the check's recording on the CPU, to compare the GPU's with
         double gpuSeconds;
         double agreement;
         String error = "";
         int deaths; // GPU runs that died since the last one that finished
         boolean running; // a GPU run under way (or one that died)
         int level; // the LEVELS entry it holds for
-        String step = ""; // how far the check got: "probe", "cpu", "gpu-shaders", "gpu-run"
+        String step = ""; // how far the check got: "probe", "cpu", "gpu-split", "gpu-run"
         long since; // when the check or GPU run started (milliseconds)
         String crashes = ""; // what failed so far: "level:step " each
         String crashed; // set when one failed just now (not kept)
@@ -120,7 +122,7 @@ final class TurboGpu {
 
         JSONObject json() throws Exception {
             return new JSONObject().put("key", key).put("state", state == null ? JSONObject.NULL : state).put("gpu", gpu)
-                .put("cpuSeconds", cpuSeconds).put("gpuSeconds", gpuSeconds).put("agreement", agreement)
+                .put("cpuSeconds", cpuSeconds).put("cpuWords", cpuWords).put("gpuSeconds", gpuSeconds).put("agreement", agreement)
                 .put("error", error).put("deaths", deaths).put("running", running).put("level", level).put("step", step)
                 .put("since", since).put("crashes", crashes).put("ladder", LADDER)
                 .put("decodeThreads", decodeThreads).put("decoderCpu", decoderCpu).put("splitSeconds", splitSeconds)
@@ -138,6 +140,7 @@ final class TurboGpu {
             v.state = o.isNull("state") ? null : o.optString("state", null);
             v.gpu = o.optString("gpu");
             v.cpuSeconds = o.optDouble("cpuSeconds", 0);
+            v.cpuWords = o.optString("cpuWords");
             v.gpuSeconds = o.optDouble("gpuSeconds", 0);
             v.agreement = o.optDouble("agreement", 0);
             v.error = o.optString("error");
@@ -172,10 +175,10 @@ final class TurboGpu {
     static Verdict settle(Verdict saved, String key) {
         Verdict v = saved == null || !key.equals(saved.key) ? new Verdict(key) : saved;
         if ("testing".equals(v.state) && "gpu-split".equals(v.step)) {
-            // The GPU passed; only the decoder on the CPU beside it died: not that, then.
+            // The decoder on the CPU beside the GPU died: the GPU alone, checked next time.
             v.crashes += v.level + ":gpu-split ";
             v.decoderCpu = false;
-            v.state = v.gpuSeconds < v.cpuSeconds ? "faster" : "slower";
+            v.state = null;
         }
         if ("testing".equals(v.state)) fail(v, v.step, "crashed");
         if (v.running) {
@@ -197,6 +200,11 @@ final class TurboGpu {
         } else {
             v.state = last;
         }
+    }
+
+    /** The decoder on the CPU beside the GPU died at this level before (settle): the GPU alone, then. */
+    static boolean splitDied(Verdict v) {
+        return (" " + v.crashes).contains(" " + v.level + ":gpu-split ");
     }
 
     /** On the GPU, for the processor the user chose, by the verdict. */
@@ -279,7 +287,7 @@ final class TurboGpu {
     static void prepare(Context context, String variant) throws Exception {
         Verdict v = load(context);
         if (v == null || !key(variant).equals(v.key)) v = new Verdict(key(variant));
-        if (v.decodeThreads > 0 && v.cpuSeconds > 0) return;
+        if (timed(v)) return;
         timeCpu(context, variant, v, percent -> {});
         save(context, v);
     }
@@ -287,7 +295,12 @@ final class TurboGpu {
     /** What PrepareWorker can do is done: the decoder tuned, the CPU timed (the GPU's check is a recording's). */
     static boolean prepared(Context context, String variant) {
         Verdict v = load(context);
-        return v != null && key(variant).equals(v.key) && v.decodeThreads > 0 && v.cpuSeconds > 0;
+        return v != null && key(variant).equals(v.key) && timed(v);
+    }
+
+    /** The CPU's run on the check's recording is known, so the check need not make it. */
+    private static boolean timed(Verdict v) {
+        return v.decodeThreads > 0 && v.cpuSeconds > 0 && !v.cpuWords.isEmpty();
     }
 
     /**
@@ -298,7 +311,8 @@ final class TurboGpu {
         float[] sound = sample(context);
         long[] took = new long[1];
         int[] tuned = {v.decodeThreads};
-        String words = hear(Turbo.file(context, variant).getPath(), -1, true, false, tuned, sound, took, progress);
+        String words = hear(Turbo.file(context, variant).getPath(), -1, true, false, tuned, null, null, sound, took, progress);
+        v.cpuWords = words;
         v.decodeThreads = tuned[0];
         v.cpuSeconds = took[0] / 1000.0;
         v.sampleSeconds = sound.length / 16000.0;
@@ -359,15 +373,16 @@ final class TurboGpu {
 
     /**
      * The verdict for the chosen model on this phone, checking the GPU first where it
-     * has not been (`checking` follows it, as it takes a minute). Not while the app is
-     * on the screen: a driver that crashes takes the app with it, so that recording
-     * goes on the CPU, and a later one, in the background, checks.
+     * has not been (`checking` follows it). Not while the app is on the screen: a
+     * driver that crashes takes the app with it, so that recording goes on the CPU, and
+     * a later one, in the background, checks. A test (the benchmark) checks first even
+     * there: it is there to measure the phone as it will transcribe.
      */
-    static Verdict decide(Context context, String variant, String processor, Progress checking) throws Exception {
+    static Verdict decide(Context context, String variant, String processor, boolean test, Progress checking) throws Exception {
         Verdict v = settle(load(context), key(variant));
         save(context, v);
         if (v.crashed != null) report(context, variant, v);
-        if (v.state == null && !CPU.equals(processor) && !onScreen()) {
+        if (v.state == null && !CPU.equals(processor) && (test || !onScreen())) {
             checking.at(0);
             check(context, variant, v, checking);
         }
@@ -406,14 +421,16 @@ final class TurboGpu {
     }
 
     /**
-     * Each step's share of the check: starting the GPU, the CPU, the GPU's first run,
-     * its timed one, and one more with the decoder on the CPU.
+     * Each step's share of the check: starting the GPU, the CPU (where PrepareWorker has
+     * not run it), the GPU's shaders built, and its timed run.
      */
-    private static final double[] STEPS = {0, 0.05, 0.30, 0.55, 0.78, 1};
+    private static final double[] STEPS = {0, 0.05, 0.40, 0.50, 1};
+
+    /** The GPU's shaders are built on the sample's first seconds (the encoder's work is the same on any length). */
+    private static final int WARM_SAMPLES = 3 * 16000;
 
     /** Whisper's percent within step `i`, as the check's progress. */
     private static Whisper.Listener within(Progress progress, int i) {
-        progress.at(STEPS[i]);
         return percent -> progress.at(STEPS[i] + (STEPS[i + 1] - STEPS[i]) * percent / 100.0);
     }
 
@@ -430,7 +447,7 @@ final class TurboGpu {
                 // No GPU for Turbo: the CPU timed, for whether Turbo is worth it here (pace).
                 try {
                     step(context, v, "cpu");
-                    timeCpu(context, variant, v, within(progress, 1));
+                    if (!timed(v)) timeCpu(context, variant, v, within(progress, 1));
                 } catch (Exception e) {
                     v.error = String.valueOf(e.getMessage());
                 }
@@ -446,43 +463,45 @@ final class TurboGpu {
         try {
             v.gpu = Whisper.probe(device) + " · " + level.backend;
             step(context, v, "cpu");
-            // Each as it would transcribe: the CPU greedily, the GPU with beam search; the
-            // decoder's threads tuned first (the CPU's run), for the CPU and the split.
-            String cpu = timeCpu(context, variant, v, within(progress, 1));
+            // Each as it would transcribe: the CPU greedily (as PrepareWorker ran it, where
+            // it has), the GPU with beam search; the decoder's threads tuned on the CPU's run.
+            String cpu = timed(v) ? v.cpuWords : timeCpu(context, variant, v, within(progress, 1));
             float[] sound = sample(context);
+            float[] warm = Arrays.copyOf(sound, Math.min(sound.length, WARM_SAMPLES));
             String path = Turbo.file(context, variant).getPath();
             long[] took = new long[1];
             int[] tuned = {v.decodeThreads};
             // Shaders take a while to build the first time; past these, the GPU has hung.
             long limit = Math.max(120_000, (long) (10_000 * v.cpuSeconds));
-            step(context, v, "gpu-shaders");
-            try (Watchdog ignored = new Watchdog(context, variant, v, v.step, limit)) {
-                hear(path, device, level.flash, false, tuned, sound, took, within(progress, 2));
+            // The decoder on the CPU, the encoder on the GPU, first: on the Galaxy S25 40%
+            // faster, as its CPU takes the decoder's small steps faster than its GPU. The
+            // GPU alone only where that did not give the right words (or died: settle).
+            if (!splitDied(v)) {
+                step(context, v, "gpu-split");
+                try (Watchdog ignored = new Watchdog(context, variant, v, v.step, limit)) {
+                    String split = hear(path, device, level.flash, true, tuned, warm, within(progress, 2), sound, took, within(progress, 3));
+                    v.splitSeconds = took[0] / 1000.0;
+                    v.agreement = agreement(cpu, split);
+                    v.decoderCpu = v.agreement >= AGREEMENT;
+                } catch (Exception e) {
+                    v.error = "split: " + e.getMessage(); // the GPU alone, then
+                }
             }
-            step(context, v, "gpu-run");
-            String onGpu;
-            try (Watchdog ignored = new Watchdog(context, variant, v, v.step, limit)) {
-                onGpu = hear(path, device, level.flash, false, tuned, sound, took, within(progress, 3));
+            if (!v.decoderCpu) {
+                step(context, v, "gpu-run");
+                String onGpu;
+                try (Watchdog ignored = new Watchdog(context, variant, v, v.step, limit)) {
+                    onGpu = hear(path, device, level.flash, false, tuned, warm, within(progress, 2), sound, took, within(progress, 3));
+                }
+                v.gpuSeconds = took[0] / 1000.0;
+                v.agreement = agreement(cpu, onGpu);
+                if (v.agreement < AGREEMENT) {
+                    fail(v, "wrong", "wrong");
+                    save(context, v);
+                    report(context, variant, v);
+                    return;
+                }
             }
-            v.gpuSeconds = took[0] / 1000.0;
-            v.agreement = agreement(cpu, onGpu);
-            if (v.agreement < AGREEMENT) {
-                fail(v, "wrong", "wrong");
-                save(context, v);
-                report(context, variant, v);
-                return;
-            }
-            // The decoder on the CPU, the encoder on the GPU: on the Galaxy S25 40%
-            // faster, as its CPU takes the decoder's small steps faster than its GPU.
-            step(context, v, "gpu-split");
-            String split = "";
-            try (Watchdog ignored = new Watchdog(context, variant, v, v.step, limit)) {
-                split = hear(path, device, level.flash, true, tuned, sound, took, within(progress, 4));
-                v.splitSeconds = took[0] / 1000.0;
-            } catch (Exception e) {
-                v.error = "split: " + e.getMessage(); // the GPU passed: only not split, then
-            }
-            v.decoderCpu = !split.isEmpty() && agreement(cpu, split) >= AGREEMENT && v.splitSeconds < v.gpuSeconds;
             double onGpuSeconds = v.decoderCpu ? v.splitSeconds : v.gpuSeconds;
             v.state = onGpuSeconds < v.cpuSeconds ? "faster" : "slower";
         } catch (Exception e) {
@@ -608,18 +627,22 @@ final class TurboGpu {
     }
 
     /**
-     * The sample's words on a GPU device (-1: the CPU), the decoder on the CPU or not;
+     * The sample's words on a GPU device (-1: the CPU), the decoder on the CPU or not,
+     * after `warm` (where given) has gone through untimed, for the shaders;
      * took[0]: how long, in milliseconds. tuned[0]: the decoder's threads, tuned first
      * (and set) when 0.
      */
-    private static String hear(String path, int device, boolean flash, boolean decoderCpu, int[] tuned, float[] sound,
-                               long[] took, Whisper.Listener progress) {
+    private static String hear(String path, int device, boolean flash, boolean decoderCpu, int[] tuned, float[] warm,
+                               Whisper.Listener warming, float[] sound, long[] took, Whisper.Listener progress) {
         long handle = Whisper.load(path, device, flash, decoderCpu);
         if (handle == 0) throw new IllegalStateException("the Turbo model did not load" + (device >= 0 ? " on the GPU" : ""));
         try {
             if (tuned[0] <= 0) tuned[0] = Whisper.tuneDecoder(handle, sound, sound.length, Turbo.threads());
+            int beams = device >= 0 ? Turbo.GPU_BEAMS : Turbo.CPU_BEAMS;
+            if (warm != null && Whisper.transcribe(handle, warm, Turbo.LANGUAGE, Turbo.threads(), tuned[0], beams,
+                    warming, 0, true, new double[6], Whisper.prompt()) == null) throw new IllegalStateException("stopped");
             long started = System.currentTimeMillis();
-            Object[] heard = Whisper.transcribe(handle, sound, Turbo.LANGUAGE, Turbo.threads(), tuned[0], device >= 0 ? Turbo.GPU_BEAMS : Turbo.CPU_BEAMS,
+            Object[] heard = Whisper.transcribe(handle, sound, Turbo.LANGUAGE, Turbo.threads(), tuned[0], beams,
                 progress, 0, true, new double[6], Whisper.prompt());
             took[0] = System.currentTimeMillis() - started;
             if (heard == null) throw new IllegalStateException("stopped");
