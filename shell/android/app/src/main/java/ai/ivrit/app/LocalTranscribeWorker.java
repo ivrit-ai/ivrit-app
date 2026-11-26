@@ -622,7 +622,7 @@ public class LocalTranscribeWorker extends Worker {
             .put("memory", Turbo.memory(context))
             .put("beams", Turbo.beams(context, gpu))
             .put("decoding", Store.decoding(context))
-            .put("decodeThreads", decodeThreads[0])
+            .put("decodeThreads", decodeThreads[0]).put("allowedCores", Turbo.allowedCores())
             .put("decoderCpu", gpu && verdict.decoderCpu)
             .put("speakers", speakers != 0)
             .put("system", Whisper.system());
@@ -659,7 +659,7 @@ public class LocalTranscribeWorker extends Worker {
     private long speakerModel(Context context) {
         try {
             Speakers.ensure(context, (got, total) -> progress("downloading", got / (double) Math.max(1, total), null));
-            return Speakers.load(Speakers.path(context), Turbo.threads());
+            return Speakers.load(Speakers.path(context), Turbo.fit(Turbo.threads()));
         } catch (Exception e) {
             Log.w(TAG, "no speaker model: transcribing without speakers", e);
             return 0;
@@ -680,7 +680,7 @@ public class LocalTranscribeWorker extends Worker {
         double seconds = sound.seconds();
         if (decodeThreads[0] <= 0) {
             long tuning = System.currentTimeMillis();
-            decodeThreads[0] = Whisper.tuneDecoder(handle, sound.samples, sound.length, threads);
+            decodeThreads[0] = Whisper.tuneDecoder(handle, sound.samples, sound.length, Turbo.fit(threads));
             tuneMs += System.currentTimeMillis() - tuning;
             if (decodeThreads[0] > 0) TurboGpu.tuned(context, variant, decodeThreads[0]);
         }
@@ -689,7 +689,7 @@ public class LocalTranscribeWorker extends Worker {
         // On the GPU: a piece taking over twice its length (plus two minutes) has hung.
         try (TurboGpu.Watchdog ignored = watch == null ? null
                 : new TurboGpu.Watchdog(context, variant, watch, "run", (long) (2000 * seconds) + 120_000)) {
-            heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, threads, decodeThreads[0], Turbo.beams(context, onGpu), percent -> {
+            heard = Whisper.transcribe(handle, java.util.Arrays.copyOf(sound.samples, sound.length), Turbo.LANGUAGE, Turbo.fit(threads), Turbo.fit(decodeThreads[0]), Turbo.beams(context, onGpu), percent -> {
                 if (duration <= 0) return;
                 double fraction = Math.min(1, (start + seconds * percent / 100.0) / duration);
                 double spent = (System.currentTimeMillis() - started) / 1000.0;

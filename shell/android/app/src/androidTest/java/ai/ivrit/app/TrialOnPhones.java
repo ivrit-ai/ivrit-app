@@ -45,12 +45,14 @@ public class TrialOnPhones {
         String decoding = args.getString("decoding", Store.ACCURATE);
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         // Another size than the phone's memory picks ("q4_0"), and the GPU's check from a
-        // later level ("1": WebGPU on a Snapdragon), checked again.
+        // later level ("1": WebGPU on a Snapdragon), checked again, the decoder's threads
+        // set ("decodeThreads") rather than tuned.
         if (args.getString("variant") != null) Turbo.testVariant = args.getString("variant");
         if (args.getString("level") != null) {
             context.getSharedPreferences("ivrit_turbo_gpu", Context.MODE_PRIVATE).edit().putString("verdict", new JSONObject()
                 .put("key", android.os.Build.FINGERPRINT + " " + Store.onDeviceModel(context)).put("state", JSONObject.NULL)
-                .put("level", Integer.parseInt(args.getString("level"))).put("ladder", TurboGpu.LADDER).toString()).commit();
+                .put("level", Integer.parseInt(args.getString("level"))).put("ladder", TurboGpu.LADDER)
+                .put("decodeThreads", Integer.parseInt(args.getString("decodeThreads", "0"))).toString()).commit();
         }
 
         // A recording as one handed over is ("staged"), queued and left to run: for what

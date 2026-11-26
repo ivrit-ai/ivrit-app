@@ -96,6 +96,28 @@ public class TurboGpuTest {
     }
 
     @Test
+    public void rightWordsOnTheScreenRunOnTheGpuUntimed() {
+        TurboGpu.Verdict v = verdict(null);
+        assertFalse(TurboGpu.onGpu(v, TurboGpu.AUTO));
+        v.passedOnScreen = true;
+        assertTrue(TurboGpu.onGpu(v, TurboGpu.AUTO));
+        assertTrue(TurboGpu.onGpu(v, TurboGpu.GPU));
+        assertFalse(TurboGpu.onGpu(v, TurboGpu.CPU));
+    }
+
+    @Test
+    public void build277sSlowerIsCheckedAgainItsOtherVerdictsHold() throws Exception {
+        org.json.JSONObject slower = new org.json.JSONObject().put("key", "build q8_0").put("state", "slower")
+            .put("ladder", 12).put("crashes", "");
+        TurboGpu.Verdict v = TurboGpu.Verdict.of(slower);
+        assertNull(v.state);
+        assertTrue(v.crashes.startsWith("ladder12:slower"));
+        TurboGpu.Verdict faster = TurboGpu.Verdict.of(slower.put("state", "faster"));
+        assertEquals("faster", faster.state);
+        assertEquals(TurboGpu.LADDER, faster.json().getInt("ladder"));
+    }
+
+    @Test
     public void wrongWordsAndReportedFailuresMoveOnToo() {
         TurboGpu.Verdict v = verdict("testing");
         TurboGpu.fail(v, "wrong", "wrong");
@@ -176,6 +198,17 @@ public class TurboGpuTest {
         assertEquals("gpu-run", back.step);
         assertEquals("WebGPU", v.json().getString("backend"));
         assertNull(TurboGpu.Verdict.of(verdict(null).json()).state);
+    }
+
+    @Test
+    public void coresAreCountedFromTheirList() {
+        assertEquals(8, Turbo.countCores("0-7"));
+        assertEquals(6, Turbo.countCores(" 0-5\n"));
+        assertEquals(4, Turbo.countCores("0-1,4-5"));
+        assertEquals(3, Turbo.countCores("0,2,7"));
+        assertEquals(0, Turbo.countCores("x"));
+        assertEquals(0, Turbo.fit(0));
+        assertTrue(Turbo.fit(64) >= 1);
     }
 
     @Test

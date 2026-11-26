@@ -75,7 +75,8 @@ Open to comment; each with what it rests on.
    1.2× real time on the CPU); where that is missing, the cores faster than the
    slowest kind, at least four. ggml shares matrix work out in small pieces,
    so a small core helps more than it holds back. Reported with each run, to
-   tune from phones' numbers.
+   tune from phones' numbers. Never more than the cores Android lets the app
+   use at that moment (`Turbo.fit`, decision 30).
 
 6. **Turbo transcribes every recording, the zipformer only live.** On phones that
    can run Turbo it is the model for recordings (shared, watched, handed over),
@@ -479,6 +480,33 @@ Open to comment; each with what it rests on.
     takes the GPU as passed: the next check runs the GPU alone (`splitDied`). The
     GPU alone is no longer timed where the split worked, so a GPU whose own
     decoder would beat the CPU's is not found (on the S25 the split was 40% faster).
+    Build 277 timed the check on the screen as it would in the background; that
+    was wrong (decision 30): on the screen it now only finds the GPU's words.
+
+30. **Threads never more than the cores the app may use** (2026-11-26;
+    `Turbo.fit`, `Turbo.allowedCores`, ladder 13). ggml's threads wait for each
+    other spinning, so a thread with no core of its own holds all the others
+    back: on the S25 eight threads on six cores ran 10-20 times slower or not at
+    all. Android gives the app different cores by what it is doing (the S25's
+    cpusets): on the screen all eight (0-7), as a foreground service, which is
+    how it transcribes, six (0-5; 6-7 are the fastest), in the background four
+    (0-1, 4-5). The decoder's threads are tuned where the CPU first runs
+    (decision 17): in the background before, six; on the screen, from build
+    275's Lab test or 277's check, eight, kept with the verdict, and used by
+    every later run in the foreground service. Build 277 on the S25 (Play):
+    its check on the screen timed the CPU at 86 s and the split at 77 s
+    (normally 12 and 5) and found the GPU "slower"; the recording then took 68
+    minutes on the CPU, its encoder's and decoder's eight threads on six cores
+    and then four, the app left. Now every piece reads `/proc/self/status`'s
+    `Cpus_allowed_list` and fits both counts to it, all but two where it may use
+    every core (the screen and whatever else runs on it), so a count tuned
+    anywhere is right anywhere. On the screen the check no longer times
+    (`passedOnScreen`: right words run this one on the GPU, the timed check is
+    the background's); ladder 13 checks 12's "slower" again and keeps its other
+    verdicts. Reports carry `allowedCores` and `onScreen`. On the S25 with eight
+    kept: 130 s for 297 s on the screen (before: 190 s, or hung), check 11.6 s
+    against 5.1 s with the screen off (before: hung), and 394 s on four cores
+    when that run came back hours later in the background (before: hung).
 
 ## Verified, and not yet
 

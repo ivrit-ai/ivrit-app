@@ -225,6 +225,56 @@ final class Turbo {
     }
 
     /**
+     * `wanted` threads for whisper.cpp, fitted to the cores this process may run on now
+     * (its cpuset: on the Galaxy S25 all 8 with the app on the screen, 6 as a foreground
+     * service, 4 in the background), two left free where it has them all, 6 or more
+     * (the rest of the phone, the screen and the GPU's driver, has the others where it
+     * has fewer: the S25 kept 6 threads on its 6 at full speed). ggml's threads wait for one another spinning, so a
+     * thread more than the cores, or one whose core is taken, holds them all up: on the
+     * S25 the decoder's 8 threads on 6 cores made the GPU's check ten times slower and
+     * the run hang, and a CPU run took 68 minutes for 5 minutes of sound (decision 30).
+     * Read again for each piece, as the app comes and goes from the screen. 0 (not
+     * set) stays 0.
+     */
+    static int fit(int wanted) {
+        if (wanted <= 0) return wanted;
+        int all = Runtime.getRuntime().availableProcessors(), cores = allowedCores();
+        return Math.max(1, Math.min(wanted, cores >= all && all >= 6 ? all - 2 : cores));
+    }
+
+    /** The cores this process may run on now (Cpus_allowed_list), or every core where that cannot be read. */
+    static int allowedCores() {
+        int all = Runtime.getRuntime().availableProcessors();
+        try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.FileReader("/proc/self/status"))) {
+            for (String line; (line = in.readLine()) != null; ) {
+                if (line.startsWith("Cpus_allowed_list:")) {
+                    int n = countCores(line.substring(line.indexOf(':') + 1));
+                    return n > 0 ? n : all;
+                }
+            }
+        } catch (Exception ignored) {
+            // every core, then
+        }
+        return all;
+    }
+
+    /** The cores in a list such as "0-1,4-5"; 0 where it does not read. */
+    static int countCores(String list) {
+        int n = 0;
+        try {
+            for (String part : list.trim().split(",")) {
+                if (part.isEmpty()) continue;
+                int dash = part.indexOf('-');
+                String first = dash < 0 ? part : part.substring(0, dash), last = dash < 0 ? part : part.substring(dash + 1);
+                n += Integer.parseInt(last.trim()) - Integer.parseInt(first.trim()) + 1;
+            }
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+        return n;
+    }
+
+    /**
      * Threads for whisper.cpp: the cores at least half as capable as the best (the
      * kernel's own measure, cpu_capacity, out of 1024), at most eight: all eight on
      * a phone whose cores are all big (the Galaxy S25's), four on four big and four
