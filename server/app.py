@@ -40,7 +40,7 @@ import queue
 import asyncio.subprocess
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urljoin, urlencode
 from functools import wraps
 from typing import Dict, List, Optional, Tuple
@@ -5850,7 +5850,7 @@ if APP_SITE:
             "duration_seconds": clip.get("duration"),
             "origin": str(clip.get("origin") or "")[:40] or None,
             "created_at": clip.get("created_at"),
-            "saved_at": datetime.now().isoformat(),
+            "saved_at": datetime.now(timezone.utc).isoformat(),
         }
         identifier = get_user_identifier(refresh_token=refresh_token, user_email=email)
         file_name = f"{hashlib.sha256(clip_id.encode()).hexdigest()[:32]}.json.gz"
@@ -5881,6 +5881,33 @@ if APP_SITE:
         except Exception as e:
             logger.warning("Clip %s not indexed: %r", clip_id, e)
         return JSONResponse({"saved": True})
+
+    @app.get("/clips/status", include_in_schema=False)
+    async def clips_status(request: Request):
+        """What is in the user's clips folder in Drive, read from Drive itself (its toc),
+        so the app can show that saving works: {count, last_saved_at, folder_url}."""
+        email = await app_user(request)
+        if not email:
+            return JSONResponse({"error": "signed_out"}, status_code=401)
+        if not clips_storage_backend or not await db.get_clips_to_drive(email):
+            return JSONResponse({"count": 0, "last_saved_at": None, "folder_url": None})
+        refresh_token = await stored_refresh_token(email)
+        if not refresh_token:
+            return JSONResponse({"error": "drive_not_connected"}, status_code=409)
+        identifier = get_user_identifier(refresh_token=refresh_token, user_email=email)
+        toc_id = await clips_storage_backend.find_file_by_name("toc.json.gz", identifier)
+        raw = await clips_storage_backend.download_file_bytes(toc_id, identifier) if toc_id else None
+        entries = json.loads(gzip.decompress(raw)).get("entries", []) if raw else []
+        folder_id = None
+        try:
+            folder_id = await clips_storage_backend.ensure_folder(identifier)
+        except Exception:
+            pass
+        return JSONResponse({
+            "count": len(entries),
+            "last_saved_at": max((e.get("saved_at") or "" for e in entries), default=None) or None,
+            "folder_url": f"https://drive.google.com/drive/folders/{folder_id}" if folder_id else None,
+        }, headers={"Cache-Control": "no-store"})
 
     @app.post("/auth/drive", include_in_schema=False)
     async def connect_drive(request: Request):
