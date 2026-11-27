@@ -47,7 +47,9 @@ uses, so both see the same files while transcribe.ivrit.ai still runs. Jobs are
 scheduled by Eliezer's hub (credits), which also runs Eliezer's voice messages.
 Audio shared into the app: a short clip goes to Eliezer (its inbox message), a
 longer recording is transcribed into My files (in the Android app, uploaded in
-the background).
+the background). Of a shared video only the sound is kept, as soon as it arrives
+(Android's `SoundTrack`, the iPhone's `Shares.keepSoundOnly`): a minute of phone
+video is often over Eliezer's 20 MB, its sound 1–2 MB.
 
 ## Inside the app
 

@@ -1,7 +1,9 @@
 // Does on-device transcription work in the iPhone's WebKit? On a Mac, in the iOS
 // Simulator's Safari (the engine the app's WKWebView runs): the web app's own
 // local/ code transcribes the Hebrew fixture as AAC (Voice Memos) and as Ogg
-// Opus (WhatsApp's voice notes), and says whether Live has what it needs.
+// Opus (WhatsApp's voice notes), and the sound of a video (an mp4 with a picture:
+// the app keeps only the sound of a shared video, but a video picked in the page
+// comes whole), and says whether Live has what it needs.
 //
 //   node scripts/ios-webkit-probe.mjs      (CI: .github/workflows/ios-webkit.yml)
 //
@@ -14,7 +16,7 @@ import path from "node:path";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const WEB = path.join(ROOT, "web");
 const FIXTURES = path.join(ROOT, "store/fixtures");
-const TYPES = { ".js": "text/javascript", ".mjs": "text/javascript", ".html": "text/html", ".json": "application/json", ".css": "text/css" };
+const TYPES = { ".js": "text/javascript", ".mjs": "text/javascript", ".html": "text/html", ".json": "application/json", ".css": "text/css", ".mp4": "video/mp4" };
 
 // The page: the same modules the app loads, run on the fixtures, the answer posted back.
 const PROBE = `<!doctype html><meta charset="utf-8"><title>probe</title><body>probe<script type="module">
@@ -26,7 +28,7 @@ try {
   Object.assign(out, { local: local.supported(), live: live.supported(), audioWorklet: Boolean(self.AudioWorkletNode),
     mediaRecorder: Boolean(self.MediaRecorder), getUserMedia: Boolean(navigator.mediaDevices?.getUserMedia),
     recorderTypes: ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"].filter((t) => self.MediaRecorder?.isTypeSupported?.(t)) });
-  for (const name of ["hebrew-12s.m4a", "hebrew-12s.ogg"]) {
+  for (const name of ["hebrew-12s.m4a", "hebrew-12s.ogg", "hebrew-12s.mp4"]) {
     const started = Date.now();
     try {
       const blob = await (await fetch("/fixtures/" + name)).blob();

@@ -33,6 +33,8 @@ android {
     // uncompressed: read in place, and at offsets for the page (readModel).
     sourceSets {
         main.assets.srcDirs += '../../bundled'
+        // The test recordings (store/fixtures), for the tests on phones: in the test APK only.
+        androidTest.assets.srcDirs += '../../../store/fixtures'
     }
     androidResources {
         noCompress += ['onnx']

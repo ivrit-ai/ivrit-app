@@ -14,6 +14,7 @@ import androidx.work.WorkManager;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -31,6 +32,9 @@ import org.json.JSONObject;
  * marked as from a watched folder. Signed in with the app's own session (which
  * lasts and renews, unlike the web view's cookie), and with an upload id made from
  * the file, so a retry after a lost answer is the same job, not a second one.
+ *
+ * A video goes as its sound alone (SoundTrack), a fraction of its size; the
+ * server keeps only the sound anyway.
  *
  * When the free weekly quota runs out, the watch waits (Watches.quotaUntil), and
  * the file is looked at again once it may go.
@@ -115,6 +119,19 @@ public class WatchUploadWorker extends Worker {
         String name = input.getString("name");
         String type = input.getString("type");
         long size = input.getLong("size", -1);
+        Uri source = Uri.parse(input.getString("uri"));
+        File sound = null;
+        if (FolderWatchWorker.isVideo(name, type)) {
+            sound = new File(context.getCacheDir(), input.getString("uploadId") + SoundTrack.EXTENSION);
+            if (SoundTrack.extract(context, source, sound)) {
+                source = Uri.fromFile(sound);
+                name = SoundTrack.renamed(name);
+                type = SoundTrack.TYPE;
+                size = sound.length();
+            } else {
+                sound = null;
+            }
+        }
         String boundary = "----ivrit" + UUID.randomUUID().toString().replace("-", "");
         StringBuilder head = new StringBuilder()
             .append(field(boundary, "language", watch.language))
@@ -140,7 +157,7 @@ public class WatchUploadWorker extends Worker {
             connection.setRequestProperty("Authorization", "Bearer " + token);
             connection.setRequestProperty("Origin", site);
             try (OutputStream out = connection.getOutputStream();
-                 InputStream in = context.getContentResolver().openInputStream(Uri.parse(input.getString("uri")))) {
+                 InputStream in = context.getContentResolver().openInputStream(source)) {
                 if (in == null) throw new java.io.FileNotFoundException("gone");
                 out.write(headBytes);
                 byte[] buffer = new byte[64 * 1024];
@@ -189,6 +206,8 @@ public class WatchUploadWorker extends Worker {
             return retry(context, watchId, docId);
         } finally {
             if (connection != null) connection.disconnect();
+            //noinspection ResultOfMethodCallIgnored
+            if (sound != null) sound.delete();
         }
     }
 
