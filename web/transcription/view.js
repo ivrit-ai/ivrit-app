@@ -1017,6 +1017,7 @@ async function sendLocally(file, options, id) {
     return true;
   } catch (err) {
     if (err instanceof local.TooLong) host.toast(`${file.name}: ${tr("localTooLong", { hours: local.MAX_SECONDS / 3600 })}`);
+    else if (err instanceof local.TooLarge) host.toast(`${file.name}: ${tr("localTooLarge", { gb: local.MAX_BYTES / 1024 ** 3 })}`);
     else if (err instanceof api.ApiRefusal) host.toast(`${file.name}: ${serverError(err.data, "errorLocalSaveFailed")}`);
     else host.toast(`${file.name}: ${tr("localFailed", { details: err?.message || "" })}`);
     return false;

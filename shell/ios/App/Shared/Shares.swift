@@ -53,16 +53,50 @@ enum Shares {
                 }
             }
         }
-        guard let name else { return false }
-        let ext = (name as NSString).pathExtension.lowercased()
+        guard var name else { return false }
+        var mime = mimeType(ext: (name as NSString).pathExtension.lowercased(), type: type)
+        if await keepSoundOnly(target, id: id) {
+            name = (name as NSString).deletingPathExtension + ".m4a"
+            mime = "audio/mp4"
+        }
         let meta: [String: Any] = [
             "name": name,
-            "type": mimeType(ext: ext, type: type),
+            "type": mime,
             "durationMs": await durationMs(target),
             "origin": originOf(name),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: meta) else { return false }
         return FileManager.default.createFile(atPath: metaURL(id).path, contents: data)
+    }
+
+    /// A video's sound in its place, as an .m4a: only the sound is transcribed, and
+    /// a phone video is many times its sound's size (a minute of camera video is
+    /// often over Eliezer's 20 MB, and the page would have to hold all of it to
+    /// decode it). The sound is copied out as it is where MP4 takes its codec, else
+    /// re-encoded as AAC; both stream from disk, so the share extension's small
+    /// memory is enough. False (the video kept as it is) for audio, or when the
+    /// sound could not be taken out.
+    private static func keepSoundOnly(_ url: URL, id: String) async -> Bool {
+        let asset = AVURLAsset(url: url)
+        guard (try? await asset.loadTracks(withMediaType: .video))?.isEmpty == false,
+              let audio = try? await asset.loadTracks(withMediaType: .audio), let first = audio.first,
+              let range = try? await first.load(.timeRange) else { return false }
+        // The sound alone: exporting the asset itself would carry the picture along.
+        let composition = AVMutableComposition()
+        guard let track = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid),
+              (try? track.insertTimeRange(range, of: first, at: .zero)) != nil else { return false }
+        let sound = dir.appendingPathComponent(id + ".m4a")
+        for preset in [AVAssetExportPresetPassthrough, AVAssetExportPresetAppleM4A] {
+            try? FileManager.default.removeItem(at: sound)
+            guard let export = AVAssetExportSession(asset: composition, presetName: preset),
+                  export.supportedFileTypes.contains(.m4a) else { continue }
+            export.outputURL = sound
+            export.outputFileType = .m4a
+            await export.export()
+            if export.status == .completed, (try? FileManager.default.replaceItemAt(url, withItemAt: sound)) != nil { return true }
+        }
+        try? FileManager.default.removeItem(at: sound)
+        return false
     }
 
     /// A sender's suggested name, given the file's extension when it lacks one.

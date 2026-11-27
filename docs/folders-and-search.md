@@ -237,8 +237,10 @@ transcripts. Deleting a transcript, folder or clip removes it from its index.
 
 - **Watches:** each pairs a phone folder (chosen with Android's folder picker,
   with lasting access to that folder only) with a My files folder (chosen or made
-  on the spot), plus language, speakers, and filters: audio only (default),
-  minimum and maximum length, Wi-Fi only, paused.
+  on the spot), plus language, speakers, and filters: minimum and maximum
+  length, Wi-Fi only, paused. Audio and video are taken; of a video only its
+  sound goes (`SoundTrack`: the audio track copied out as an .m4a, a fraction of
+  the video's size), and a video without sound is passed over.
 - **Finding new files:** one periodic check (WorkManager, every 15 minutes, the
   minimum) over all watches, and one whenever the app opens. A file is taken
   once its size and modified time are unchanged across two checks (a recording

@@ -19,7 +19,8 @@ import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
 
 /**
- * Looks through the watched folders (Watches) for new audio, every 15 minutes (the
+ * Looks through the watched folders (Watches) for new audio and video (its sound is
+ * what gets transcribed; a video without sound is passed over), every 15 minutes (the
  * least Android allows) and whenever the app opens. A file is taken once it has
  * stopped changing - a recording still being made is not cut short - and only once:
  * then it goes to WatchUploadWorker. Only files that changed after the watch's
@@ -34,6 +35,10 @@ public class FolderWatchWorker extends Worker {
     // A file unchanged this long when first seen is not being written any more.
     private static final long SETTLED_MS = 2 * 60 * 1000;
     private static final String[] AUDIO = { ".opus", ".ogg", ".oga", ".m4a", ".mp3", ".wav", ".aac", ".amr", ".flac", ".3gp", ".weba", ".webm" };
+    // Video, typed video/* (or by name, where the folder's provider does not say).
+    // A watched camera folder (DCIM) means its videos are transcribed: that is
+    // what watching it asks for, within the watch's shortest and longest.
+    private static final String[] VIDEO = { ".mp4", ".m4v", ".mov", ".mkv", ".3gpp", ".3g2" };
 
     public FolderWatchWorker(@NonNull Context context, @NonNull WorkerParameters params) {
         super(context, params);
@@ -115,16 +120,23 @@ public class FolderWatchWorker extends Worker {
                     if (depth < DEPTH && !name.startsWith(".")) walk(context, watch, tree, id, depth + 1, seen, signedIn);
                     continue;
                 }
-                if (!isAudio(name, mime) || modified < watch.since || size <= 0) continue;
+                if (!(isAudio(name, mime) || isVideo(name, mime)) || modified < watch.since || size <= 0) continue;
                 consider(context, watch, tree, id, name, mime, size, modified, seen, signedIn);
             }
         }
     }
 
     private static boolean isAudio(String name, String mime) {
-        if (mime.startsWith("audio/")) return true;
+        return mime.startsWith("audio/") || endsWithAny(name, AUDIO);
+    }
+
+    static boolean isVideo(String name, String mime) {
+        return mime.startsWith("video/") || (!mime.startsWith("audio/") && endsWithAny(name, VIDEO));
+    }
+
+    private static boolean endsWithAny(String name, String[] extensions) {
         String lower = name.toLowerCase(Locale.ROOT);
-        for (String ext : AUDIO) if (lower.endsWith(ext)) return true;
+        for (String ext : extensions) if (lower.endsWith(ext)) return true;
         return false;
     }
 
@@ -147,8 +159,10 @@ public class FolderWatchWorker extends Worker {
         }
         if (!signedIn) return;
         Uri doc = DocumentsContract.buildDocumentUriUsingTree(tree, id);
-        long seconds = durationSeconds(context, doc);
-        if (seconds >= 0 && (seconds < watch.minSeconds || (watch.maxSeconds > 0 && seconds > watch.maxSeconds))) {
+        Probe probe = probe(context, doc);
+        long seconds = probe.seconds;
+        if ((probe.silent && isVideo(name, mime))
+            || (seconds >= 0 && (seconds < watch.minSeconds || (watch.maxSeconds > 0 && seconds > watch.maxSeconds)))) {
             file.put("state", "skipped");
             return;
         }
@@ -158,14 +172,26 @@ public class FolderWatchWorker extends Worker {
         else WatchUploadWorker.enqueue(context, watch, id, doc, name, type, size, modified);
     }
 
-    private static long durationSeconds(Context context, Uri doc) {
+    /** A file's length in seconds (-1 unknown), and whether it is known to have no sound. */
+    private static final class Probe {
+        final long seconds;
+        final boolean silent;
+
+        Probe(long seconds, boolean silent) {
+            this.seconds = seconds;
+            this.silent = silent;
+        }
+    }
+
+    private static Probe probe(Context context, Uri doc) {
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         try {
             retriever.setDataSource(context, doc);
             String ms = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-            return ms == null ? -1 : Long.parseLong(ms) / 1000;
+            boolean silent = !"yes".equals(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO));
+            return new Probe(ms == null ? -1 : Long.parseLong(ms) / 1000, silent);
         } catch (Exception e) {
-            return -1;
+            return new Probe(-1, false);
         } finally {
             try {
                 retriever.release();

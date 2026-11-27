@@ -14,6 +14,11 @@ export const LANGUAGE = "he";
 // The decoded audio is held in memory (16 kHz, 4 bytes a sample: ~230 MB an
 // hour); past this the page would struggle, so longer files are refused.
 export const MAX_SECONDS = 2 * 3600;
+// The browser decodes from the whole file, held in memory alongside the sound. A
+// video is many times its sound's size (the phone apps keep only the sound of
+// what is shared to them, but a video picked here comes whole), so past this it
+// is refused before it is read.
+export const MAX_BYTES = 1024 * 1024 * 1024;
 
 export function supported() {
   return typeof WebAssembly === "object" && typeof Worker === "function" && Boolean(self.AudioContext || self.webkitAudioContext);
@@ -26,9 +31,42 @@ export class TooLong extends Error {
   }
 }
 
+export class TooLarge extends Error {
+  constructor(bytes) {
+    super("too large");
+    this.bytes = bytes;
+  }
+}
+
+// The file's length in seconds from its header alone, without reading it all, or
+// null when the browser cannot tell (soon).
+function probeDuration(file) {
+  if (typeof document === "undefined") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const media = document.createElement(file.type.startsWith("video/") ? "video" : "audio");
+    const url = URL.createObjectURL(file);
+    const done = (seconds) => {
+      clearTimeout(timer);
+      media.removeAttribute("src");
+      URL.revokeObjectURL(url);
+      resolve(Number.isFinite(seconds) && seconds > 0 ? seconds : null);
+    };
+    const timer = setTimeout(() => done(null), 5000);
+    media.preload = "metadata";
+    media.muted = true;
+    media.onloadedmetadata = () => done(media.duration);
+    media.onerror = () => done(null);
+    media.src = url;
+  });
+}
+
 // The file's sound, mono, at 16 kHz where the browser can resample while decoding
-// (else at its own rate, resampled in the worker).
+// (else at its own rate, resampled in the worker). Too long or too large is told
+// before the file is read where the browser can tell, and after decoding otherwise.
 async function decode(file) {
+  if (file.size > MAX_BYTES) throw new TooLarge(file.size);
+  const seconds = await probeDuration(file);
+  if (seconds > MAX_SECONDS) throw new TooLong(seconds);
   const Context = self.AudioContext || self.webkitAudioContext;
   let context;
   try {

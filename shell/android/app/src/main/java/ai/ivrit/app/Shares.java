@@ -114,6 +114,24 @@ final class Shares {
             if (in == null) return;
             byte[] buffer = new byte[64 * 1024];
             for (int n; (n = in.read(buffer)) > 0; ) out.write(buffer, 0, n);
+        } catch (Exception e) {
+            Log.w(TAG, "could not keep a shared file", e);
+            //noinspection ResultOfMethodCallIgnored
+            file.delete();
+            return;
+        }
+        // A video: only its sound is kept (see SoundTrack), under the same id.
+        if (SoundTrack.hasVideo(context, Uri.fromFile(file))) {
+            File sound = new File(dir(context), id + SoundTrack.EXTENSION);
+            if (SoundTrack.extract(context, Uri.fromFile(file), sound) && sound.renameTo(file)) {
+                name = SoundTrack.renamed(name);
+                type = SoundTrack.TYPE;
+            } else {
+                //noinspection ResultOfMethodCallIgnored
+                sound.delete();
+            }
+        }
+        try {
             JSONObject meta = new JSONObject()
                 .put("name", name)
                 .put("type", type)

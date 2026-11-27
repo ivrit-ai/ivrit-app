@@ -770,6 +770,22 @@ public class LocalTranscribeWorker extends Worker {
         try (GZIPOutputStream gzip = new GZIPOutputStream(packed)) {
             gzip.write(segments.toString().getBytes(StandardCharsets.UTF_8));
         }
+        // A video's recording is kept as its sound alone (SoundTrack): the server
+        // keeps only the sound anyway, and the video is many times its size.
+        Uri audio = source;
+        String audioName = name;
+        String audioType = input.getString("type");
+        File sound = null;
+        if (withAudio && SoundTrack.hasVideo(context, source)) {
+            sound = new File(context.getCacheDir(), "save-" + UUID.randomUUID() + SoundTrack.EXTENSION);
+            if (SoundTrack.extract(context, source, sound)) {
+                audio = Uri.fromFile(sound);
+                audioName = SoundTrack.renamed(name);
+                audioType = SoundTrack.TYPE;
+            } else {
+                sound = null;
+            }
+        }
         String boundary = "----ivrit" + UUID.randomUUID().toString().replace("-", "");
         HttpURLConnection connection = (HttpURLConnection) new URL(site + "/appdata/local").openConnection();
         try {
@@ -790,9 +806,9 @@ public class LocalTranscribeWorker extends Worker {
                 out.write("\r\n".getBytes(StandardCharsets.UTF_8));
                 if (withAudio) {
                     out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"audio\"; filename=\""
-                        + name.replace("\"", "'") + "\"\r\nContent-Type: " + input.getString("type") + "\r\n\r\n")
+                        + audioName.replace("\"", "'") + "\"\r\nContent-Type: " + audioType + "\r\n\r\n")
                         .getBytes(StandardCharsets.UTF_8));
-                    try (InputStream in = context.getContentResolver().openInputStream(source)) {
+                    try (InputStream in = context.getContentResolver().openInputStream(audio)) {
                         if (in != null) {
                             byte[] buffer = new byte[64 * 1024];
                             for (int n; (n = in.read(buffer)) > 0; ) out.write(buffer, 0, n);
@@ -812,6 +828,8 @@ public class LocalTranscribeWorker extends Worker {
             return answer.optString("results_id");
         } finally {
             connection.disconnect();
+            //noinspection ResultOfMethodCallIgnored
+            if (sound != null) sound.delete();
         }
     }
 
