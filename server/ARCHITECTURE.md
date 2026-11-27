@@ -425,8 +425,11 @@ by a concurrent job. The refund is capped at `max_seconds`, so one that lands af
 bucket has refilled cannot lift a user above their allowance.
 
 It then appends a durable TOC entry with `status: "Failed"`, `quota_refunded: bool` and
-`failure_reason` — an i18n key when the cause is something the user can act on, otherwise
-`None`. The entry carries a real `results_id` purely so it can be dismissed through
+`failure_reason` — an i18n key naming the cause: `errorDriveStorageFull`,
+`errorTranscriptSaveFailed` (any other failure to save to Drive), `errorTranscriptionTimeout`,
+`errorRunpodEndpointNotFound` (the user's own RunPod key has no endpoint),
+`errorTranscriptionFailed` (any other transcription error) or `errorMediaLost` (hub mode).
+Entries written before these keys existed have none, and show the generic `statusError`. The entry carries a real `results_id` purely so it can be dismissed through
 `/appdata/delete` like any other; no results file will ever exist under it, which that path
 already tolerates. It is written *after* the queue cleanup, so the synthetic entry is gone
 before the durable one replaces it. The frontend renders it with a red `.status-failed` dot,
